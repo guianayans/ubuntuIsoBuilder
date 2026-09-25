@@ -37,6 +37,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:12px 0 6px}
 .bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .4s}
 .ok{color:var(--ok)}.err{color:var(--err)}.muted{color:var(--muted)}
+.btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.rb{margin-top:14px;border:1px solid var(--err);border-radius:12px;padding:12px 14px}
+.hidden{display:none!important}
+.btn.big{font-size:16px;font-weight:700;padding:14px 20px;letter-spacing:.02em}
 label.chk{display:flex;gap:10px;align-items:flex-start;margin-top:12px;cursor:pointer}
 label.chk input{margin-top:4px}
 .big{font-size:40px;line-height:1}
@@ -77,6 +82,7 @@ const $ = s => document.querySelector(s);
 const fmt = n => { const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1000&&i<4){n/=1000;i++} return (i?n.toFixed(1):n)+' '+u[i]; };
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let S = {}, selDisk = null, selKey = null, confirmed = false;
+let VT = {}, vtMode = 'copy', vtFolder = '', vtNew = '';  // Ventoy: info por pendrive e escolhas
 
 async function api(path, body){
   const r = await fetch('api/'+path, body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {});
@@ -86,7 +92,43 @@ async function api(path, body){
 }
 function stepClass(id, state){ const el=$(id).querySelector('.step'); el.className='step '+state; }
 
+// Aberto a partir da unidade INSTALAR de um pendrive já gravado: só reiniciar e instalar.
+function renderStick(){
+  if(document.getElementById('stickBox')){ const re=document.getElementById('rbErr'); if(re && S.reboot_error) re.textContent='✖ '+S.reboot_error; return; }
+  const K=S.stick, R=S.reboot||{};
+  document.querySelector('main').innerHTML = `<h1 class="brand"><img src="icon.png" alt="" width="40" height="40">isoBuilder</h1>
+  <p class="sub">Pendrive de instalação do Ubuntu Server — servidor <b>${esc(K.hostname)}</b></p>
+  <section class="card" id="stickBox">
+    ${R.available ? `<div class="warn"><b>⚠ Este computador será FORMATADO.</b> Ao reiniciar, o instalador apaga todo o disco interno e instala o Ubuntu Server:
+      arquivos, programas e o sistema atual (Windows/macOS) serão perdidos, sem volta. Salve o que precisar antes. Deixe o pendrive conectado.</div>
+      <p class="small" style="margin:12px 0 4px"><b>O que acontece:</b> ${esc(R.how)} ${esc(R.note)} A instalação é automática: não é preciso responder nada.${K.ventoy ? ` <b>Este pendrive usa o Ventoy:</b> no menu dele, escolha <b>${esc(K.iso_name)}</b>.` : ''}</p>
+      <label class="chk"><span>Para confirmar, digite <b>FORMATAR</b>:</span></label>
+      <input id="rbTxt" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="FORMATAR" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit">
+      <div class="row"><button class="btn danger" id="rbGo" disabled>Reiniciar agora e formatar este computador</button></div>
+      <div class="err" id="rbErr"></div>`
+    : `<div class="warn">${esc(R.note || 'Reinício automático indisponível neste sistema.')}</div>
+      <p class="small">Outra forma: desligue, ligue de novo apertando a tecla do menu de boot (F12, F11, F8 ou Esc) e escolha o pendrive.</p>`}
+  </section>
+  <footer><button class="btn" id="quit">Fechar</button></footer>`;
+  wireReboot('stickBox');
+  document.getElementById('quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder fechado.</h1></main>'; }catch(e){ alert(e.message); } };
+}
+function wireReboot(boxId){
+  const rt=document.getElementById('rbTxt'), rg=document.getElementById('rbGo');
+  if(!rt || !rg) return;
+  rt.oninput = () => { rg.disabled = rt.value.trim().toUpperCase() !== 'FORMATAR'; };
+  rg.onclick = async () => {
+    if(!confirm('Último aviso: reiniciar AGORA e APAGAR o disco deste computador para instalar o Ubuntu Server?')) return;
+    rg.disabled = true;
+    try{
+      const r = await api('reboot',{confirm: rt.value.trim().toUpperCase()});
+      document.getElementById(boxId).innerHTML = `<div class="ok" style="font-size:18px">↻ Reiniciando…</div><p>${esc(S.reboot.how)} ${esc(S.reboot.note)}</p>${r.dry_run?'<p class="muted small">(modo de teste: nada foi reiniciado)</p>':''}`;
+    }catch(e){ document.getElementById('rbErr').textContent='✖ '+e.message; rg.disabled=false; }
+  };
+}
+
 function render(){
+  if(S.stick) return renderStick();
   // 1. ISO — gravador personalizado: baixa a ISO sozinho
   const B = S.bundle, F = S.fetch;
   if (B) {
@@ -133,7 +175,7 @@ function render(){
     <button class="opt ${selDisk===d.id?'sel':''}" data-disk="${esc(d.id)}">
       <span class="big">🔌</span><span class="grow"><b>${esc(d.name||'Pendrive')}</b><small>${fmt(d.size)} · ${esc(d.bus)}${d.serial?' · '+esc(d.serial):''}</small></span>
     </button>`).join('') : '<div class="empty">Nenhum pendrive encontrado. Conecte o pendrive e clique em “Atualizar lista”. Discos internos nunca aparecem aqui.</div>');
-  document.querySelectorAll('[data-disk]').forEach(b=>b.onclick=()=>{ if(S.busy) return; selDisk=b.dataset.disk; selKey=(disks.find(d=>d.id===selDisk)||{}).key||null; confirmed=false; render(); });
+  document.querySelectorAll('[data-disk]').forEach(b=>b.onclick=()=>{ if(S.busy) return; selDisk=b.dataset.disk; selKey=(disks.find(d=>d.id===selDisk)||{}).key||null; confirmed=false; vtMode='copy'; checkVentoy(selDisk, selKey); render(); });
   stepClass('#s2', selDisk?'done':(isoOk?'active':''));
 
   // 3. Gravar
@@ -141,15 +183,34 @@ function render(){
   const d = disks.find(x=>x.id===selDisk);
   if(S.busy || (job && job.phase!=='idle')){
     $('#confirmBox').innerHTML='';
-    const phases={preparing:'Preparando',writing:'Gravando',verifying:'Verificando',done:'Concluído',error:'Erro'};
+    const phases={preparing:'Preparando',writing:'Gravando',verifying:'Verificando',tools:'Finalizando',done:'Concluído',error:'Erro'};
     let html = `<b>${phases[job.phase]||''}</b> — ${esc(job.message)}`;
     if(['writing','verifying'].includes(job.phase)){
       const eta = job.speed>0 ? Math.max(0,(job.total-job.done)/job.speed) : 0;
       html += `<div class="bar"><i style="width:${job.percent.toFixed(1)}%"></i></div><small class="muted">${job.percent.toFixed(0)}% · ${fmt(job.speed)}/s · ~${Math.ceil(eta/60)} min restantes. Pode fechar esta aba: a gravação continua; para acompanhar, abra o isoBuilder de novo.</small>`;
     }
-    if(job.phase==='done') html = `<div class="ok" style="font-size:18px">✔ ${esc(job.message)}</div><p class="muted">Próximo passo: conecte o pendrive no servidor, ligue e escolha o boot pelo pendrive (F12, F11, F8 ou Esc). A instalação é automática.</p>`;
+    if(job.phase==='done'){
+      // já desenhado: não redesenha a cada atualização (apagaria o que foi digitado)
+      if(document.getElementById('doneBox')){ const re=document.getElementById('rbErr'); if(re && S.reboot_error) re.textContent='✖ '+S.reboot_error; stepClass('#s3','done'); return; }
+      const R = S.reboot || {};
+      html = `<div id="doneBox"><div class="ok" style="font-size:18px">✔ ${esc(job.message)}</div>
+        <p class="muted">Próximo passo: conecte o pendrive no servidor, ligue e escolha o boot pelo pendrive (F12, F11, F8 ou Esc). A instalação é automática.</p>
+        <div class="row"><button class="btn danger big" id="fmtOpen" type="button">FORMATAR ESTA MÁQUINA</button></div>
+        <p class="muted small" style="margin:6px 0 0">Para instalar o servidor <b>neste</b> computador: ele reinicia pelo pendrive e o disco é apagado.</p>
+        <div class="rb hidden" id="fmtBox">
+        ${R.available ? `<div class="warn" style="margin-top:12px"><b>⚠ O disco deste computador será APAGADO.</b> Depois de reiniciar, o instalador formata o disco interno e instala o Ubuntu Server:
+          todos os arquivos, programas e o sistema atual (Windows/macOS) serão perdidos, sem volta. Salve o que precisar antes.</div>
+          <p class="small" style="margin:10px 0 4px"><b>O que acontece:</b> ${esc(R.how)} ${esc(R.note)}</p>
+          <label class="chk"><span>Para confirmar, digite <b>FORMATAR</b>:</span></label>
+          <input id="rbTxt" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="FORMATAR" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit">
+          <div class="row"><button class="btn danger" id="rbGo" disabled>Reiniciar agora e formatar este computador</button></div>
+          <div class="err" id="rbErr"></div>`
+        : `<p class="muted small" style="margin-top:10px">${esc(R.note || 'Reinício automático indisponível neste sistema.')}</p>`}</div></div>`;
+    }
     if(job.phase==='error') html = `<div class="err">✖ ${esc(job.message)}</div><div class="row"><button class="btn" id="again">Tentar de novo</button></div>`;
     $('#job').innerHTML = html;
+    wireReboot('doneBox');
+    const fo=document.getElementById('fmtOpen'); if(fo) fo.onclick=()=>{ document.getElementById('fmtBox').classList.remove('hidden'); fo.closest('.row').style.display='none'; const t=document.getElementById('rbTxt'); if(t) t.focus(); };
     const ag = document.getElementById('again');
     if(ag) ag.onclick = async () => {  // limpa o erro e mantém a ISO e o pendrive escolhidos
       ag.disabled = true; confirmed = false;
@@ -164,11 +225,41 @@ function render(){
   stepClass('#s3','active');
   const iso = (S.isos||[]).find(i=>i.path===S.iso);
   const small = iso && iso.size > d.size;
-  $('#confirmBox').innerHTML = `
+  const V = VT[selDisk];
+  const sig = [selDisk, confirmed, small, vtMode, V===undefined?'?':(V?'v':'-')].join('|');
+  if($('#confirmBox').dataset.sig === sig) return;  // não redesenha (preserva o que foi digitado)
+  $('#confirmBox').dataset.sig = sig;
+  if(V===undefined){ $('#confirmBox').innerHTML='<div class="muted">Verificando o pendrive…</div>'; checkVentoy(selDisk, selKey); return; }
+  if(V && vtMode==='copy'){
+    const opts = ['<option value="">(raiz do pendrive)</option>'].concat((V.folders||[]).map(f=>`<option ${f===vtFolder?'selected':''}>${esc(f)}</option>`)).concat(['<option value="__new">Nova pasta…</option>']).join('');
+    $('#confirmBox').innerHTML = `
+      <div class="ok" style="margin-bottom:8px">✔ <b>Ventoy detectado</b> neste pendrive (${fmt(V.free)} livres).</div>
+      <div class="radio"><label class="chk"><input type="radio" name="vtm" value="copy" checked> <span><b>Copiar a ISO para o Ventoy</b> — mantém as outras ISOs e arquivos. No boot, escolha esta ISO no menu do Ventoy.</span></label>
+      <label class="chk"><input type="radio" name="vtm" value="erase"> <span>Apagar tudo (inclusive o Ventoy) e gravar só esta ISO.</span></label></div>
+      <label class="chk" style="display:block"><span>Pasta de destino no pendrive:</span></label>
+      <select id="vtSel" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit">${opts}</select>
+      <input id="vtNew" placeholder="Nome da nova pasta (ex.: ISOs)" value="${esc(vtNew)}" style="display:${vtFolder==='__new'?'block':'none'};margin-top:8px;width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit">
+      <div class="row"><button class="btn primary" id="vtGo">Copiar para o Ventoy</button></div>`;
+    $('#vtSel').value = vtFolder;
+    $('#vtSel').onchange = e => { vtFolder = e.target.value; $('#vtNew').style.display = vtFolder==='__new'?'block':'none'; };
+    $('#vtNew').oninput = e => { vtNew = e.target.value; };
+    document.querySelectorAll('input[name=vtm]').forEach(x=>x.onchange=()=>{ vtMode=x.value; confirmed=false; render(); });
+    $('#vtGo').onclick = async () => {
+      const folder = vtFolder==='__new' ? vtNew.trim() : vtFolder;
+      if(vtFolder==='__new' && !folder) return alert('Digite o nome da nova pasta.');
+      $('#vtGo').disabled = true;
+      try { await api('ventoy/copy', {disk: selDisk, key: selKey, folder}); } catch(e){ alert(e.message); $('#vtGo').disabled=false; }
+      poll();
+    };
+    return;
+  }
+  $('#confirmBox').innerHTML = (V ? `<div class="radio" style="margin-bottom:10px"><label class="chk"><input type="radio" name="vtm" value="copy"> <span><b>Copiar a ISO para o Ventoy</b> (mantém o que está no pendrive)</span></label>
+      <label class="chk"><input type="radio" name="vtm" value="erase" checked> <span>Apagar tudo (inclusive o Ventoy) e gravar só esta ISO.</span></label></div>` : '') + `
     <div class="warn"><b>Todo o conteúdo de “${esc(d.name||'Pendrive')}” (${fmt(d.size)}) será apagado.</b></div>
     ${small?'<div class="err" style="margin-top:10px">Este pendrive é menor que a ISO. Use um de 8 GB ou mais.</div>':''}
     <label class="chk"><input type="checkbox" id="ck" ${confirmed?'checked':''}> <span>Entendo que os arquivos deste pendrive serão perdidos.</span></label>
     <div class="row"><button class="btn primary" id="go" ${(!confirmed||small)?'disabled':''}>Gravar pendrive</button></div>`;
+  document.querySelectorAll('input[name=vtm]').forEach(x=>x.onchange=()=>{ vtMode=x.value; confirmed=false; render(); });
   $('#ck').onchange = e => { confirmed = e.target.checked; render(); };
   $('#go').onclick = async () => {
     $('#go').disabled = true;
@@ -177,10 +268,16 @@ function render(){
   };
 }
 
+async function checkVentoy(id, key){
+  if(VT[id]!==undefined) return;
+  try { const r = await api('ventoy?disk='+encodeURIComponent(id)+'&key='+encodeURIComponent(key||'')); VT[id] = r.ventoy || null; }
+  catch(e){ VT[id] = null; }
+  render();
+}
 async function selectIso(p){ try{ await api('select',{path:p}); }catch(e){ alert(e.message); } poll(); }
 async function poll(){ try{ S = await api('state'); render(); }catch(e){} }
 $('#useIso').onclick = () => { const p=$('#isoPath').value.trim().replace(/^"|"$/g,''); if(p) selectIso(p); };
-$('#refresh').onclick = poll;
+$('#refresh').onclick = () => { VT = {}; $('#confirmBox').dataset.sig=''; poll(); };
 $('#quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder fechado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }catch(e){ alert(e.message); } };
 poll(); setInterval(()=>{ if(!document.hidden) poll(); }, 1500);
 </script>

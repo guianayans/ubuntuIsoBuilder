@@ -410,6 +410,17 @@ Programa em Go, sem dependências e sem instalação. Abre uma página local
 | `isoBuilder-macOS.zip` | macOS 11+, Intel e Apple Silicon (pede a senha do Mac na hora de gravar) |
 | `isobuilder-linux-amd64` | Linux (`sudo`) |
 
+**Unidade INSTALAR no pendrive.** Depois de gravar e verificar a ISO, o isoBuilder
+cria no espaço livre uma partição FAT32 de 64 MB chamada **INSTALAR** com o
+`Instalar-no-Windows.exe`, o `Instalar-no-Mac.app` (Mac Intel), o `instalar-linux` e um
+`LEIA-ME.txt`. Quem recebe o pendrive abre o programa do seu sistema, digita FORMATAR e o
+computador reinicia pelo pendrive: no Windows, direto pela opção USB da placa-mãe quando
+ela existe (`bcdedit … bootsequence`), senão pela tela "Usar um dispositivo"; no Linux via
+`efibootmgr --bootnext`; no Mac, segurando Option. As partições da ISO passam a ser do
+tipo "Linux", então o Windows e o macOS não oferecem "formatar" o pendrive (o boot não
+depende do tipo). Nada roda sozinho ao conectar o pendrive: isso não existe mais nos
+sistemas atuais (AutoRun), e ainda bem.
+
 Ícone: `helper/assets/icon.png` (+ `.icns` do Mac e `.ico` do Windows), gerados por
 `python3 helper/assets/make-icon.py`. No Windows o ícone e o nome/versão vão dentro do
 `.exe` (`helper/assets/winres.py`, sem ferramentas externas).
@@ -693,6 +704,22 @@ o Secure Boot na BIOS.
 
 Não incluídos, de propósito: os scripts de backup para um 2º disco (dependem de um
 disco escolhido na hora e são destrutivos) e a passagem de GPU para VMs.
+
+## Remoto (MeshCentral) em `/remoto/`
+
+A stack do ISO Builder tem um serviço **remoto** (pasta `remote/`): um MeshCentral com o
+visual do painel, em **https://iso.gvtserver.online/remoto/**. É independente do remote
+antigo (dados próprios, começa vazio).
+
+- **Login único:** a página **Acesso remoto** do painel abre o remoto já logado (token de
+  60 min assinado com a chave de login do MeshCentral, que o container publica num volume
+  só entre os dois). Direto: usuário `admin`, senha = `ADMIN_PASSWORD`.
+- **Servidores aparecendo sozinhos:** com **Programas → Extras → Aparecer no Remoto**, a ISO
+  instala o agente no 1º boot, no grupo "Servidores ISO Builder" (criado sozinho). É a 2ª rota
+  para chegar ao servidor, além de **Máquinas**.
+- **Rota:** o router `iso-remoto` do `proxy.yml` manda `/remoto` para o serviço `remoto` (porta 4021).
+- **Visual:** `remote/web/public/styles/isobuilder.css` (claro/escuro, laranja do painel),
+  sobre a interface moderna do MeshCentral (`siteStyle: 3`).
 
 ## Porta do SSH
 

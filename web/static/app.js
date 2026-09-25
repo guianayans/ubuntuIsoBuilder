@@ -57,8 +57,29 @@ function shell() {
   const links = dl ? [[ME.build_id ? "#/iso/" + ME.build_id : "#/", "Minha ISO"]] : [["#/", "Nova ISO"], ["#/isos", "Minhas ISOs"]];
   if (ME.role === "admin") links.push(["#/maquinas", "Máquinas"], ["#/acessos", "Acessos"], ["#/sistema", "Sistema"]);
   const cur = location.hash || "#/";
-  $("#nav").innerHTML = links.map(([h, t]) => `<a href="${h}" class="${cur === h || (!dl && h === "#/isos" && cur.startsWith("#/iso/")) ? "on" : ""}">${t}</a>`).join("");
+  const isOn = h => cur === h || (!dl && h === "#/isos" && cur.startsWith("#/iso/"));
+  $("#nav").innerHTML = links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("");
+  $("#whoEmail").title = ME.email;
+  // menu das telas estreitas (celular, janela pequena): tudo em uma lista, sem rolagem lateral
+  $("#mnav").innerHTML = `<nav class="mnav-links">${links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("")}
+    ${installEvt ? `<a href="#" class="mnav-remote" id="mInstall">Instalar app</a>` : ""}
+    ${ru ? `<a href="${esc(rb.getAttribute("href"))}" ${FEATURES.remote_embed ? "" : 'target="_blank" rel="noopener noreferrer"'} class="mnav-remote">Acesso remoto${FEATURES.remote_embed ? "" : " ↗"}</a>` : ""}</nav>
+    <div class="mnav-foot"><span class="muted small">${esc(ME.email)}${ME.role === "admin" ? " · admin" : ""}</span><button class="btn sm" id="mLogout">Sair</button></div>`;
+  $("#mLogout").onclick = () => $("#logout").click();
+  const mi = $("#mInstall"); if (mi) mi.onclick = e => { e.preventDefault(); setMenu(false); installApp(); };
+  $$("#mnav a").forEach(a => a.onclick = () => setMenu(false));
+  setMenu(false);
 }
+function setMenu(open) {
+  $("#mnav").classList.toggle("hidden", !open);
+  $("#mnavBg").classList.toggle("hidden", !open);
+  $("#menuBtn").setAttribute("aria-expanded", open ? "true" : "false");
+  document.body.classList.toggle("menu-open", open);
+}
+$("#menuBtn").onclick = e => { e.stopPropagation(); setMenu($("#mnav").classList.contains("hidden")); };
+// tocar fora fecha o menu SEM acionar o que está embaixo (o fundo recebe o toque)
+$("#mnavBg").onclick = () => setMenu(false);
+document.addEventListener("keydown", e => { if (e.key === "Escape") setMenu(false); });
 $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) { } ME = null; route.featLoaded = false; go("#/login"); };
 
 async function route() {
@@ -74,6 +95,7 @@ async function route() {
   const h = location.hash || "#/";
   if (!ME && h !== "#/login") return go("#/login");
   shell();
+  refreshJobs();
   window.scrollTo(0, 0);
   if (h === "#/login") return ME ? go("#/") : renderLogin();
   if (ME.role === "admin" && !route.domainLoaded) { route.domainLoaded = true; await loadGuestDomain(); }
@@ -100,18 +122,27 @@ function renderLogin() {
     <div class="center"><div class="logo u-logo-lg">◎</div>
     <h1>ISO Builder</h1><p class="muted">Instalador automático do Ubuntu Server</p></div>
     <form id="lf">
-      <label class="f"><span>E-mail</span><input name="email" type="email" autocomplete="username" required></label>
+      <label class="f"><span>Usuário</span>
+        <div class="suffix" id="lsuf"><input name="email" type="text" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="username" required placeholder="seu-prefixo"><span id="ldom">@${esc(GUEST_DOMAIN)}</span></div>
+        <small id="lhelp">Digite só o prefixo. O administrador pode digitar o e-mail completo.</small></label>
       <label class="f"><span>Senha</span><input name="password" type="password" autocomplete="current-password" required></label>
       <div id="lerr"></div>
       <button class="btn primary big" type="submit">Entrar</button>
     </form>
     <p class="muted small center u-mt14">Acesso somente por convite do administrador.</p>
   </div></div>`;
+  // Só o prefixo; com "@" digitado (ex.: conta do administrador), vale o e-mail completo.
+  const em = $('#lf input[name="email"]');
+  const sync = () => $("#lsuf").classList.toggle("full", em.value.includes("@"));
+  em.oninput = sync;
+  api("/api/login-info").then(d => { if (d.guest_domain) { GUEST_DOMAIN = d.guest_domain; $("#ldom").textContent = "@" + GUEST_DOMAIN; } }).catch(() => { });
   $("#lf").onsubmit = async ev => {
     ev.preventDefault();
     const f = new FormData(ev.target);
+    const raw = String(f.get("email") || "").trim().toLowerCase();
+    const email = raw.includes("@") ? raw : `${raw}@${GUEST_DOMAIN}`;
     try {
-      ME = (await api("/api/login", { method: "POST", body: { email: f.get("email"), password: f.get("password") } })).user;
+      ME = (await api("/api/login", { method: "POST", body: { email, password: f.get("password") } })).user;
       go("#/");
     } catch (e) { $("#lerr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; }
   };
@@ -127,7 +158,7 @@ const W = {
   ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "docker", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
-  gpu: false, virt: false, virt_bridge: true, tweaks: true,
+  gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: ""
 };
@@ -231,6 +262,7 @@ function stepHTML() {
       ${toggle("gpu", "GPU NVIDIA", "Detecta a placa na instalação e instala o driver recomendado. Com Docker/Coolify, os containers passam a usar a GPU (sem instalar outro Docker). Reinicia uma vez sozinho para carregar o driver.")}
       ${toggle("virt", "Virtualização (KVM)", "libvirt/QEMU para rodar VMs" + (W.apps === "coolify_cockpit" ? ", gerenciadas pelo Cockpit (Máquinas virtuais)." : "."))}
       <div id="virtBox" class="${W.virt ? "" : "hidden"}">${toggle("virt_bridge", "Ponte de rede br0", "As VMs recebem IP do seu roteador, como os outros aparelhos da rede. Aplicada com proteção: se a rede não voltar, é desfeita sozinha.")}</div>
+      ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto", "Instala o agente do Remoto (MeshCentral) no primeiro boot: o servidor aparece sozinho em Acesso remoto, com tela, terminal e arquivos pelo navegador. É a 2ª rota, além de Máquinas.") : ""}
       ${toggle("tweaks", "Ajustes de servidor", "Verifica e repara o disco sozinho no boot (após queda de energia), console sem apagar a tela e, com virtualização, IOMMU ligado.")}`;
     case 6: {
       const disk = { single: "Único disco interno", serial: "Serial " + W.storage_value, path: W.storage_value, model: "Modelo " + W.storage_value }[W.storage_type];
@@ -246,7 +278,7 @@ function stepHTML() {
           : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
         <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "GPU NVIDIA" : "",
-          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
+          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
       ${ME.role === "admin" ? `<div class="card u-mt16">
@@ -321,6 +353,8 @@ function renderWizard() {
   view.innerHTML = `
   <h1>Nova ISO</h1><p class="muted">Responda às perguntas; no final o servidor gera a ISO e você baixa com o gravador de pendrive.</p>
   <div class="wizard">
+    <div class="steps-m"><div class="spread"><b>${STEPS[step]}</b><span class="muted small">Passo ${step + 1} de ${STEPS.length}</span></div>
+      <div class="bar"><i id="stepbar"></i></div></div>
     <ol class="steps">${STEPS.map((s, i) => `<li data-i="${i}" class="${i === step ? "on" : i < step ? "ok" : ""}"><span class="n">${i < step ? "✓" : i + 1}</span>${s}</li>`).join("")}</ol>
     <div class="card"><form id="wf" autocomplete="off">${stepHTML()}
       <div id="serr"></div>
@@ -328,6 +362,7 @@ function renderWizard() {
       <button type="submit" class="btn primary">${step === STEPS.length - 1 ? "Gerar ISO" : "Continuar"}</button></div>
     </form></div>
   </div>`;
+  $("#stepbar").style.width = ((step + 1) / STEPS.length) * 100 + "%";  // via CSSOM (a CSP barra style inline)
   $$(".steps li").forEach(li => li.onclick = () => { collect(); const i = +li.dataset.i; if (i < step) { step = i; renderWizard(); } });
   $("#back").onclick = () => { collect(); step = Math.max(0, step - 1); renderWizard(); };
   $$('input[name="net_mode"]').forEach(r => r.onchange = () => $("#static").classList.toggle("hidden", r.value !== "static"));
@@ -370,7 +405,7 @@ function renderWizard() {
     if (W.confirm_erase !== "APAGAR") { $("#serr").innerHTML = `<div class="note err">Digite APAGAR para confirmar.</div>`; return; }
     const btn = $('#wf button[type="submit"]'); btn.disabled = true; btn.textContent = "Enviando…";
     try {
-      const body = { ...W, storage_min_gb: +W.storage_min_gb };
+      const body = { ...W, storage_min_gb: +W.storage_min_gb, remote_agent: !!(W.remote_agent && FEATURES.remote_agent) };
       if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label };
       const r = await api("/api/builds", { method: "POST", body });
       if (r.delivery) { try { sessionStorage.setItem("uab-delivery-" + r.id, JSON.stringify(r.delivery)); } catch (e) { } }
@@ -387,9 +422,9 @@ async function renderBuilds() {
   view.innerHTML = `<h1>Minhas ISOs</h1><div id="bl" class="card">Carregando…</div>`;
   const d = await api("/api/builds");
   const q = d.quota ? `<p class="muted small">Você usou ${d.quota.used} de ${d.quota.max} ISOs deste acesso.</p>` : "";
-  $("#bl").innerHTML = q + (d.builds.length ? `<div class="table-wrap"><table><tr><th>Servidor</th><th>Ubuntu</th><th>Status</th><th>Criada</th>${ME.role === "admin" ? "<th>Conta</th>" : ""}<th></th></tr>
-    ${d.builds.map(b => `<tr><td><b>${esc(b.hostname)}</b></td><td>${esc(b.series)}</td><td><span class="pill ${b.status}">${STATUS[b.status] || esc(b.status)}</span></td>
-      <td>${fmtDate(b.created_at)}</td>${ME.role === "admin" ? `<td class="small">${esc(b.owner)}</td>` : ""}<td><div class="row"><a class="btn sm" href="#/iso/${b.id}">Abrir</a>${ME.mode === "download" || ["queued", "running"].includes(b.status) ? "" : `<button class="btn sm danger" data-del="${b.id}">Excluir</button>`}</div></td></tr>`).join("")}
+  $("#bl").innerHTML = q + (d.builds.length ? `<div class="table-wrap"><table class="rtable"><tr><th>Servidor</th><th>Ubuntu</th><th>Status</th><th>Criada</th>${ME.role === "admin" ? "<th>Conta</th>" : ""}<th></th></tr>
+    ${d.builds.map(b => `<tr><td class="rt-title"><b>${esc(b.hostname)}</b></td><td data-label="Ubuntu">${esc(b.series)}</td><td data-label="Status"><span class="pill ${b.status}">${STATUS[b.status] || esc(b.status)}</span></td>
+      <td data-label="Criada">${fmtDate(b.created_at)}</td>${ME.role === "admin" ? `<td class="small" data-label="Conta">${esc(b.owner)}</td>` : ""}<td class="rt-actions"><div class="row"><a class="btn sm" href="#/iso/${b.id}">Abrir</a>${ME.mode === "download" || ["queued", "running"].includes(b.status) ? "" : `<button class="btn sm danger" data-del="${b.id}">Excluir</button>`}</div></td></tr>`).join("")}
     </table></div>` : `<p class="muted">Nenhuma ISO ainda.</p><a class="btn primary" href="#/">Criar a primeira</a>`);
   $$("#bl [data-del]").forEach(b => b.onclick = () => delBuild(b.dataset.del, renderBuilds));
 }
@@ -587,17 +622,17 @@ async function loadUsers() {
     ? ready.map(b => `<option value="${b.id}" ${b.id === cur ? "selected" : ""}>${esc(b.hostname)} · Ubuntu ${esc(b.series)} · ${fmtDate(b.created_at)}</option>`).join("")
     : `<option value="">Nenhuma ISO pronta: gere uma em “Nova ISO”</option>`;
   if (!d.users.length) { $("#ul").innerHTML = `<p class="muted">Nenhum acesso criado.</p>`; return; }
-  $("#ul").innerHTML = `<div class="table-wrap"><table><tr><th>Login</th><th>Situação</th><th>Validade</th><th>Último acesso</th><th>Tipo / ISOs</th><th></th></tr>
-    ${d.users.map(u => `<tr><td><b>${esc(u.email)}</b>${u.label ? `<br><span class="muted small">${esc(u.label)}</span>` : ""}</td>
-      <td><span class="pill ${u.state === "ativa" ? "done" : "error"}">${esc(u.state)}</span></td><td>${fmtDate(u.expires_at)}</td>
-      <td>${fmtDate(u.last_login)}</td><td>${u.mode === "download"
+  $("#ul").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th>Login</th><th>Situação</th><th>Validade</th><th>Último acesso</th><th>Tipo / ISOs</th><th></th></tr>
+    ${d.users.map(u => `<tr><td class="rt-title"><b>${esc(u.email)}</b>${u.label ? `<br><span class="muted small">${esc(u.label)}</span>` : ""}</td>
+      <td data-label="Situação"><span class="pill ${u.state === "ativa" ? "done" : "error"}">${esc(u.state)}</span></td><td data-label="Validade">${fmtDate(u.expires_at)}</td>
+      <td data-label="Último acesso">${fmtDate(u.last_login)}</td><td data-label="Tipo / ISOs" class="rt-block">${u.mode === "download"
         ? `Só download<br><span class="small ${u.build_ok ? "muted" : "err"}">${u.build_hostname ? esc(u.build_hostname) : "ISO removida"}${!u.build_ok ? " (indisponível)" : u.build_status !== "done" ? " (sendo gerada)" : ""}</span>
           <br><button class="btn sm ${u.build_ok ? "" : "primary"} u-mt8" data-a="relink" data-id="${u.id}">${u.build_ok ? "Trocar ISO" : "Vincular outra ISO"}</button>
           <div class="hidden u-mt8" id="rl-${u.id}"><select>${isoOptions(u.build_ok ? u.build_id : "")}</select>
             <div class="row u-mt8"><button class="btn sm primary" data-a="relink-save" data-id="${u.id}" ${ready.length ? "" : "disabled"}>Vincular</button>
             <button class="btn sm" data-a="relink-cancel" data-id="${u.id}">Cancelar</button></div></div>`
         : `${u.builds}/${u.max_builds} ISOs`}</td>
-      <td><div class="row"><button class="btn sm" data-a="reset" data-id="${u.id}">Nova senha</button>
+      <td class="rt-actions"><div class="row"><button class="btn sm" data-a="reset" data-id="${u.id}">Nova senha</button>
       <button class="btn sm" data-a="extend" data-id="${u.id}">+24h</button>
       ${u.state === "ativa" ? `<button class="btn sm danger" data-a="revoke" data-id="${u.id}">Revogar</button>` : ""}
       <button class="btn sm danger" data-a="delete" data-id="${u.id}">Excluir</button></div></td></tr>`).join("")}</table></div>`;
@@ -622,9 +657,13 @@ async function loadUsers() {
 }
 
 /* -------------------------------------------------- admin: sistema */
-function renderRemote() {
-  const u = FEATURES.remote_url;
-  view.innerHTML = `<div class="spread"><div><h1>Acesso remoto</h1><p class="muted">${esc(u.replace(/^https:\/\//, "").replace(/\/$/, ""))}</p></div>
+async function renderRemoteFrame() {
+  let u = FEATURES.remote_url;
+  if (FEATURES.remote_sso) {  // remoto do próprio ISO Builder: abre já logado
+    try { u = (await api("/api/admin/remoto/login")).url; } catch (e) { }
+  }
+  const label = FEATURES.remote_sso ? location.host + "/remoto" : u.replace(/^https:\/\//, "").replace(/\/$/, "");
+  view.innerHTML = `<div class="spread"><div><h1>Acesso remoto</h1><p class="muted">${esc(label)}</p></div>
     <a class="btn" href="${esc(u)}" target="_blank" rel="noopener noreferrer">Abrir em nova aba</a></div>
     <div class="rframe u-mt12"><div class="muted rload">Carregando…</div>
     <iframe src="${esc(u)}" title="Acesso remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>`;
@@ -715,21 +754,123 @@ async function loadMachines() {
     $("#ml").innerHTML = `<p class="muted">Nenhuma máquina se reportou ainda. As ISOs geradas a partir de agora fazem o servidor aparecer aqui alguns minutos depois do primeiro boot.</p>`;
     return;
   }
-  $("#ml").innerHTML = `<div class="table-wrap"><table><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
+  $("#ml").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
     ${d.machines.map(m => `<tr class="clickable" data-m="${m.id}">
-      <td>${dot(m.online, mstate(m))}</td>
-      <td><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</td>
-      <td class="small">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
-      <td>${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span><br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
-      <td class="small">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
-      <td>${m.provisioned.startsWith("ok") ? `<span class="pill done">concluído</span>` : `<span class="pill running">${esc(m.provisioned || "em andamento")}</span>`}</td>
-      <td class="small">${fmtAgo(m.last_seen)}</td>
-      <td><button class="btn sm primary" data-open="${m.id}">Abrir</button></td></tr>`).join("")}</table></div>`;
+      <td class="rt-dot">${dot(m.online, mstate(m))}</td>
+      <td class="rt-title"><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</td>
+      <td class="small" data-label="Conta">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
+      <td data-label="VPN">${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span><br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
+      <td class="small" data-label="Rede local">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
+      <td data-label="Provisionamento">${m.provisioned.startsWith("ok") ? `<span class="pill done">concluído</span>` : `<span class="pill running">${esc(m.provisioned || "em andamento")}</span>`}</td>
+      <td class="small" data-label="Visto">${fmtAgo(m.last_seen)}</td>
+      <td class="rt-actions"><button class="btn sm primary" data-open="${m.id}">Abrir</button></td></tr>`).join("")}</table></div>`;
   $$("#ml [data-m]").forEach(tr => tr.onclick = () => openMachine(tr.dataset.m));
 }
 
 /* ---------- overlay */
 let OVL = null;  // {id, tab, term, ws, fit, ro}
+
+/* -------------------------------------------------- Remoto (MeshCentral) nativo
+   Lista e botões no visual do painel; só o visualizador (tela/terminal/arquivos)
+   vem do MeshCentral, já logado e sem a interface dele. */
+const RMODES = [["desktop", "Tela"], ["terminal", "Terminal"], ["files", "Arquivos"]];
+let RDEV = { at: 0, list: [] };
+async function remoteDevices(force) {
+  if (!force && Date.now() - RDEV.at < 20000) return RDEV.list;
+  RDEV = { at: Date.now(), list: (await api("/api/admin/remoto/devices")).devices };
+  return RDEV.list;
+}
+const osIcon = o => /windows/i.test(o) ? "🪟" : /mac|darwin/i.test(o) ? "" : /linux|ubuntu|debian/i.test(o) ? "🐧" : "💻";
+
+async function renderRemote() {
+  if (!FEATURES.remote_sso) return renderRemoteFrame();  // outro remote (REMOTE_URL): página dele inteira
+  view.innerHTML = `<div class="spread"><div><h1>Remoto</h1><p class="muted">Tela, terminal e arquivos dos computadores com o agente, direto no navegador.</p></div>
+    <div class="row"><button class="btn primary" id="rInvite">Adicionar computador</button><button class="btn" id="rFull">Opções avançadas ↗</button></div></div>
+    <div id="rInv"></div><div class="card"><div class="spread"><input id="rSearch" placeholder="Buscar pelo nome, sistema ou IP" class="u-w100 rsearch"><button class="btn sm" id="rReload">Atualizar</button></div>
+    <div id="rList" class="u-mt12">Carregando…</div></div>`;
+  $("#rReload").onclick = () => loadRemote(true);
+  $("#rSearch").oninput = () => loadRemote(false);
+  $("#rFull").onclick = async () => { try { window.open((await api("/api/admin/remoto/login")).url, "_blank", "noopener"); } catch (e) { toast(e.message); } };
+  $("#rInvite").onclick = remoteInvite;
+  await loadRemote(true);
+  timer = setInterval(() => { if (!document.hidden && !$("#ovl")) loadRemote(true); }, 20000);
+}
+
+async function loadRemote(force) {
+  let list;
+  try { list = await remoteDevices(force); } catch (e) { $("#rList").innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
+  const q = ($("#rSearch")?.value || "").trim().toLowerCase();
+  const shown = list.filter(d => !q || [d.name, d.os, d.ip, d.group].join(" ").toLowerCase().includes(q));
+  if (!list.length) {
+    $("#rList").innerHTML = `<div class="note">Nenhum computador ainda. Gere ISOs com <b>Programas → Extras → Aparecer no Remoto</b> ou use <b>Adicionar computador</b> para instalar o agente num PC.</div>`;
+    return;
+  }
+  $("#rList").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Computador</th><th>Grupo</th><th>IP</th><th>Visto</th><th></th></tr>
+    ${shown.map(d => `<tr><td class="rt-dot">${dot(d.online, d.online ? "online" : "offline")}</td>
+      <td class="rt-title"><b>${osIcon(d.os)} ${esc(d.name)}</b><br><span class="muted small">${esc(d.os || "—")}</span></td>
+      <td class="small" data-label="Grupo">${esc(d.group)}</td><td class="small mono" data-label="IP">${esc(d.ip || "—")}</td>
+      <td class="small" data-label="Visto">${d.online ? "agora" : d.last ? fmtAgo(Math.floor(d.last / 1000)) : "—"}</td>
+      <td class="rt-actions"><div class="row">${RMODES.map(([m, t]) => `<button class="btn sm ${m === "desktop" ? "primary" : ""}" data-rv="${esc(d.id)}" data-m="${m}" ${d.online ? "" : "disabled"}>${t}</button>`).join("")}</div></td></tr>`).join("")}
+    </table></div>${shown.length ? "" : `<p class="muted">Nada encontrado para “${esc(q)}”.</p>`}
+    <p class="muted small u-mt8"><b>Tela</b> funciona em computadores com área de trabalho (Windows, Mac, Linux com interface). Em servidores sem interface gráfica, use <b>Terminal</b> e <b>Arquivos</b>.</p>`;
+  $$("#rList [data-rv]").forEach(b => b.onclick = () => openRemoteView(list.find(x => x.id === b.dataset.rv), b.dataset.m));
+}
+
+async function remoteInvite() {
+  const box = $("#rInv");
+  box.innerHTML = `<div class="card">Gerando o convite…</div>`;
+  try {
+    const { url } = await api("/api/admin/remoto/invite", { method: "POST", body: { hours: 72 } });
+    box.innerHTML = `<div class="card"><h2>Adicionar um computador</h2>
+      <p class="small">Envie este link para quem está no computador. Ele abre uma página com o instalador do agente para Windows, Mac e Linux; depois de instalado, o computador aparece aqui. O link vale 3 dias.</p>
+      <div class="cred mono">${esc(url)}</div><div class="row u-mt12"><button class="btn primary" id="rCopy">Copiar link</button><button class="btn" id="rInvClose">Fechar</button></div></div>`;
+    $("#rCopy").onclick = async () => { try { await navigator.clipboard.writeText(url); toast("Link copiado!"); } catch (e) { toast("Selecione o link e copie."); } };
+    $("#rInvClose").onclick = () => { box.innerHTML = ""; };
+  } catch (e) { box.innerHTML = `<div class="note err">${esc(e.message)}</div>`; }
+}
+
+// Janela lateral (igual à de Máquinas) com o visualizador do MeshCentral.
+function openRemoteView(d, mode) {
+  closeOverlay();
+  OVL = { remote: d, tab: mode };
+  const el = document.createElement("div");
+  el.id = "ovl";
+  el.innerHTML = `<div class="ovl-bg"></div><aside class="ovl ovl-wide" role="dialog" aria-modal="true">
+    <header class="ovl-h"><div>${dot(d.online)} <b>${esc(d.name)}</b> <span class="muted small">${esc(d.os || "")}</span></div>
+      <div class="row"><button class="btn sm" id="rvNew" title="Abrir em nova aba">↗</button><button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></div></header>
+    <nav class="tabs" id="ovlTabs">${RMODES.map(([m, t]) => `<button data-t="${m}">${t}</button>`).join("")}</nav>
+    <div class="ovl-b rv-body"><div class="rframe rv-frame"><div class="muted rload">Conectando…</div><iframe title="Remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div></aside>`;
+  document.body.appendChild(el);
+  document.body.classList.add("noscroll");
+  const close = () => closeOverlay();
+  $(".ovl-bg", el).onclick = close; $("#ovlClose").onclick = close;
+  $$("#ovlTabs button", el).forEach(b => b.onclick = () => remoteMode(d, b.dataset.t));
+  $("#rvNew").onclick = () => { const f = $(".rv-frame iframe"); if (f && f.src) window.open(f.src, "_blank", "noopener"); };
+  remoteMode(d, mode);
+}
+
+async function remoteMode(d, mode, root = document) {
+  if (OVL) OVL.tab = mode;
+  if (OVL && OVL.remote) $$("#ovlTabs button[data-t]").forEach(b => b.classList.toggle("on", b.dataset.t === mode));
+  const f = $(".rv-frame iframe", root);
+  if (!f) return;
+  const ld = $(".rv-frame .rload", root); if (ld) ld.style.display = "";
+  try {
+    f.onload = () => { const l = $(".rv-frame .rload", root); if (l) l.style.display = "none"; };
+    f.src = (await api(`/api/admin/remoto/view?node=${encodeURIComponent(d.id)}&mode=${mode}`)).url;
+  } catch (e) { toast(e.message); }
+}
+
+// Máquinas: a mesma tela, dentro da janela do servidor (quando ele tem o agente).
+function tabTela() {
+  const d = OVL.rdev;
+  $("#ovlBody").innerHTML = `<div class="spread"><div class="row">${RMODES.map(([m, t]) => `<button class="btn sm" data-rm="${m}">${t}</button>`).join("")}</div>
+      <span class="muted small">pelo Remoto (MeshCentral)</span></div>
+    <div class="rframe rv-frame u-mt12"><div class="muted rload">Conectando…</div><iframe title="Remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>`;
+  const pick = m => { $$("#ovlBody [data-rm]").forEach(b => b.classList.toggle("primary", b.dataset.rm === m)); remoteMode(d, m, $("#ovlBody")); };
+  $$("#ovlBody [data-rm]").forEach(b => b.onclick = () => pick(b.dataset.rm));
+  pick("desktop");
+}
 
 function closeOverlay() {
   if (!OVL) return;
@@ -758,6 +899,20 @@ async function openMachine(id, tab = "resumo") {
   $("#ovlClose").onclick = () => { if (!OVL.ws || confirm("Fechar e encerrar o terminal?")) closeOverlay(); };
   $$("#ovlTabs button").forEach(b => b.onclick = () => { if (OVL.tab === "terminal" && b.dataset.t !== "terminal" && OVL.ws && !confirm("Sair do terminal encerra a sessão. Continuar?")) return; showTab(b.dataset.t); });
   await refreshMachine();
+  // com o agente do Remoto no servidor: aba "Tela" (mesmo nome de computador)
+  if (FEATURES.remote_sso) {
+    try {
+      const h = (OVL.m.hostname || "").toLowerCase();
+      OVL.rdev = (await remoteDevices(false)).find(x => x.name.toLowerCase() === h && x.online);
+    } catch (e) { }
+    if (OVL && OVL.rdev) {
+      $("#ovlTabs").insertAdjacentHTML("afterbegin", `<button data-t="tela">Tela</button>`);
+      $("#ovlTabs button[data-t=tela]").onclick = () => {
+        if (OVL.tab === "terminal" && OVL.ws && !confirm("Sair do terminal encerra a sessão. Continuar?")) return;
+        showTab("tela");
+      };
+    }
+  }
   showTab(tab);
   OVL.timer = setInterval(() => { if (OVL && OVL.tab === "resumo" && !document.hidden) refreshMachine().then(() => OVL && OVL.tab === "resumo" && showTab("resumo")); }, 15000);
 }
@@ -773,7 +928,7 @@ function showTab(t) {
   if (OVL.tab === "terminal" && t !== "terminal") stopTerminal();
   OVL.tab = t;
   $$("#ovlTabs button").forEach(b => b.classList.toggle("on", b.dataset.t === t));
-  ({ resumo: tabResumo, terminal: tabTerminal, vpn: tabVpn, conectar: tabConectar, config: tabConfig })[t]();
+  ({ tela: tabTela, resumo: tabResumo, terminal: tabTerminal, vpn: tabVpn, conectar: tabConectar, config: tabConfig })[t]();
 }
 
 const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
@@ -794,7 +949,7 @@ function tabResumo() {
       ${kv("CPU", `${r.cpus || "—"} núcleos · carga ${r.load1 ?? "—"}`)}${kv("Memória", `${gb(r.mem_available)} livres de ${gb(r.mem_total)}`)}
       ${kv("Disco /", `${gb(r.disk_free)} livres de ${gb(r.disk_total)}`)}${kv("Primeiro contato", fmtDate(m.first_seen))}
     </div>
-    <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}${"ddclient" in sv ? svc("DDNS", sv.ddclient) : ""}${"cloudflared" in sv ? svc("Cloudflare Tunnel", sv.cloudflared) : ""}${"libvirtd" in sv ? svc("Virtualização", sv.libvirtd) : ""}${"nvidia" in sv ? svc("GPU NVIDIA", sv.nvidia) : ""}
+    <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}${"ddclient" in sv ? svc("DDNS", sv.ddclient) : ""}${"cloudflared" in sv ? svc("Cloudflare Tunnel", sv.cloudflared) : ""}${"libvirtd" in sv ? svc("Virtualização", sv.libvirtd) : ""}${"nvidia" in sv ? svc("GPU NVIDIA", sv.nvidia) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}
       ${m.report.docker_containers != null ? `<span class="pill">${m.report.docker_containers} container(s)</span>` : ""}</div>
     <h3>Provisionamento</h3>
     <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${String(v).startsWith("ok") || /^100\./.test(v) ? `<span class="ok">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
@@ -1001,3 +1156,98 @@ function tabConfig() {
 }
 
 route();
+
+/* -------------------------------------------------- PWA: instalar + puxar para atualizar */
+if ("serviceWorker" in navigator) {
+  addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => { }));
+}
+let installEvt = null;
+addEventListener("beforeinstallprompt", e => {
+  e.preventDefault(); installEvt = e;
+  $("#installBtn").classList.remove("hidden");
+  if (ME) shell();  // mostra "Instalar app" também no menu do celular
+});
+addEventListener("appinstalled", () => { installEvt = null; $("#installBtn").classList.add("hidden"); if (ME) shell(); });
+async function installApp() {
+  if (!installEvt) return;
+  installEvt.prompt();
+  try { await installEvt.userChoice; } catch (e) { }
+  installEvt = null; $("#installBtn").classList.add("hidden"); if (ME) shell();
+}
+$("#installBtn").onclick = installApp;
+
+// Puxar para atualizar (celular/tablet): arrastar para baixo no topo da página.
+// Funciona também com o app instalado, onde o navegador não oferece o gesto.
+(function pullToRefresh() {
+  const ind = document.createElement("div");
+  ind.id = "ptr"; ind.setAttribute("aria-hidden", "true");
+  ind.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>`;
+  document.body.appendChild(ind);
+  const TRIGGER = 70, MAX = 110;
+  let y0 = null, dist = 0, pulling = false, busy = false;
+  const blocked = t => busy || document.body.classList.contains("noscroll") || document.body.classList.contains("menu-open")
+    || t.closest("#ovl, .term, textarea, select, pre.log, .mnav");
+  const show = d => {  // sai de baixo do cabeçalho (que fica por cima do indicador)
+    ind.style.setProperty("--ptr-top", ($("#top").offsetHeight || 60) + "px");
+    ind.style.transform = `translate(-50%, ${d - 50}px) rotate(${d * 3}deg)`;
+    ind.style.opacity = Math.min(1, d / TRIGGER);
+    ind.classList.toggle("ready", d >= TRIGGER);
+  };
+  const reset = () => { pulling = false; y0 = null; ind.classList.remove("ready", "spin"); ind.style.transform = ""; ind.style.opacity = ""; };
+  addEventListener("touchstart", e => {
+    if (e.touches.length !== 1 || scrollY > 0 || blocked(e.target)) { y0 = null; return; }
+    y0 = e.touches[0].clientY; dist = 0; pulling = false;
+  }, { passive: true });
+  addEventListener("touchmove", e => {
+    if (y0 === null) return;
+    const dy = e.touches[0].clientY - y0;
+    if (dy <= 0 || scrollY > 0) { if (pulling) reset(); else y0 = null; return; }
+    pulling = true;
+    dist = Math.min(MAX, dy * 0.5);  // resistência: o indicador anda metade do dedo
+    show(dist);
+    if (e.cancelable) e.preventDefault();  // sem "rebote" nem recarga dupla do navegador
+  }, { passive: false });
+  addEventListener("touchend", async () => {
+    if (!pulling) { y0 = null; return; }
+    if (dist < TRIGGER) return reset();
+    busy = true; ind.classList.add("spin"); show(TRIGGER);
+    // No assistente, só relê os dados (não apaga o que já foi digitado); no resto, recarrega a página.
+    if ((location.hash || "#/") === "#/" && ME && ME.mode !== "download") {
+      if ($("#wf")) collect();  // guarda o que já foi digitado antes de redesenhar
+      try { await route(); } catch (e) { }
+      setTimeout(() => { busy = false; reset(); }, 350);
+    } else {
+      location.reload();
+    }
+  });
+  addEventListener("touchcancel", () => { if (!busy) reset(); });
+})();
+
+/* -------------------------------------------------- ISOs em geração (aviso em todas as telas)
+   A geração roda no SERVIDOR: fechar ou trocar de aba não a interrompe. Este aviso
+   mostra isso ao voltar (inclusive reabrindo o app) e leva ao acompanhamento. */
+let jobsTimer = null;
+async function refreshJobs() {
+  clearTimeout(jobsTimer);
+  const box = $("#jobs");
+  if (!ME) { box.classList.add("hidden"); return; }
+  let run = [];
+  try { run = (await api("/api/builds")).builds.filter(b => b.status === "queued" || b.status === "running"); } catch (e) { }
+  const here = (location.hash || "").replace("#/iso/", "");
+  const show = run.filter(b => b.id !== here);  // na própria página da ISO a barra já aparece
+  box.innerHTML = show.map(b => `<a class="job" href="#/iso/${b.id}"><span class="job-spin" aria-hidden="true"></span>
+    <span class="job-txt">Gerando a ISO de <b>${esc(b.hostname)}</b> · ${Math.round(b.progress)}%<span class="muted small"> · ${esc(b.message || "")}</span></span>
+    <span class="job-go">Acompanhar</span></a>`).join("");
+  box.classList.toggle("hidden", !show.length);
+  if (run.length && !document.hidden) jobsTimer = setTimeout(refreshJobs, 4000);
+}
+// Voltou para a aba (ou o celular "descongelou" a página): atualiza na hora,
+// sem esperar o próximo ciclo (o navegador pausa os timers de abas em segundo plano).
+function onBack() {
+  if (document.hidden || !ME) return;
+  refreshJobs();
+  if ((location.hash || "").startsWith("#/iso/")) route();
+}
+document.addEventListener("visibilitychange", onBack);
+addEventListener("pageshow", e => { if (e.persisted) onBack(); });
+addEventListener("focus", () => { if (!jobsTimer) onBack(); });

@@ -183,6 +183,8 @@ def prepare_job(build_id: str, data: dict) -> str:
         os.makedirs(os.path.join(jd, sub), mode=0o700, exist_ok=True)
     os.chmod(jd, 0o700)
     cfg = data["config"]
+    if cfg.get("REMOTE_AGENT") == "yes":
+        cfg["REMOTE_AGENT_URL"] = PANEL_URL.rstrip("/") + "/remoto"
     lines = ["# Gerado pela interface web (build %s). Sem segredos." % build_id]
     lines += [f"{k}={q(v)}" for k, v in cfg.items()]
     _write(os.path.join(jd, "config", "install.env"), "\n".join(lines) + "\n")
@@ -200,6 +202,12 @@ def prepare_job(build_id: str, data: dict) -> str:
         _write(os.path.join(jd, "secrets", "coolify-password"), data["coolify_password"] + "\n")
     if data.get("ddns_password"):
         _write(os.path.join(jd, "secrets", "ddns-password"), data["ddns_password"] + "\n")
+    if cfg.get("REMOTE_AGENT") == "yes":
+        from . import remoto
+        mid = remoto.mesh_id()
+        if not mid:
+            raise RuntimeError("o Remoto ainda não está pronto (grupo de servidores não criado)")
+        _write(os.path.join(jd, "secrets", "remote-meshid"), mid + "\n")
     if data.get("cloudflare_token"):
         _write(os.path.join(jd, "secrets", "cloudflare-token"), data["cloudflare_token"] + "\n")
     # relatório ao painel + (opcional) chave do painel restrita ao Tailscale
@@ -345,6 +353,6 @@ def summary_of(cfg: dict) -> str:
             "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "DOCKER_ENABLED", "EXTRA_PACKAGES", "SSH_AUTH", "SSH_PORT",
             "COOLIFY_ENABLED", "COCKPIT_ENABLED", "COOLIFY_ADMIN_EMAIL", "WG_ENABLED",
             "DDNS_ENABLED", "DDNS_HOSTNAME", "CLOUDFLARE_ENABLED", "GPU_NVIDIA", "VIRT_ENABLED", "VIRT_BRIDGE",
-            "SERVER_TWEAKS"]
+            "SERVER_TWEAKS", "REMOTE_AGENT"]
     return json.dumps({k: cfg.get(k, "") for k in keep})
 

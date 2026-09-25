@@ -136,7 +136,8 @@ func finalizeDisk(d Disk) {
 }
 
 // runWrite executa a gravação completa em um disco já validado.
-func runWrite(isoPath, diskID string, p *progress) {
+// toolsDir: arquivos da partição INSTALAR (vazio = não cria a partição).
+func runWrite(isoPath, diskID, toolsDir string, p *progress) {
 	d, err := findDisk(diskID, "") // revalida: o disco ainda existe e ainda é USB/externo
 	if err != nil {
 		p.finish("error", err.Error(), "")
@@ -153,13 +154,32 @@ func runWrite(isoPath, diskID string, p *progress) {
 		return
 	}
 	sum, err := writeImage(isoPath, f, d.Size, p)
-	f.Close()
 	if err != nil {
+		f.Close()
 		p.finish("error", err.Error(), "")
 		return
 	}
+	// ISO gravada e verificada; agora a partição INSTALAR (opcional: se falhar,
+	// o pendrive continua bom para instalar pelo menu de boot)
+	msg := "Pendrive pronto! Pode removê-lo e usar para instalar o servidor."
+	if toolsDir != "" {
+		p.set("tools", "Criando a partição INSTALAR (programas para instalar no computador de destino)…", 0)
+		files, rerr := readToolsDir(toolsDir)
+		if rerr == nil {
+			_, rerr = addToolsPartition(f, d.Size, files)
+		}
+		if rerr == nil {
+			rerr = syncDevice(f)
+		}
+		if rerr != nil {
+			msg += " (Sem a partição INSTALAR: " + rerr.Error() + ".)"
+		} else {
+			msg = "Pendrive pronto! Além do instalador, ele tem a unidade INSTALAR com os programas para reiniciar e instalar no computador de destino."
+		}
+	}
+	f.Close()
 	finalizeDisk(d)
-	p.finish("done", "Pendrive pronto! Pode removê-lo e usar para instalar o servidor.", sum)
+	p.finish("done", msg, sum)
 }
 
 // ------------------------------------------------------------------ ISOs
@@ -237,6 +257,8 @@ func findISOs() []ISO {
 
 // ------------------------------------------------------------------ servidor local
 type app struct {
+	rebootErr string     // falha ao pedir o reinício (mostrada na tela)
+	stick     *StickInfo // aberto a partir do pendrive (partição INSTALAR)
 	bundle   *Bundle
 	fetch    *progress
 	token    string
@@ -266,6 +288,13 @@ func (a *app) state() map[string]any {
 	}
 	if a.job != nil {
 		st["job"] = a.job.get()
+	}
+	st["reboot"] = osRebootInfo()
+	if a.stick != nil {
+		st["stick"] = a.stick
+	}
+	if a.rebootErr != "" {
+		st["reboot_error"] = a.rebootErr
 	}
 	if a.bundle != nil {
 		st["bundle"] = map[string]any{"hostname": a.bundle.Hostname, "iso_name": a.bundle.ISOName,
@@ -417,10 +446,21 @@ func (a *app) handler() http.Handler {
 		a.mu.Unlock()
 		go func() {
 			defer func() { a.mu.Lock(); a.busy = false; a.mu.Unlock() }()
+			p.set("preparing", "Preparando os programas para o pendrive…", 0)
+			tools, notes, terr := a.gatherTools(iso)
+			if terr != nil {
+				tools = ""
+			}
+			if tools != "" {
+				defer os.RemoveAll(tools)
+			}
 			if osNeedsPrivilegedWorker() {
-				runViaPrivilegedWorker(iso, d.ID, p)
+				runViaPrivilegedWorker(iso, d.ID, tools, p)
 			} else {
-				runWrite(iso, d.ID, p)
+				runWrite(iso, d.ID, tools, p)
+			}
+			if len(notes) > 0 && p.get().Phase == "done" {
+				p.setMessage(p.get().Message + " Observação: " + strings.Join(notes, "; ") + ".")
 			}
 		}()
 		writeJSON(w, 200, map[string]string{"ok": "1"})
@@ -448,6 +488,9 @@ func (a *app) handler() http.Handler {
 		a.startFetch()
 		writeJSON(w, 200, map[string]string{"ok": "1"})
 	})
+	mux.HandleFunc(prefix+"/api/reboot", a.rebootHandler)
+	mux.HandleFunc(prefix+"/api/ventoy", a.ventoyInfoHandler)
+	mux.HandleFunc(prefix+"/api/ventoy/copy", a.ventoyCopyHandler)
 	mux.HandleFunc(prefix+"/api/quit", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, 405, nil)
@@ -497,7 +540,7 @@ func (a *app) handler() http.Handler {
 
 // macOS: roda a gravação como root via janela de senha nativa e acompanha
 // o progresso por um arquivo de status.
-func runViaPrivilegedWorker(iso, diskID string, p *progress) {
+func runViaPrivilegedWorker(iso, diskID, toolsDir string, p *progress) {
 	dir, err := os.MkdirTemp("", "isobuilder")
 	if err != nil {
 		p.finish("error", err.Error(), "")
@@ -507,7 +550,11 @@ func runViaPrivilegedWorker(iso, diskID string, p *progress) {
 	status := filepath.Join(dir, "status.json")
 	p.set("preparing", "Aguardando a sua senha do computador…", 0)
 	done := make(chan error, 1)
-	go func() { done <- osRunPrivileged([]string{"--write", "--iso", iso, "--disk", diskID, "--status", status}) }()
+	args := []string{"--write", "--iso", iso, "--disk", diskID, "--status", status}
+	if toolsDir != "" {
+		args = append(args, "--tools", toolsDir)
+	}
+	go func() { done <- osRunPrivileged(args) }()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -552,6 +599,7 @@ func main() {
 	iso := flag.String("iso", "", "caminho da ISO")
 	disk := flag.String("disk", "", "ID do disco (de --list)")
 	status := flag.String("status", "", "arquivo de status JSON")
+	toolsDir := flag.String("tools", "", "pasta com os arquivos da partição INSTALAR (modo trabalhador)")
 	noBrowser := flag.Bool("no-browser", false, "não abre o navegador")
 	port := flag.Int("port", 0, "porta local (0 = automática)")
 	showVer := flag.Bool("version", false, "mostra a versão")
@@ -576,7 +624,7 @@ func main() {
 			p.finish("error", "--iso e --disk são obrigatórios", "")
 			os.Exit(2)
 		}
-		runWrite(*iso, *disk, p)
+		runWrite(*iso, *disk, *toolsDir, p)
 		st := p.get()
 		fmt.Println(st.Message)
 		if st.Phase != "done" {
@@ -610,6 +658,10 @@ func main() {
 		os.Exit(1)
 	}
 	a := &app{token: randomToken(), lastSeen: time.Now(), port: ln.Addr().(*net.TCPAddr).Port, bundle: loadBundle()}
+	// aberto a partir da partição INSTALAR de um pendrive já gravado: só reiniciar e instalar
+	if a.stick = detectStick(); a.stick != nil {
+		a.bundle = nil
+	}
 	if a.bundle != nil {
 		a.startFetch()
 	}

@@ -57,6 +57,10 @@ if [ "${DDNS_ENABLED:-no}" = yes ]; then
   [ -s "$DDNS_PW_FILE" ] || die "Senha do No-IP ausente (secrets/ddns-password)."
   install -m 600 "$DDNS_PW_FILE" "$STAGE/uab/secrets/ddns-password"
 fi
+if [ "${REMOTE_AGENT:-no}" = yes ]; then
+  [ -s "$REMOTE_MESHID_FILE" ] || die "Id do grupo do Remoto ausente (secrets/remote-meshid)."
+  install -m 600 "$REMOTE_MESHID_FILE" "$STAGE/uab/secrets/remote-meshid"
+fi
 if [ "${CLOUDFLARE_ENABLED:-no}" = yes ]; then
   [ -s "$CF_TOKEN_FILE" ] || die "Token do Cloudflare Tunnel ausente (secrets/cloudflare-token)."
   install -m 600 "$CF_TOKEN_FILE" "$STAGE/uab/secrets/cloudflare-token"

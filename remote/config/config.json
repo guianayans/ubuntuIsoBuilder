@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Ylianst/MeshCentral/master/meshcentral-config-schema.json",
+  "settings": {
+    "Cert": "__PUBLIC_HOST__",
+    "WANonly": true,
+    "Port": 4021,
+    "AliasPort": 443,
+    "RedirPort": 0,
+    "TlsOffload": true,
+    "TrustedProxy": "0.0.0.0/0",
+    "SessionKey": "__REMOTE_SESSION_KEY__",
+    "WebRTC": true,
+    "AllowHighQualityDesktop": true,
+    "Compression": false,
+    "WsCompression": false,
+    "AgentWsCompression": false,
+    "SelfUpdate": false,
+    "AllowLoginToken": true
+  },
+  "domains": {
+    "": {
+      "Title": "ISO Builder",
+      "NewAccounts": false,
+      "siteStyle": 3
+    },
+    "remoto": {
+      "Title": "Remoto",
+      "Title2": "ISO Builder",
+      "NewAccounts": false,
+      "siteStyle": 3,
+      "CertUrl": "__PUBLIC_URL__",
+      "AgentConfig": ["webSocketMaskOverride=1"],
+      "AgentInviteCodes": true,
+      "GuestDeviceSharing": true,
+      "LocalSessionRecording": true,
+      "customFiles": { "isobuilder": { "css": ["isobuilder.css"], "scope": ["all"] } }
+    }
+  }
+}

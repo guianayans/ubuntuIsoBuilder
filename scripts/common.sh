@@ -21,6 +21,7 @@ TS_AUTHKEY_FILE="$SECRETS_DIR/tailscale-authkey"
 COOLIFY_PW_FILE="$SECRETS_DIR/coolify-password"
 DDNS_PW_FILE="$SECRETS_DIR/ddns-password"
 CF_TOKEN_FILE="$SECRETS_DIR/cloudflare-token"
+REMOTE_MESHID_FILE="$SECRETS_DIR/remote-meshid"
 
 # Arquivos temporários ficam dentro do projeto (work/tmp, 700), nunca em /tmp.
 TMPDIR="$WORK_DIR/tmp"

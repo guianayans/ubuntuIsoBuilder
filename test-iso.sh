@@ -19,6 +19,10 @@
 #
 # Uso: ./test-iso.sh [--bios] [--cdrom] [--with-tailscale] [--abort-test]
 #                    [--ssh-password] [--ssh-port N] [--keep] [--yes] [--timeout MIN]
+#   --stick-helper BIN  grava a ISO num "pendrive" (imagem de 8 GB) com o isoBuilder
+#                 BIN (Linux), incluindo a partição INSTALAR, e dá boot por ele
+#   --ventoy DIR  copia a ISO para um pendrive (imagem) com Ventoy (DIR = pasta do
+#                 Ventoy para Linux, com Ventoy2Disk.sh) e dá boot pelo menu do Ventoy
 #   --ssh-port N  instala com o SSH na porta N (padrão: SSH_PORT da config) e
 #                 confere que a 22 fecha depois do provisionamento
 #   --ssh-password  testa o modo "usuário e senha" (gera uma senha de teste
@@ -35,6 +39,8 @@ while [ $# -gt 0 ]; do
     --with-tailscale) WITH_TS=1 ;;
     --ssh-password) SSH_PW=1 ;;
     --ssh-port) OVR_SSH_PORT="$2"; shift ;;
+    --stick-helper) STICK_HELPER="$(readlink -f "$2")"; shift ;;
+    --ventoy) VENTOY_DIR="$(readlink -f "$2")"; shift ;;
     --abort-test) ABORT_TEST=1 ;;
     --keep) KEEP=1 ;;
     --yes|-y) YES=1 ;;
@@ -90,7 +96,8 @@ finish() {
   fi
   stop_vm
   if [ "$KEEP" = 1 ]; then warn "Artefatos mantidos em ${TDIR#$UAB_ROOT/}"; else
-    find "$TDIR" -maxdepth 1 -type f \( -name '*.iso' -o -name '*.qcow2' -o -name '*.fd' -o -name 'id_test*' -o -name 'test-password*' -o -name askpass \) -delete 2>/dev/null
+    find "$TDIR" -maxdepth 1 -type f \( -name '*.iso' -o -name '*.img' -o -name '*.qcow2' -o -name '*.fd' -o -name 'id_test*' -o -name 'test-password*' -o -name askpass \) -delete 2>/dev/null
+    rm -rf "$TDIR/tools"
     rm -rf "$TDIR/build"
   fi
 }
@@ -147,6 +154,44 @@ HOSTNAME_="$TEST_HOST" "$UAB_ROOT/scripts/customize-iso.sh" "$SRC_ISO" "$STAGE" 
 "$UAB_ROOT/scripts/verify-iso.sh" "$TEST_ISO" "$SRC_ISO" >"$TDIR/verify.txt" || { grep -v '^OK' "$TDIR/verify.txt"; die "Verificação da ISO de teste falhou."; }
 find "$STAGE" -path '*secrets*' -type f -exec sh -c 'command -v shred >/dev/null && shred -u "$@" || rm -f "$@"' _ {} +
 ok "ISO de teste pronta."
+MEDIA_FILE="$TEST_ISO"
+if [ -n "${VENTOY_DIR:-}" ]; then
+  header "Pendrive (imagem) com Ventoy"
+  STICK="$TDIR/ventoy.img"; rm -f "$STICK"; truncate -s 8G "$STICK"
+  LOOP="$(losetup -fP --show "$STICK")" || die "losetup falhou"
+  VMNT="$(mktemp -d)"
+  vt_cleanup() { umount "$VMNT" 2>/dev/null; rmdir "$VMNT" 2>/dev/null; losetup -d "$LOOP" 2>/dev/null; }
+  (cd "$VENTOY_DIR" && printf 'y\ny\n' | sh Ventoy2Disk.sh -I "$LOOP" >/dev/null 2>&1) || { vt_cleanup; die "Ventoy2Disk falhou"; }
+  udevadm settle 2>/dev/null || sleep 2
+  mount "${LOOP}p1" "$VMNT" || { vt_cleanup; die "não montou a partição do Ventoy"; }
+  mkdir -p "$VMNT/ISOs" "$VMNT/ventoy"
+  cp "$TEST_ISO" "$VMNT/ISOs/test-autoinstall.iso"
+  # escolhe a nossa ISO sozinho após 5 s (no uso real, a pessoa escolhe no menu)
+  printf '{ "control": [ { "VTOY_DEFAULT_IMAGE": "/ISOs/test-autoinstall.iso" }, { "VTOY_MENU_TIMEOUT": "5" }, { "VTOY_SECONDARY_BOOT_MENU": "0" } ] }\n' >"$VMNT/ventoy/ventoy.json"
+  sync; vt_cleanup
+  ok "Ventoy $(cat "$VENTOY_DIR/ventoy/version" 2>/dev/null) instalado; ISO copiada para /ISOs"
+  MEDIA_FILE="$STICK"
+fi
+if [ -n "${STICK_HELPER:-}" ]; then
+  header "Gravando o pendrive (imagem) com o isoBuilder"
+  STICK="$TDIR/stick.img"; rm -f "$STICK"; truncate -s 8G "$STICK"
+  TOOLS="$TDIR/tools"; rm -rf "$TOOLS"; mkdir -p "$TOOLS"
+  cp "$STICK_HELPER" "$TOOLS/instalar-linux"; echo teste >"$TOOLS/LEIA-ME.txt"
+  printf '{"hostname":"%s","iso_name":"test-autoinstall.iso","created":"teste"}' "$TEST_HOST" >"$TOOLS/uab-stick.json"
+  UAB_FAKE_DISK="$STICK" UAB_FAKE_DISK_SIZE=$((8*1024*1024*1024)) "$STICK_HELPER" --write --iso "$TEST_ISO" --disk fake0 --tools "$TOOLS" \
+    || die "isoBuilder não gravou o pendrive"
+  sgdisk -v "$STICK" 2>&1 | grep -q "No problems found" && ok "tabela GPT do pendrive íntegra (sgdisk -v)" || { sgdisk -v "$STICK"; die "GPT inválida"; }
+  sgdisk -p "$STICK" | tail -n 5 >&2
+  pn="$(sgdisk -p "$STICK" | awk '$NF=="INSTALAR"{print $1}')"
+  [ -n "$pn" ] && ok "partição $pn: INSTALAR" || die "partição INSTALAR ausente"
+  sgdisk -i 1 "$STICK" | grep -q "Linux filesystem" && ok "partição da ISO marcada como Linux (Windows/macOS não oferecem formatar)" || die "tipo da partição 1 inesperado"
+  start="$(sgdisk -i "$pn" "$STICK" | awk '/First sector/{print $3}')"
+  dd if="$STICK" of="$TDIR/p4.img" bs=512 skip="$start" count=$((64*2048)) status=none
+  fsck.fat -n "$TDIR/p4.img" >/dev/null && ok "FAT32 da INSTALAR íntegro (fsck.fat)" || die "FAT32 inválido"
+  7z l "$TDIR/p4.img" | grep -q "instalar-linux" && 7z l "$TDIR/p4.img" | grep -q "uab-stick.json" && ok "arquivos na INSTALAR" || die "arquivos ausentes na INSTALAR"
+  cmp -n "$(stat -c %s "$TEST_ISO")" "$TEST_ISO" "$STICK" >/dev/null 2>&1 && warn "ISO idêntica byte a byte (esperado: só a tabela GPT muda)"
+  rm -f "$TDIR/p4.img"; MEDIA_FILE="$STICK"
+fi
 
 # ------------------------------------------------------------ VM
 qemu-img create -q -f qcow2 "$DISK" 25G
@@ -175,7 +220,8 @@ if [ "$FIRMWARE" = uefi ]; then
 fi
 
 if [ "$MEDIA" = usb ]; then
-  MEDIA_ARGS=(-device qemu-xhci,id=xhci -drive "if=none,id=stick,format=raw,readonly=on,file=$TEST_ISO"
+  RO=",readonly=on"; [ -n "${VENTOY_DIR:-}" ] && RO=""  # o Ventoy precisa do pendrive gravável (como um real)
+  MEDIA_ARGS=(-device qemu-xhci,id=xhci -drive "if=none,id=stick,format=raw$RO,file=$MEDIA_FILE"
               -device usb-storage,bus=xhci.0,drive=stick,removable=on,bootindex=0)
 else
   MEDIA_ARGS=(-drive "if=none,id=cd0,media=cdrom,readonly=on,file=$TEST_ISO" -device ide-cd,drive=cd0,bootindex=0)
@@ -340,6 +386,10 @@ else
     if [ "${GPU_NVIDIA:-no}" = yes ]; then
       "${SSH[@]}" 'grep -q "^gpu_info=" /var/lib/uab/status && grep "^gpu_info=" /var/lib/uab/status' >"$TDIR/gpu.txt" 2>&1 \
         && t_ok "GPU: $(cut -d= -f2- "$TDIR/gpu.txt")" || t_fail "GPU: etapa não registrou resultado"
+    fi
+    if [ "${REMOTE_AGENT:-no}" = yes ]; then
+      "${SSH[@]}" 'systemctl is-active --quiet meshagent && systemctl is-enabled --quiet meshagent' && t_ok "Remoto: agente MeshCentral ativo e habilitado" || t_fail "Remoto: agente inativo"
+      "${SSH[@]}" 'test ! -e /etc/uab/remote-meshid' && t_ok "Remoto: id do grupo apagado de /etc/uab" || t_fail "Remoto: id do grupo ainda em /etc/uab"
     fi
     if [ "${SERVER_TWEAKS:-no}" = yes ]; then
       rsh 'grep -q consoleblank=0 /boot/grub/grub.cfg' && t_ok "Ajustes de servidor no GRUB" || { t_fail "ajustes de servidor ausentes do GRUB"; cat "$TDIR/extras-diag.txt" >&2; }

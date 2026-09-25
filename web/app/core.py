@@ -552,6 +552,7 @@ def validate_build(d: dict) -> dict:
     c["VIRT_ENABLED"] = "yes" if d.get("virt") else "no"
     c["VIRT_BRIDGE"] = "yes" if d.get("virt") and d.get("virt_bridge", True) else "no"
     c["SERVER_TWEAKS"] = "yes" if d.get("tweaks") else "no"
+    c["REMOTE_AGENT"] = "yes" if d.get("remote_agent") else "no"  # o builder completa URL e id do grupo
     return {"config": c, "keys": keys, "password": pw, "ts_key": ts_key, "panel_access": panel_access,
             "coolify_password": coolify_pw, "ddns_password": ddns_pw, "cloudflare_token": cf_token}
 

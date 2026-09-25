@@ -9,6 +9,15 @@ http:
       middlewares:
         - iso-builder-sec
       tls: {  }
+    # Remoto (MeshCentral) do ISO Builder em /remoto/ (regra mais longa = prioridade maior)
+    iso-remoto:
+      rule: '(Host(`iso.gvtserver.online`) || Host(`www.iso.gvtserver.online`)) && PathPrefix(`/remoto`)'
+      entryPoints:
+        - https
+      service: iso-remoto-svc
+      middlewares:
+        - iso-remoto-sec
+      tls: {  }
   middlewares:
     iso-builder-sec:
       headers:
@@ -23,9 +32,24 @@ http:
           Cross-Origin-Resource-Policy: same-site
           Permissions-Policy: 'camera=(), microphone=(), geolocation=()'
           X-Robots-Tag: 'noindex, nofollow'
+    # o MeshCentral manda o próprio X-Frame-Options (mesma origem: abre dentro do painel)
+    iso-remoto-sec:
+      headers:
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        referrerPolicy: same-origin
+        customResponseHeaders:
+          X-Robots-Tag: 'noindex, nofollow'
   services:
     iso-builder-svc:
       loadBalancer:
         servers:
           -
             url: 'http://iso-builder:8080'
+    iso-remoto-svc:
+      loadBalancer:
+        servers:
+          -
+            url: 'http://remoto:4021'  # nome do serviço (o Coolify renomeia o container)

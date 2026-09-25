@@ -37,7 +37,7 @@ COPY web/ ./web/
 COPY --from=helper /src/helper/dist/ ./helper/dist/
 
 RUN chmod 755 build.sh scripts/*.sh payload/*.sh server-tools/*.sh web/entrypoint.sh \
-    && useradd -u 1000 -m app && mkdir -p /data/wg && chown app:app /data /data/wg && chmod 700 /data
+    && useradd -u 1000 -m app && mkdir -p /data/wg /data/remoto && chown app:app /data /data/wg /data/remoto && chmod 700 /data
 
 USER app
 ENV DATA_DIR=/data UAB_ROOT=/app UAB_CACHE_DIR=/data/cache HELPER_DIST=/app/helper/dist \

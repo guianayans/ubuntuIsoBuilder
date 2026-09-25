@@ -42,12 +42,16 @@ services:
       HUB_PORT: ${HUB_PORT:-51822}
       HUB_SOCKS: ${HUB_SOCKS:-wg-hub:1080}
       WG_STATE: /data/wg
+      # Remoto (MeshCentral) em /remoto/: chave de login e grupo publicados pelo serviço "remoto"
+      REMOTO_SHARED: /data/remoto
       COOKIE_SECURE: "true"
     volumes:
       # Banco, ISOs geradas e cache da ISO oficial do Ubuntu
       - iso_builder_data:/data
       # estado da VPN compartilhado com o hub (sem chaves privadas)
       - iso_builder_wg:/data/wg
+      # chave de login do remoto (só leitura) e id do grupo das ISOs
+      - iso_remoto_shared:/data/remoto:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4).status==200 else 1)"]
       interval: 20s
@@ -94,10 +98,49 @@ services:
     networks:
       - coolify
 
+  # Remoto do ISO Builder (MeshCentral) em https://iso.gvtserver.online/remoto/.
+  # Independente do remote antigo: dados próprios (começa vazio). Login: admin /
+  # ADMIN_PASSWORD (o painel abre já logado). Rota: proxy.yml (router iso-remoto).
+  remoto:
+    # sem container_name: o Coolify renomeia; na rede ele atende por "remoto"
+    build:
+      context: /pendriver/ubuntu-autoinstall-builder/remote
+      dockerfile: Dockerfile
+    image: iso-remoto-local:latest
+    pull_policy: build
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      CONFIG_FILE: /opt/meshcentral/meshcentral-data/config.json
+      DYNAMIC_CONFIG: "false"
+      PUBLIC_URL: ${PUBLIC_URL:-https://iso.gvtserver.online}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-yanguimaraesviana@gmail.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?defina ADMIN_PASSWORD no Coolify}
+    volumes:
+      - iso_remoto_data:/opt/meshcentral/meshcentral-data
+      - iso_remoto_files:/opt/meshcentral/meshcentral-files
+      - iso_remoto_backups:/opt/meshcentral/meshcentral-backups
+      - iso_remoto_shared:/shared
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:4021/remoto/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - coolify
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
 volumes:
   iso_builder_data: null
   iso_builder_wg: null
   iso_builder_hubkeys: null
+  iso_remoto_data: null
+  iso_remoto_files: null
+  iso_remoto_backups: null
+  iso_remoto_shared: null
 
 networks:
   coolify:

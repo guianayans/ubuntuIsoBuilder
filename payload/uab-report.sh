@@ -132,6 +132,7 @@ print(json.dumps({
                  **({"ddclient": active("ddclient")} if conf.get("UAB_DDNS") == "yes" else {}),
                  **({"cloudflared": active("cloudflared")} if conf.get("UAB_CLOUDFLARE") == "yes" else {}),
                  **({"libvirtd": active("libvirtd")} if conf.get("UAB_VIRT") == "yes" else {}),
+                 **({"meshagent": active("meshagent")} if conf.get("UAB_REMOTE_AGENT") == "yes" else {}),
                  **({"nvidia": sh("nvidia-smi", "-L") != ""} if conf.get("UAB_GPU") == "yes" and shutil.which("nvidia-smi") else {})},
     "docker_containers": len([l for l in sh("docker", "ps", "-q").splitlines() if l]) if shutil.which("docker") else None,
     "wg": wg,

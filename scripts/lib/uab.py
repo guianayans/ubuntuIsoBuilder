@@ -230,6 +230,9 @@ def render(args) -> None:
             "UAB_VIRT": "yes" if cfg.get("VIRT_ENABLED") == "yes" else "no",
             "UAB_VIRT_BRIDGE": "yes" if cfg.get("VIRT_ENABLED") == "yes" and cfg.get("VIRT_BRIDGE") == "yes" else "no",
             "UAB_TWEAKS": "yes" if cfg.get("SERVER_TWEAKS") == "yes" else "no",
+            # agente do Remoto (MeshCentral) — o id do grupo vai em secrets/remote-meshid
+            "UAB_REMOTE_AGENT": "yes" if cfg.get("REMOTE_AGENT") == "yes" and cfg.get("REMOTE_AGENT_URL", "").startswith(("https://", "http://")) else "no",
+            "UAB_REMOTE_URL": cfg.get("REMOTE_AGENT_URL", "").rstrip("/"),
             "UAB_PANEL_URL": cfg.get("PANEL_URL", ""),
             # WireGuard pelo hub do painel (a configuração chega pelo relatório)
             "UAB_WG": "yes" if cfg.get("WG_ENABLED") == "yes" and cfg.get("PANEL_URL") else "no",
@@ -488,6 +491,19 @@ def grub(args) -> None:
             "fi\n\n"
             'if [ -n "$uab_disk" ]; then\n'
             f'menuentry "Iniciar o Ubuntu ja instalado ({args.hostname}) - NAO reinstala" --id uab-installed {{\n'
+            # Pendrive com Ventoy: o Ventoy intercepta o carregamento do Linux (injeta o
+            # rdinit dele), então carregar o sistema instalado daqui falha. Nesse caso
+            # passa direto para o carregador de boot do próprio disco instalado.
+            "\tif search --no-floppy --label --set=uab_vt VTOYEFI; then\n"
+            '\t\tif [ "$grub_platform" = "efi" ]; then\n'
+            "\t\t\tfor uab_efi in /EFI/ubuntu/shimx64.efi /EFI/ubuntu/grubx64.efi; do\n"
+            "\t\t\t\tif search --no-floppy --file --set=uab_esp $uab_efi; then chainloader ($uab_esp)$uab_efi; boot; fi\n"
+            "\t\t\tdone\n"
+            "\t\telse\n"
+            "\t\t\tinsmod regexp\n"
+            "\t\t\tif regexp --set=1:uab_hd '^(hd[0-9]+)' $uab_disk; then set root=$uab_hd; chainloader +1; boot; fi\n"
+            "\t\tfi\n"
+            "\tfi\n"
             "\tset root=$uab_disk\n"
             "\tconfigfile $uab_cfg\n"
             "}\n"

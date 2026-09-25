@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocke
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import builder, core, panel, wg
+from . import builder, core, panel, remoto, wg
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 HELPER_DIR = os.environ.get("HELPER_DIST", os.path.join(builder.UAB_ROOT, "helper", "dist"))
@@ -27,12 +27,14 @@ COOKIE = "uab_session"
 MAX_BODY = 256 * 1024
 
 # Atalho no topo (só admin) para o acesso remoto; vazio = sem o botão.
-# REMOTE_EMBED=true abre DENTRO do painel (o app remoto precisa permitir este domínio
-# em frame-ancestors); false = abre em nova aba.
-REMOTE_URL = os.environ.get("REMOTE_URL", "https://remote.gvtserver.online/").strip()
-if not REMOTE_URL.startswith("https://"):
+# Padrão: o remoto do próprio ISO Builder em /remoto/ (serviço "remoto" da stack),
+# aberto já logado. REMOTE_URL=https://... usa outro (ex.: o remote antigo).
+# REMOTE_EMBED=true abre DENTRO do painel; false = abre em nova aba.
+REMOTE_URL = os.environ.get("REMOTE_URL", "/remoto/").strip()
+REMOTE_LOCAL = REMOTE_URL == "/remoto/"
+if not (REMOTE_LOCAL or REMOTE_URL.startswith("https://")):
     REMOTE_URL = ""
-REMOTE_ORIGIN = "/".join(REMOTE_URL.split("/")[:3]) if REMOTE_URL else ""
+REMOTE_ORIGIN = "/".join(REMOTE_URL.split("/")[:3]) if REMOTE_URL and not REMOTE_LOCAL else ""
 REMOTE_EMBED = bool(REMOTE_URL) and os.environ.get("REMOTE_EMBED", "true").strip().lower() in ("1", "true", "yes", "sim")
 
 app = FastAPI(title="Ubuntu Autoinstall Builder", docs_url=None, redoc_url=None, openapi_url=None)
@@ -143,11 +145,58 @@ async def logout(request: Request, response: Response):
     return {"ok": True}
 
 
+@app.get("/api/admin/remoto/login")
+def remoto_login(_: core.User = Depends(admin_user)):
+    """Endereço do remoto já logado (token de 60 min; só o admin)."""
+    if REMOTE_LOCAL and remoto.available():
+        return {"url": remoto.PATH + "?login=" + remoto.login_token()}
+    return {"url": REMOTE_URL}
+
+
+def _remoto_ready():
+    if not (REMOTE_LOCAL and remoto.available()):
+        raise HTTPException(404, "O remoto ainda não está no ar.")
+
+
+@app.get("/api/admin/remoto/devices")
+async def remoto_devices(_: core.User = Depends(admin_user)):
+    _remoto_ready()
+    try:
+        return {"devices": await remoto.devices(), "group_ready": bool(remoto.mesh_id())}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"O remoto não respondeu ({type(exc).__name__}).")
+
+
+@app.post("/api/admin/remoto/invite")
+async def remoto_invite(request: Request, _: core.User = Depends(admin_user)):
+    _remoto_ready()
+    try:
+        hours = int((await request.json()).get("hours") or 24)
+    except (ValueError, TypeError):
+        hours = 24
+    try:
+        return {"url": await remoto.invite_link(max(1, min(hours, 24 * 30)))}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Não foi possível gerar o convite: {exc}")
+
+
+@app.get("/api/admin/remoto/view")
+def remoto_view(node: str, mode: str = "desktop", _: core.User = Depends(admin_user)):
+    _remoto_ready()
+    try:
+        return {"url": remoto.view_url(node, mode)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/me")
 def me(u: core.User = Depends(current_user)):
     return {"user": u.public(), "admin_email": core.ADMIN_EMAIL if u.is_admin else None,
-            "features": {"wireguard": wg.enabled(), "remote_url": REMOTE_URL if u.is_admin else "",
-                         "remote_embed": REMOTE_EMBED and u.is_admin}}
+            "features": {"wireguard": wg.enabled(),
+                         "remote_url": REMOTE_URL if u.is_admin and (not REMOTE_LOCAL or remoto.available()) else "",
+                         "remote_embed": REMOTE_EMBED and u.is_admin,
+                         "remote_sso": REMOTE_LOCAL and u.is_admin and remoto.available(),
+                         "remote_agent": bool(remoto.mesh_id())}}
 
 
 # ------------------------------------------------------------------ contas temporárias (admin)
@@ -225,6 +274,12 @@ def create_temp_user(con, *, prefix: str, label: str, duration: str, mode: str, 
                  build_id if mode == "download" else None))
     return {"email": email, "password": password, "expires_at": until, "url": PUBLIC_URL,
             "mode": mode, "iso": hostname}
+
+
+@app.get("/api/login-info")
+def login_info():
+    """Público: o login mostra só o prefixo e completa com este domínio."""
+    return {"guest_domain": GUEST_DOMAIN}
 
 
 @app.get("/api/admin/guest-domain")
@@ -563,6 +618,21 @@ def token_iso(token: str):
                         filename=f"{r['hostname']}-autoinstall.iso", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/t/{token}/tool/{platform}")
+def token_tool(token: str, platform: str):
+    """isoBuilder (sem personalização) para outro sistema: o gravador põe os três na
+    partição INSTALAR do pendrive. Mesmo link temporário da ISO."""
+    if platform not in ("windows", "macos", "linux"):
+        raise HTTPException(404, "sistema inválido")
+    if not core.dl_token_build(token):
+        raise HTTPException(410, "link expirado ou inválido")
+    name, mt = HELPERS[platform]
+    path = os.path.join(HELPER_DIR, name)
+    if not os.path.exists(path):
+        raise HTTPException(404, "gravador não compilado nesta instalação")
+    return FileResponse(path, media_type=mt, filename=name, headers={"Cache-Control": "no-store"})
+
+
 # ------------------------------------------------------------------ máquinas instaladas
 AGENT_MAX_BODY = 64 * 1024
 _agent_last: dict[str, float] = {}
@@ -837,6 +907,32 @@ def _asset_version(name: str) -> str:
 _INDEX_HTML = open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8").read() \
     .replace("/static/app.js", f"/static/app.js?v={_asset_version('app.js')}") \
     .replace("/static/style.css", f"/static/style.css?v={_asset_version('style.css')}")
+
+
+# ------------------------------------------------------------------ PWA (instalar como app)
+MANIFEST = {
+    "name": "ISO Builder", "short_name": "ISO Builder", "id": "/", "lang": "pt-BR",
+    "description": "Gera ISOs do Ubuntu Server com instalação automática e acompanha os servidores.",
+    "start_url": "/", "scope": "/", "display": "standalone", "orientation": "any",
+    "background_color": "#0f1115", "theme_color": "#0f1115",
+    "icons": [
+        {"src": "/static/pwa/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/static/pwa/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/static/pwa/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return JSONResponse(MANIFEST, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/sw.js")
+def service_worker():
+    # na raiz para valer para o site todo; sempre revalidado (atualiza o app)
+    return FileResponse(os.path.join(STATIC_DIR, "sw.js"), media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
 @app.get("/")

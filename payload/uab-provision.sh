@@ -45,6 +45,7 @@ DOCKER_NETS="172.16.0.0/12"
 UAB_COOLIFY="${UAB_COOLIFY:-no}"; UAB_COCKPIT="${UAB_COCKPIT:-no}"
 UAB_DDNS="${UAB_DDNS:-no}"; UAB_CLOUDFLARE="${UAB_CLOUDFLARE:-no}"; UAB_GPU="${UAB_GPU:-no}"
 UAB_VIRT="${UAB_VIRT:-no}"; UAB_VIRT_BRIDGE="${UAB_VIRT_BRIDGE:-no}"; UAB_TWEAKS="${UAB_TWEAKS:-no}"
+UAB_REMOTE_AGENT="${UAB_REMOTE_AGENT:-no}"; UAB_REMOTE_URL="${UAB_REMOTE_URL:-}"
 . /etc/os-release
 CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
 
@@ -404,6 +405,28 @@ gpu_check() {
   return 1
 }
 
+# Agente do Remoto (MeshCentral do ISO Builder): o servidor aparece no grupo
+# "Servidores ISO Builder" em <painel>/remoto/. O id do grupo vem em /etc/uab (0600)
+# e é apagado depois de instalar (o agente guarda o que precisa no .msh dele).
+remote_agent() {
+  local f=/etc/uab/remote-meshid tmp i
+  if systemctl is-active --quiet meshagent 2>/dev/null; then
+    [ -f "$f" ] && { shred -u -z "$f" 2>/dev/null || rm -f "$f"; }
+    return 0
+  fi
+  [ -s "$f" ] || { log "id do grupo do Remoto ausente"; return 1; }
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL --retry 3 --max-time 120 "$UAB_REMOTE_URL/meshagents?script=1" -o "$tmp/meshinstall.sh"; then
+    rm -rf "$tmp"; log "não foi possível baixar o instalador do agente de $UAB_REMOTE_URL"; return 1
+  fi
+  (cd "$tmp" && bash ./meshinstall.sh "$UAB_REMOTE_URL" "$(head -n1 "$f")") >>"$LOG" 2>&1
+  rm -rf "$tmp"
+  for i in $(seq 1 30); do systemctl is-active --quiet meshagent && break; sleep 2; done
+  systemctl is-active --quiet meshagent || { log "agente do Remoto não ficou ativo"; return 1; }
+  shred -u -z "$f" 2>/dev/null || rm -f "$f"
+  log "agente do Remoto instalado: o servidor aparece em $UAB_REMOTE_URL/"
+}
+
 network_ready() {
   local i
   for i in $(seq 1 30); do
@@ -630,6 +653,7 @@ if network_ready; then
     [ -f "$STATE/gpu_driver.done" ] && step gpu_toolkit gpu_toolkit
   fi
   if [ "$UAB_DDNS" = yes ]; then step ddns_setup ddns_setup; fi
+  if [ "$UAB_REMOTE_AGENT" = yes ] && [ -n "$UAB_REMOTE_URL" ]; then step remote_agent remote_agent; fi
   if [ "$UAB_CLOUDFLARE" = yes ]; then step cloudflare_setup cloudflare_setup; fi
   if [ "$UAB_GPU" = yes ] && [ -f "$STATE/gpu_driver.done" ]; then step gpu_check gpu_check; fi
 else
