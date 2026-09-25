@@ -53,6 +53,15 @@ if [ "${COOLIFY_ENABLED:-no}" = yes ]; then
   install -m 600 "$COOLIFY_PW_FILE" "$STAGE/uab/secrets/coolify-password"
 fi
 
+if [ "${DDNS_ENABLED:-no}" = yes ]; then
+  [ -s "$DDNS_PW_FILE" ] || die "Senha do No-IP ausente (secrets/ddns-password)."
+  install -m 600 "$DDNS_PW_FILE" "$STAGE/uab/secrets/ddns-password"
+fi
+if [ "${CLOUDFLARE_ENABLED:-no}" = yes ]; then
+  [ -s "$CF_TOKEN_FILE" ] || die "Token do Cloudflare Tunnel ausente (secrets/cloudflare-token)."
+  install -m 600 "$CF_TOKEN_FILE" "$STAGE/uab/secrets/cloudflare-token"
+fi
+
 if [ "${TAILSCALE_ENABLED:-no}" = yes ] && [ "${UAB_NO_TS_KEY:-0}" != 1 ]; then
   [ -s "$TS_AUTHKEY_FILE" ] || die "Auth key do Tailscale ausente."
   install -m 600 "$TS_AUTHKEY_FILE" "$STAGE/uab/secrets/tailscale-authkey"

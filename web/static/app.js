@@ -124,8 +124,10 @@ const W = {
   timezone: "America/Sao_Paulo", locale: "pt_BR.UTF-8", keyboard: "br", keyboard_variant: "",
   net_mode: "dhcp", net_match_type: "mac", net_match_value: "", net_address: "", net_gateway: "", net_dns: "1.1.1.1,8.8.8.8", net_search: "",
   storage_type: "single", storage_value: "", storage_min_gb: 20, storage_layout: "lvm", storage_allow_usb: false,
-  ssh_auth: "key", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
+  ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "docker", coolify_email: "", coolify_password: "", coolify_password2: "",
+  ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
+  gpu: false, virt: false, virt_bridge: true, tweaks: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: ""
 };
@@ -162,6 +164,8 @@ function stepHTML() {
         <label class="f"><span>Senha do servidor</span><input type="password" name="password" value="${esc(W.password)}" autocomplete="new-password"><small id="pwhelp">${pwMode ? "Mínimo 12 caracteres. Usada no SSH, no sudo e no console." : "Mínimo 10 caracteres. Usada no sudo e no console físico."} Não fica salva: só o hash vai na ISO.</small></label>
         <label class="f"><span>Repita a senha</span><input type="password" name="password2" value="${esc(W.password2)}" autocomplete="new-password"></label>
       </div>
+      <label class="f"><span>Porta do SSH</span><input name="ssh_port" type="number" min="1" max="65535" inputmode="numeric" value="${esc(W.ssh_port)}" class="u-w-port">
+      <small>Deixe <b>22</b> (padrão) ou escolha outra entre 1024 e 65535, ex.: 2222. Com outra porta, conecte com <code>ssh -p PORTA usuario@servidor</code>.</small></label>
       <label class="f"><span>Chave(s) SSH pública(s) <span class="muted small" id="keyopt">${pwMode ? "(opcional)" : "(opcional: em branco = usuário e senha)"}</span></span><textarea name="ssh_keys" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG7kQv2m... notebook-suporte">${esc(W.ssh_keys)}</textarea>
       <small>Uma por linha. Arquivo <code>id_ed25519.pub</code> (nunca a chave sem .pub).</small></label>
       <div class="row"><label class="btn sm">Carregar arquivo .pub<input type="file" id="pubfile" accept=".pub,text/plain" class="hidden"></label></div>
@@ -215,7 +219,19 @@ function stepHTML() {
       </div>
       ${toggle("panel_access", "Acesso pelo painel (terminal no navegador)", "O servidor aparece em “Máquinas” e o painel pode abrir um terminal SSH nele, com uma chave própria aceita só pela Tailnet. Sem isso, ele aparece na lista mas o acesso é só do seu computador.")}
       <p class="muted small">Sempre instalados: curl, wget, git, ca-certificates, openssh-server, htop, unzip, rsync.</p>
-      ${field("extra_packages", "Pacotes extras (separados por espaço)", 'placeholder="ex.: vim tmux ncdu"')}`;
+      ${field("extra_packages", "Pacotes extras (separados por espaço)", 'placeholder="ex.: vim tmux ncdu"')}
+      <h3>Extras</h3>
+      ${toggle("ddns", "DDNS No-IP", "Mantém um nome (ex.: meuservidor.ddns.net) apontando para o IP público do servidor, atualizado a cada 5 min.")}
+      <div id="ddnsBox" class="grid ${W.ddns ? "" : "hidden"}">${field("ddns_hostname", "Hostname no No-IP", 'placeholder="ex.: meuservidor.ddns.net" autocapitalize="off"')}
+        ${field("ddns_login", "Usuário (ou e-mail) do No-IP", 'autocapitalize="off" autocomplete="off"')}
+        <label class="f"><span>Senha do No-IP</span><input type="password" name="ddns_password" value="${esc(W.ddns_password)}" autocomplete="off"><small>Vai na ISO e fica só no arquivo protegido do ddclient no servidor.</small></label></div>
+      ${toggle("cloudflare", "Cloudflare Tunnel", "Publica serviços pela Cloudflare sem abrir portas no roteador. Os domínios você define no painel da Cloudflare.")}
+      <div id="cfBox" class="${W.cloudflare ? "" : "hidden"}"><label class="f"><span>Token do túnel</span><input type="password" name="cloudflare_token" value="${esc(W.cloudflare_token)}" autocomplete="off">
+        <small>Cloudflare Zero Trust → Networks → Tunnels → crie o túnel (tipo Cloudflared) e cole o token (o texto longo que começa com <code>eyJ</code>; pode colar o comando inteiro). Fica protegido no servidor.</small></label></div>
+      ${toggle("gpu", "GPU NVIDIA", "Detecta a placa na instalação e instala o driver recomendado. Com Docker/Coolify, os containers passam a usar a GPU (sem instalar outro Docker). Reinicia uma vez sozinho para carregar o driver.")}
+      ${toggle("virt", "Virtualização (KVM)", "libvirt/QEMU para rodar VMs" + (W.apps === "coolify_cockpit" ? ", gerenciadas pelo Cockpit (Máquinas virtuais)." : "."))}
+      <div id="virtBox" class="${W.virt ? "" : "hidden"}">${toggle("virt_bridge", "Ponte de rede br0", "As VMs recebem IP do seu roteador, como os outros aparelhos da rede. Aplicada com proteção: se a rede não voltar, é desfeita sozinha.")}</div>
+      ${toggle("tweaks", "Ajustes de servidor", "Verifica e repara o disco sozinho no boot (após queda de energia), console sem apagar a tela e, com virtualização, IOMMU ligado.")}`;
     case 6: {
       const disk = { single: "Único disco interno", serial: "Serial " + W.storage_value, path: W.storage_value, model: "Modelo " + W.storage_value }[W.storage_type];
       return `<h2>Revisar e gerar</h2>
@@ -225,10 +241,12 @@ function stepHTML() {
         <tr><th>Região</th><td>${esc(W.timezone)} · ${esc(W.locale)} · teclado ${esc(W.keyboard)}</td></tr>
         <tr><th>Rede</th><td>${W.net_mode === "dhcp" ? "DHCP" : esc(W.net_address + " via " + W.net_gateway)}</td></tr>
         <tr><th>Disco</th><td>${esc(disk)} · mín. ${esc(W.storage_min_gb)} GB · ${esc(W.storage_layout)}</td></tr>
-        <tr><th>SSH</th><td>${W.ssh_auth === "password"
+        <tr><th>SSH</th><td>Porta ${esc(String(W.ssh_port || 22))} · ${W.ssh_auth === "password"
           ? "Usuário e senha (só rede local e Tailscale; fail2ban)" + (W.ssh_keys.trim() ? ` + ${W.ssh_keys.split("\n").filter(l => l.trim()).length} chave(s)` : "")
           : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
+        <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "GPU NVIDIA" : "",
+          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
       ${ME.role === "admin" ? `<div class="card u-mt16">
@@ -273,12 +291,21 @@ function checkStep() {
     if (W.password.length < minPw) e.push(`A senha precisa de ao menos ${minPw} caracteres.`);
     if (W.password !== W.password2) e.push("As senhas não conferem.");
     if (/PRIVATE KEY|-----BEGIN/.test(W.ssh_keys)) e.push("Isso é uma chave PRIVADA. Use o arquivo .pub.");
+    const sp = String(W.ssh_port).trim();
+    if (!/^\d+$/.test(sp) || !(+sp === 22 || (+sp >= 1024 && +sp <= 65535 && ![6001, 6002, 8000, 8080, 9090].includes(+sp))))
+      e.push("Porta SSH: use 22 (padrão) ou de 1024 a 65535 (exceto 6001, 6002, 8000, 8080 e 9090, usadas pelos programas).");
 
   }
   if (step === 2 && W.net_mode === "static" && (!W.net_address.includes("/") || !W.net_gateway)) e.push("Informe IP/prefixo e gateway.");
   if (step === 3 && W.storage_type !== "single" && W.storage_value.length < 3) e.push("Informe o valor do critério do disco.");
   if (step === 4 && W.tailscale && !/^tskey-/.test(W.tailscale_key.trim())) e.push("Cole a auth key do Tailscale (tskey-auth-…) ou desligue o Tailscale.");
   if (step === 4 && !W.tailscale && !W.wireguard && !confirm("Sem WireGuard e sem Tailscale, o acesso será só pela rede local do cliente. Continuar?")) e.push("Escolha pelo menos uma forma de acesso remoto.");
+  if (step === 5 && W.ddns) {
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(W.ddns_hostname.toLowerCase())) e.push("DDNS: informe o hostname do No-IP (ex.: meuservidor.ddns.net).");
+    if (!W.ddns_login) e.push("DDNS: informe o usuário do No-IP.");
+    if (!W.ddns_password || /['\\]/.test(W.ddns_password)) e.push("DDNS: informe a senha do No-IP (sem aspas simples nem barra invertida).");
+  }
+  if (step === 5 && W.cloudflare && !/[A-Za-z0-9_=+\/-]{80,}/.test(W.cloudflare_token)) e.push("Cloudflare: cole o token do túnel.");
   if (step === 5 && W.apps.startsWith("coolify")) {
     const p = W.coolify_password;
     if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(W.coolify_email)) e.push("Informe o e-mail do admin do Coolify.");
@@ -314,6 +341,9 @@ function renderWizard() {
   $$('input[name="apps"]').forEach(r => r.onchange = () => $("#coolifyBox").classList.toggle("hidden", !r.value.startsWith("coolify")));
   const dl = $('input[name="deliver_on"]'); if (dl) dl.onchange = () => $("#deliverBox").classList.toggle("hidden", !dl.checked);
   const ts = $('input[name="tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
+  [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"]].forEach(([n, box]) => {
+    const c = $(`input[name="${n}"]`); if (c) c.onchange = () => $(box).classList.toggle("hidden", !c.checked);
+  });
   const pf = $("#pubfile");
   if (pf) pf.onchange = () => {
     const f = pf.files[0]; if (!f) return;
@@ -344,7 +374,7 @@ function renderWizard() {
       if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label };
       const r = await api("/api/builds", { method: "POST", body });
       if (r.delivery) { try { sessionStorage.setItem("uab-delivery-" + r.id, JSON.stringify(r.delivery)); } catch (e) { } }
-      W.password = W.password2 = W.tailscale_key = W.confirm_erase = W.coolify_password = W.coolify_password2 = ""; step = 0;
+      W.password = W.password2 = W.tailscale_key = W.confirm_erase = W.coolify_password = W.coolify_password2 = W.ddns_password = W.cloudflare_token = ""; step = 0;
       W.deliver_on = false; W.deliver_prefix = W.deliver_label = "";
       go("#/iso/" + r.id);
     } catch (e) { $("#serr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; btn.disabled = false; btn.textContent = "Gerar ISO"; }
@@ -760,11 +790,11 @@ function tabResumo() {
       ${kv("IP Tailscale", m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span>` : "—")}${kv("Nome Tailscale", esc(m.tailscale_dns || "—"))}
       ${kv("Rede local", esc(m.local_ips.map(x => x.split(" ").pop()).join(", ") || "—"))}${kv("Gateway", esc(m.report.gateway || "—"))}
       ${kv("Sistema", esc(m.os))}${kv("Kernel", esc(m.kernel))}
-      ${kv("Ligado há", fmtUptime(m.uptime))}${kv("Acesso SSH", m.ssh_auth === "password" ? "usuário e senha (rede local/Tailscale)" : "chave SSH")}
+      ${kv("Ligado há", fmtUptime(m.uptime))}${kv("Acesso SSH", (m.ssh_auth === "password" ? "usuário e senha (rede local/Tailscale)" : "chave SSH") + " · porta " + (m.ssh_port_real || 22))}
       ${kv("CPU", `${r.cpus || "—"} núcleos · carga ${r.load1 ?? "—"}`)}${kv("Memória", `${gb(r.mem_available)} livres de ${gb(r.mem_total)}`)}
       ${kv("Disco /", `${gb(r.disk_free)} livres de ${gb(r.disk_total)}`)}${kv("Primeiro contato", fmtDate(m.first_seen))}
     </div>
-    <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}
+    <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}${"ddclient" in sv ? svc("DDNS", sv.ddclient) : ""}${"cloudflared" in sv ? svc("Cloudflare Tunnel", sv.cloudflared) : ""}${"libvirtd" in sv ? svc("Virtualização", sv.libvirtd) : ""}${"nvidia" in sv ? svc("GPU NVIDIA", sv.nvidia) : ""}
       ${m.report.docker_containers != null ? `<span class="pill">${m.report.docker_containers} container(s)</span>` : ""}</div>
     <h3>Provisionamento</h3>
     <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${String(v).startsWith("ok") || /^100\./.test(v) ? `<span class="ok">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
@@ -912,9 +942,9 @@ async function tabVpn() {
 function tabConectar() {
   const m = OVL.m, os = detectOS();
   const host = sshTarget(m), user = m.admin_user;
-  const port = m.ssh_host && +m.ssh_port !== 22 ? +m.ssh_port : 22;
+  const port = m.ssh_host ? +m.ssh_port || 22 : m.ssh_port_real || 22;
   const cmd = `ssh ${port !== 22 ? `-p ${port} ` : ""}${user}@${host}`;
-  const dnsCmd = m.tailscale_dns ? `ssh ${user}@${m.tailscale_dns.split(".")[0]}` : "";
+  const dnsCmd = m.tailscale_dns ? `ssh ${m.ssh_port_real !== 22 ? `-p ${m.ssh_port_real} ` : ""}${user}@${m.tailscale_dns.split(".")[0]}` : "";
   const tsDl = { windows: "https://tailscale.com/download/windows", "windows-arm64": "https://tailscale.com/download/windows", macos: "https://tailscale.com/download/mac", linux: "https://tailscale.com/download/linux", mobile: "https://tailscale.com/download" }[os];
   const term = { windows: "PowerShell ou Terminal do Windows (o cliente ssh já vem no Windows 10/11)", "windows-arm64": "PowerShell ou Terminal do Windows", macos: "Terminal", linux: "terminal", mobile: "um app de SSH (Termius, Blink, JuiceSSH)" }[os];
   $("#ovlBody").innerHTML = `
@@ -952,7 +982,7 @@ function tabConfig() {
     <label class="f"><span>Notas</span><textarea name="notes" placeholder="ex.: rack 2, nobreak 1, responsável: suporte">${esc(m.notes)}</textarea></label>
     <div class="grid">
       <label class="f"><span>Endereço SSH manual (opcional)</span><input name="ssh_host" value="${esc(m.ssh_host)}" placeholder="vazio = IP do Tailscale (${esc(m.tailscale_ip || "ainda não informado")})"><small>Use se quiser conectar por outro IP/nome.</small></label>
-      <label class="f"><span>Porta SSH</span><input name="ssh_port" type="number" min="1" max="65535" value="${esc(m.ssh_port)}"></label>
+      <label class="f"><span>Porta SSH</span><input name="ssh_port" type="number" min="1" max="65535" value="${esc(m.ssh_host ? m.ssh_port : m.ssh_port_real || 22)}"></label>
     </div>
     <div id="merr"></div>
     <div class="row"><button class="btn primary" type="submit">Salvar</button></div></form>

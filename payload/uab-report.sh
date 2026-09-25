@@ -98,6 +98,15 @@ if conf.get("UAB_WG") == "yes":
                    if k in ("state", "address", "handshake", "lan", "message")})
     except (OSError, ValueError):
         pass
+def ssh_port():
+    """Porta em que o SSH escuta de fato (a escolhida na ISO só vale após o provisionamento)."""
+    os.makedirs("/run/sshd", mode=0o755, exist_ok=True)
+    for line in sh("sshd", "-T").splitlines():
+        if line.startswith("port ") and line.split()[1].isdigit():
+            return int(line.split()[1])
+    return int(conf.get("UAB_SSH_PORT") or 22)
+
+
 load = os.getloadavg()
 
 print(json.dumps({
@@ -106,6 +115,7 @@ print(json.dumps({
     "build_id": conf.get("UAB_BUILD_ID", ""),
     "admin_user": conf.get("UAB_ADMIN_USER", ""),
     "ssh_auth": conf.get("UAB_SSH_AUTH", "key"),
+    "ssh_port": ssh_port(),
     "os": osname,
     "kernel": os.uname().release,
     "uptime_seconds": int(float(open("/proc/uptime").read().split()[0])),
@@ -118,7 +128,11 @@ print(json.dumps({
                  "docker": active("docker"), "fail2ban": active("fail2ban"),
                  "cockpit": active("cockpit.socket"),
                  "coolify": sh("docker", "inspect", "-f", "{{.State.Running}}", "coolify") == "true" if shutil.which("docker") else False,
-                 "uab-provision": active("uab-provision")},
+                 "uab-provision": active("uab-provision"),
+                 **({"ddclient": active("ddclient")} if conf.get("UAB_DDNS") == "yes" else {}),
+                 **({"cloudflared": active("cloudflared")} if conf.get("UAB_CLOUDFLARE") == "yes" else {}),
+                 **({"libvirtd": active("libvirtd")} if conf.get("UAB_VIRT") == "yes" else {}),
+                 **({"nvidia": sh("nvidia-smi", "-L") != ""} if conf.get("UAB_GPU") == "yes" and shutil.which("nvidia-smi") else {})},
     "docker_containers": len([l for l in sh("docker", "ps", "-q").splitlines() if l]) if shutil.which("docker") else None,
     "wg": wg,
     "resources": {"cpus": os.cpu_count(), "load1": round(load[0], 2), "mem_total": mem.get("MemTotal"),

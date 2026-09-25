@@ -108,6 +108,7 @@ details summary{cursor:pointer;font-weight:600}
 
 /* utilitários (sem atributos style, por causa da CSP) */
 .u-mt8{margin-top:8px}.u-mt12{margin-top:12px}.u-mt14{margin-top:14px}.u-mt16{margin-top:16px}.u-w100{width:100%}
+.u-w-port{max-width:160px}
 .u-logo-lg{margin:0 auto 12px;width:44px;height:44px;font-size:22px}
 @media (max-width:720px){.brand-name{display:none}.top .in{gap:8px}}
 .big-dl{font-size:16px;padding:14px 22px}

@@ -112,6 +112,11 @@ async def socks5_connect(host: str, port: int, proxy: str = SOCKS_ADDR, auth: tu
         raise
 
 
+def report_ssh_port(rep: dict) -> int:
+    p = rep.get("ssh_port")
+    return p if isinstance(p, int) and 1 <= p <= 65535 else 22
+
+
 def ssh_target(m) -> tuple[str, int, bool]:
     """Escolhe host/porta: endereço manual > túnel WireGuard (conectado) > Tailscale."""
     rep = json.loads(m["report"] or "{}")
@@ -121,11 +126,12 @@ def ssh_target(m) -> tuple[str, int, bool]:
         return host, int(m["ssh_port"] or 22), via_ts
     from . import wg
     wi = wg.machine_info(m["id"]) if wg.enabled() else None
+    port = report_ssh_port(rep)
     if wi and wi["connected"]:
-        return wi["server_ip"], 22, False
+        return wi["server_ip"], port, False
     ts_ips = [ip for ip in (rep.get("tailscale") or {}).get("ips", []) if "." in ip]
     if ts_ips:
-        return ts_ips[0], 22, True
+        return ts_ips[0], port, True
     raise LookupError("A máquina ainda não informou um IP do Tailscale. Defina um endereço em Configurações.")
 
 
@@ -161,6 +167,7 @@ def machine_row(r, builds: dict | None = None) -> dict:
         "off_at": r["off_at"], "off_reason": r["off_reason"] if off else "",
         "ssh_host": r["ssh_host"], "ssh_port": r["ssh_port"], "source_ip": r["source_ip"],
         "admin_user": rep.get("admin_user", ""), "ssh_auth": rep.get("ssh_auth", ""),
+        "ssh_port_real": report_ssh_port(rep),
         "tailscale_ip": next((ip for ip in ts.get("ips", []) if "." in ip), ""),
         "tailscale_dns": ts.get("dns", ""), "tailscale_state": ts.get("state", ""),
         "local_ips": rep.get("local_ips", []), "os": rep.get("os", ""), "kernel": rep.get("kernel", ""),

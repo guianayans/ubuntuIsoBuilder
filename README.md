@@ -670,6 +670,53 @@ Chaves SSH continuam aceitas também nesse modo: dá para adicionar uma depois c
 `uab-add-ssh-key`. Para mudar de modo num servidor já instalado, edite
 `/etc/ssh/sshd_config.d/10-uab-hardening.conf` e rode `sudo systemctl restart ssh`.
 
+## Extras (os recursos do host-mirror)
+
+Opcionais, no passo **Programas → Extras** do assistente web (ou no `./setup.sh`).
+Tudo é instalado pelo provisionador no primeiro boot e aparece em **Máquinas**.
+
+| Extra | O que faz | Você informa |
+|---|---|---|
+| **DDNS No-IP** | `ddclient` mantém o nome apontando para o IP público (a cada 5 min) | hostname, usuário e senha do No-IP |
+| **Cloudflare Tunnel** | `cloudflared` do repositório oficial (chave conferida) conecta o túnel; os domínios ficam no painel da Cloudflare | token do túnel (pode colar o comando inteiro) |
+| **GPU NVIDIA** | detecta a placa, instala o driver recomendado (`ubuntu-drivers`), liga a GPU no Docker/Coolify **já instalado** (`nvidia-container-toolkit`) e reinicia **uma vez** sozinho para carregar o driver | nada |
+| **Virtualização (KVM)** | libvirt/QEMU, UEFI e TPM para VMs, pastas `default` e `isos`; usuário nos grupos `libvirt`/`kvm`; com Cockpit, VMs pelo navegador | nada |
+| **Ponte br0** | a placa principal entra na ponte `br0` (mesmo MAC e endereço), e as VMs recebem IP do seu roteador. Se a rede não voltar em 90 s, **desfaz sozinha** | nada |
+| **Ajustes de servidor** | `fsck` automático no boot (repara após queda de energia), console sem apagar e, com virtualização, IOMMU conforme a CPU | nada |
+
+Segredos: a senha do No-IP e o token vão na pasta protegida da ISO, são gravados só
+em `/etc/ddclient.conf` e `/etc/cloudflared/token.env` (0600, root; o token nunca vai
+na linha de comando) e a cópia de `/etc/uab` é apagada. Sem GPU NVIDIA na máquina, a
+etapa só registra "nenhuma GPU encontrada". Com **Secure Boot** ligado, o driver usa
+os módulos assinados do Ubuntu. Se não houver módulo assinado para a placa, desligue
+o Secure Boot na BIOS.
+
+Não incluídos, de propósito: os scripts de backup para um 2º disco (dependem de um
+disco escolhido na hora e são destrutivos) e a passagem de GPU para VMs.
+
+## Porta do SSH
+
+O padrão é a **22**. Para usar outra, preencha **Porta do SSH** no assistente web
+(passo *Acesso*) ou responda no `./setup.sh` (`SSH_PORT` em `config/install.env`).
+Vale 22 ou de 1024 a 65535, exceto 6001, 6002, 8000, 8080 e 9090 (usadas pelo
+Coolify, Traefik e Cockpit).
+
+```bash
+ssh -p 2222 <usuario>@<servidor>
+```
+
+No primeiro boot o provisionador (passo `ssh_port`):
+
+- grava `Port N` em `/etc/ssh/sshd_config.d/05-uab-port.conf`, confere com `sshd -t`/`sshd -T`
+  e recarrega o `ssh.socket` (Ubuntu 24.04+ usa ativação por socket);
+- só dá como pronto se o SSH **estiver escutando** na porta nova; senão desfaz e o SSH
+  continua na 22 (você não perde o acesso);
+- ajusta o **fail2ban** para vigiar a porta nova e, com Coolify, o servidor `localhost`
+  do Coolify (que gerencia a máquina por SSH).
+
+Até o provisionamento terminar (alguns minutos após o primeiro boot), o SSH fica na 22.
+O painel descobre a porta real pelo relatório da máquina (terminal e "Conectar").
+
 ## SSH: chaves de novos computadores
 
 Como a senha está desativada no SSH, `ssh-copy-id` **não funciona** a partir

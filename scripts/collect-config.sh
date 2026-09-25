@@ -81,6 +81,13 @@ if [ "$SSH_AUTH" = password ]; then
   } >&2
 fi
 
+while true; do
+  ask SSH_PORT "Porta do SSH (22 = padrão; ou 1024-65535, ex.: 2222)" "${SSH_PORT:-22}"
+  if valid_ssh_port "$SSH_PORT"; then break; fi
+  warn "Porta inválida: use 22 ou 1024-65535 (exceto 6001, 6002, 8000, 8080 e 9090, usadas pelos programas)."
+done
+[ "$SSH_PORT" = 22 ] || info "SSH na porta $SSH_PORT: conecte com  ssh -p $SSH_PORT <usuario>@<servidor>"
+
 header "Senha administrativa"
 MIN_PW=10; [ "$SSH_AUTH" = password ] && MIN_PW=12
 if [ -s "$PASSWORD_HASH_FILE" ] && [ "$PREV_SSH_AUTH" = "$SSH_AUTH" ] && ! ask_yn "Já existe um hash de senha salvo. Definir nova senha?" N; then
@@ -380,6 +387,65 @@ while true; do
 done
 EXTRA_PACKAGES="$(printf '%s' "$EXTRA_PACKAGES" | tr -s ' ' | sed 's/^ //; s/ $//')"
 
+# ============================================================ EXTRAS
+header "Extras (opcionais)"
+yn_default() { [ "${1:-no}" = yes ] && echo S || echo N; }
+if ask_yn "DDNS No-IP (mantém um nome como meuservidor.ddns.net apontando para o IP público)?" "$(yn_default "${DDNS_ENABLED:-no}")"; then
+  DDNS_ENABLED=yes
+  while true; do
+    ask DDNS_HOSTNAME "Hostname no No-IP (ex.: meuservidor.ddns.net)" "${DDNS_HOSTNAME:-}"
+    DDNS_HOSTNAME="$(printf '%s' "$DDNS_HOSTNAME" | tr 'A-Z' 'a-z')"
+    printf '%s\n' "$DDNS_HOSTNAME" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' && break
+    warn "Hostname inválido."
+  done
+  while true; do
+    ask DDNS_LOGIN "Usuário (ou e-mail) do No-IP" "${DDNS_LOGIN:-}"
+    printf '%s\n' "$DDNS_LOGIN" | grep -Eq "^[^[:space:]'\\\\]{1,128}$" && break
+    warn "Usuário inválido."
+  done
+  if [ -s "$DDNS_PW_FILE" ] && ask_yn "Manter a senha do No-IP já salva?" S; then :; else
+    while true; do
+      ask_secret DPW "Senha do No-IP"
+      if [ -n "$DPW" ] && ! printf '%s' "$DPW" | grep -q "['\\\\]"; then break; fi
+      warn "Senha vazia ou com aspas simples/barra invertida."
+      DPW=""
+    done
+    printf '%s\n' "$DPW" | write_private_file "$DDNS_PW_FILE"; DPW=""; unset DPW
+  fi
+else
+  DDNS_ENABLED=no; DDNS_HOSTNAME=""; DDNS_LOGIN=""
+  [ -f "$DDNS_PW_FILE" ] && secure_delete "$DDNS_PW_FILE"
+fi
+
+if ask_yn "Cloudflare Tunnel (publica serviços sem abrir portas no roteador)?" "$(yn_default "${CLOUDFLARE_ENABLED:-no}")"; then
+  CLOUDFLARE_ENABLED=yes
+  info "Crie o túnel em Cloudflare Zero Trust > Networks > Tunnels e copie o token (o texto longo depois de --token)."
+  if [ -s "$CF_TOKEN_FILE" ] && ask_yn "Manter o token já salvo?" S; then :; else
+    while true; do
+      ask_secret CFT "Token do túnel"
+      # aceita o token puro ou o comando inteiro copiado da Cloudflare
+      CFT="$(printf '%s' "$CFT" | grep -Eo '[A-Za-z0-9_=+/-]{80,4096}' | tail -n1)"
+      printf '%s' "$CFT" | grep -Eq '^[A-Za-z0-9_=+/-]{80,4096}$' && break
+      warn "Token inválido (cole o token inteiro)."; CFT=""
+    done
+    printf '%s\n' "$CFT" | write_private_file "$CF_TOKEN_FILE"; CFT=""; unset CFT
+  fi
+else
+  CLOUDFLARE_ENABLED=no
+  [ -f "$CF_TOKEN_FILE" ] && secure_delete "$CF_TOKEN_FILE"
+fi
+
+if ask_yn "GPU NVIDIA (driver recomendado; GPU nos containers se houver Docker/Coolify)?" "$(yn_default "${GPU_NVIDIA:-no}")"; then GPU_NVIDIA=yes; else GPU_NVIDIA=no; fi
+
+if ask_yn "Virtualização KVM (libvirt/QEMU para rodar VMs)?" "$(yn_default "${VIRT_ENABLED:-no}")"; then
+  VIRT_ENABLED=yes
+  if ask_yn "Criar a ponte br0 (as VMs recebem IP do seu roteador, como os outros aparelhos)?" "$(yn_default "${VIRT_BRIDGE:-yes}")"; then VIRT_BRIDGE=yes; else VIRT_BRIDGE=no; fi
+else
+  VIRT_ENABLED=no; VIRT_BRIDGE=no
+fi
+
+if ask_yn "Ajustes de servidor (fsck automático no boot, console sem apagar, IOMMU com virtualização)?" "$(yn_default "${SERVER_TWEAKS:-yes}")"; then SERVER_TWEAKS=yes; else SERVER_TWEAKS=no; fi
+
 # ============================================================ RESUMO
 header "Resumo"
 cat >&2 <<EOF
@@ -389,10 +455,11 @@ Usuário:       $ADMIN_USER ($ADMIN_REALNAME)
 Timezone:      $TIMEZONE   Locale: $LOCALE   Teclado: $KEYBOARD_LAYOUT ${KEYBOARD_VARIANT}
 Rede:          $NET_MODE $( [ "$NET_MODE" = static ] && printf '%s via %s (match %s=%s) DNS %s' "$NET_ADDRESS" "$NET_GATEWAY" "$NET_MATCH_TYPE" "$NET_MATCH_VALUE" "$NET_DNS" )
 Disco:         $DISK_DESC, min ${STORAGE_MIN_GB}GB, $STORAGE_LAYOUT — $( [ -n "$STORAGE_CONFIRMED" ] && echo "CONFIRMADO (APAGAR)" || echo "NÃO CONFIRMADO" )
-SSH:           $( if [ "$SSH_AUTH" = password ]; then echo "usuário e senha (só rede local/Tailscale) + $(grep -c . "$AUTHKEYS_FILE" || true) chave(s)"; else echo "$(grep -c . "$AUTHKEYS_FILE") chave(s); senha SSH desativada após confirmar a chave"; fi )
+SSH:           porta ${SSH_PORT:-22}, $( if [ "$SSH_AUTH" = password ]; then echo "usuário e senha (só rede local/Tailscale) + $(grep -c . "$AUTHKEYS_FILE" || true) chave(s)"; else echo "$(grep -c . "$AUTHKEYS_FILE") chave(s); senha SSH desativada após confirmar a chave"; fi )
 Tailscale:     $TAILSCALE_ENABLED $( [ "$TAILSCALE_ENABLED" = yes ] && printf '(nome %s, key %s)' "$TAILSCALE_HOSTNAME" "$( [ -s "$TS_AUTHKEY_FILE" ] && mask_secret "$(cat "$TS_AUTHKEY_FILE")" )" )
 Programas:     docker=$DOCKER_ENABLED coolify=$COOLIFY_ENABLED cockpit=$COCKPIT_ENABLED
 Pacotes extra: ${EXTRA_PACKAGES:-(nenhum)}
+Extras:        ddns=$DDNS_ENABLED${DDNS_HOSTNAME:+ ($DDNS_HOSTNAME)} cloudflare=$CLOUDFLARE_ENABLED gpu=$GPU_NVIDIA virt=$VIRT_ENABLED br0=$VIRT_BRIDGE ajustes=$SERVER_TWEAKS
 EOF
 ask_yn "Salvar esta configuração?" S || die "Cancelado; nada foi salvo em config/install.env."
 
@@ -402,8 +469,9 @@ ask_yn "Salvar esta configuração?" S || die "Cancelado; nada foi salvo em conf
   for v in UBUNTU_SERIES HOSTNAME_ ADMIN_USER ADMIN_REALNAME TIMEZONE LOCALE KEYBOARD_LAYOUT KEYBOARD_VARIANT \
            NET_MODE NET_MATCH_TYPE NET_MATCH_VALUE NET_ADDRESS NET_GATEWAY NET_DNS NET_SEARCH \
            STORAGE_MATCH_TYPE STORAGE_MATCH_VALUE STORAGE_MIN_GB STORAGE_LAYOUT STORAGE_ALLOW_USB STORAGE_CONFIRMED \
-           SSH_AUTH TAILSCALE_ENABLED TAILSCALE_HOSTNAME TAILSCALE_EXTRA_ARGS DOCKER_ENABLED \
-           COOLIFY_ENABLED COCKPIT_ENABLED COOLIFY_ADMIN_EMAIL EXTRA_PACKAGES; do
+           SSH_AUTH SSH_PORT TAILSCALE_ENABLED TAILSCALE_HOSTNAME TAILSCALE_EXTRA_ARGS DOCKER_ENABLED \
+           COOLIFY_ENABLED COCKPIT_ENABLED COOLIFY_ADMIN_EMAIL EXTRA_PACKAGES \
+           DDNS_ENABLED DDNS_HOSTNAME DDNS_LOGIN CLOUDFLARE_ENABLED GPU_NVIDIA VIRT_ENABLED VIRT_BRIDGE SERVER_TWEAKS; do
     eval "val=\${$v:-}"
     # shellcheck disable=SC2154
     printf '%s=%s\n' "$v" "$(shell_quote "$val")"

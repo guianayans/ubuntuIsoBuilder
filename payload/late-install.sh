@@ -40,6 +40,12 @@ if [ -f "$SRC/secrets/coolify-password" ]; then
   (umask 077; install -m 0600 -o root -g root "$SRC/secrets/coolify-password" "$T/etc/uab/coolify-password")
   log "senha do admin do Coolify instalada em /etc/uab (0600, apagada após a instalação do Coolify)"
 fi
+for sf in ddns-password cloudflare-token; do
+  if [ -f "$SRC/secrets/$sf" ]; then
+    (umask 077; install -m 0600 -o root -g root "$SRC/secrets/$sf" "$T/etc/uab/$sf")
+    log "$sf instalado em /etc/uab (0600, apagado após o uso)"
+  fi
+done
 if [ -f "$SRC/secrets/tailscale-authkey" ]; then
   umask 077
   install -m 0600 -o root -g root "$SRC/secrets/tailscale-authkey" "$T/etc/uab/tailscale-authkey"

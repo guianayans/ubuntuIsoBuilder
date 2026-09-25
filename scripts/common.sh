@@ -19,6 +19,8 @@ AUTHKEYS_FILE="$UAB_STATE/config/authorized_keys"
 PASSWORD_HASH_FILE="$SECRETS_DIR/password.hash"
 TS_AUTHKEY_FILE="$SECRETS_DIR/tailscale-authkey"
 COOLIFY_PW_FILE="$SECRETS_DIR/coolify-password"
+DDNS_PW_FILE="$SECRETS_DIR/ddns-password"
+CF_TOKEN_FILE="$SECRETS_DIR/cloudflare-token"
 
 # Arquivos temporários ficam dentro do projeto (work/tmp, 700), nunca em /tmp.
 TMPDIR="$WORK_DIR/tmp"
@@ -197,4 +199,14 @@ validate_pubkey_file() {
 
 storage_confirm_token() {
   printf 'APAGAR:%s:%s' "${STORAGE_MATCH_TYPE:-}" "${STORAGE_MATCH_VALUE:-}"
+}
+
+# Porta do SSH: 22, ou 1024-65535 fora das portas dos programas da ISO
+# (mesma regra de scripts/lib/uab.py e do painel).
+valid_ssh_port() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" = 22 ] && return 0
+  [ "$1" -ge 1024 ] && [ "$1" -le 65535 ] || return 1
+  case " 6001 6002 8000 8080 9090 " in *" $1 "*) return 1 ;; esac
+  return 0
 }

@@ -71,6 +71,8 @@ case "${SSH_AUTH:-key}" in
   *) e "SSH_AUTH inválido: ${SSH_AUTH:-} (use key ou password)" ;;
 esac
 
+valid_ssh_port "${SSH_PORT:-22}" && k "SSH na porta ${SSH_PORT:-22}" || e "SSH_PORT inválida: ${SSH_PORT:-} (22 ou 1024-65535)"
+
 # Tailscale
 if [ "${TAILSCALE_ENABLED:-no}" = yes ]; then
   is_valid_hostname "${TAILSCALE_HOSTNAME:-}" && k "Tailscale como ${TAILSCALE_HOSTNAME}" || e "TAILSCALE_HOSTNAME inválido"
@@ -92,6 +94,25 @@ if [ "${COOLIFY_ENABLED:-no}" = yes ]; then
     e "Coolify ativado, mas secrets/coolify-password ausente (rode ./setup.sh)"
   fi
 fi
+
+# Extras
+if [ "${DDNS_ENABLED:-no}" = yes ]; then
+  printf '%s\n' "${DDNS_HOSTNAME:-}" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' || e "DDNS_HOSTNAME inválido"
+  [ -n "${DDNS_LOGIN:-}" ] || e "DDNS_LOGIN vazio"
+  if [ -s "$DDNS_PW_FILE" ]; then
+    perm="$(ls -l "$DDNS_PW_FILE" | cut -c1-10)"; [ "$perm" = "-rw-------" ] || e "secrets/ddns-password deve ter permissão 600"
+    k "DDNS No-IP: $DDNS_HOSTNAME"
+  else e "DDNS ativado, mas secrets/ddns-password ausente (rode ./setup.sh)"; fi
+fi
+if [ "${CLOUDFLARE_ENABLED:-no}" = yes ]; then
+  if [ -s "$CF_TOKEN_FILE" ]; then
+    perm="$(ls -l "$CF_TOKEN_FILE" | cut -c1-10)"; [ "$perm" = "-rw-------" ] || e "secrets/cloudflare-token deve ter permissão 600"
+    k "Cloudflare Tunnel (token $(mask_secret "$(cat "$CF_TOKEN_FILE")"))"
+  else e "Cloudflare ativado, mas secrets/cloudflare-token ausente (rode ./setup.sh)"; fi
+fi
+[ "${GPU_NVIDIA:-no}" = yes ] && k "GPU NVIDIA (driver + containers)"
+[ "${VIRT_ENABLED:-no}" = yes ] && k "virtualização KVM$( [ "${VIRT_BRIDGE:-no}" = yes ] && echo " + ponte br0")"
+[ "${SERVER_TWEAKS:-no}" = yes ] && k "ajustes de servidor (boot)"
 
 for p in ${EXTRA_PACKAGES:-}; do printf '%s\n' "$p" | grep -Eq '^[a-z0-9][a-z0-9+.-]+$' || e "pacote inválido: $p"; done
 

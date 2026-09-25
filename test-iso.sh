@@ -18,7 +18,9 @@
 # ainda conectado NÃO reinstala (proteção do GRUB).
 #
 # Uso: ./test-iso.sh [--bios] [--cdrom] [--with-tailscale] [--abort-test]
-#                    [--ssh-password] [--keep] [--yes] [--timeout MIN]
+#                    [--ssh-password] [--ssh-port N] [--keep] [--yes] [--timeout MIN]
+#   --ssh-port N  instala com o SSH na porta N (padrão: SSH_PORT da config) e
+#                 confere que a 22 fecha depois do provisionamento
 #   --ssh-password  testa o modo "usuário e senha" (gera uma senha de teste
 #                 aleatória só para a VM e faz login real por senha)
 #   --abort-test  verifica que um critério de disco sem correspondência
@@ -32,6 +34,7 @@ while [ $# -gt 0 ]; do
     --cdrom) MEDIA=cdrom ;;
     --with-tailscale) WITH_TS=1 ;;
     --ssh-password) SSH_PW=1 ;;
+    --ssh-port) OVR_SSH_PORT="$2"; shift ;;
     --abort-test) ABORT_TEST=1 ;;
     --keep) KEEP=1 ;;
     --yes|-y) YES=1 ;;
@@ -52,7 +55,10 @@ SERIAL="$TDIR/serial.log"
 MON="$TDIR/monitor.sock"
 PIDF="$TDIR/qemu.pid"
 KEY="$TDIR/id_test"
-PORT="${UAB_TEST_SSH_PORT:-2222}"
+PORT="${UAB_TEST_SSH_PORT:-2222}"           # no host (127.0.0.1)
+GUEST_PORT="${OVR_SSH_PORT:-${SSH_PORT:-22}}"  # porta do SSH dentro da VM
+valid_ssh_port "$GUEST_PORT" || die "porta SSH inválida: $GUEST_PORT"
+PORT22=$((PORT+1))                           # 22 da VM (deve fechar se GUEST_PORT != 22)
 TEST_HOST="${HOSTNAME_:0:56}-vmtest"
 
 cat >&2 <<EOF
@@ -60,7 +66,7 @@ cat >&2 <<EOF
 Teste em máquina virtual
   firmware: $FIRMWARE   mídia: $MEDIA   modo: $([ "$ABORT_TEST" = 1 ] && echo "abort-test" || echo "instalação completa")
   disco virtual descartável: ${DISK#$UAB_ROOT/} (25 GB, qcow2; nenhum disco físico é usado)
-  SSH da VM: 127.0.0.1:$PORT   Tailscale login: $([ "$WITH_TS" = 1 ] && echo "SIM (usa sua auth key!)" || echo "não")
+  SSH da VM: 127.0.0.1:$PORT -> porta $GUEST_PORT da VM   Tailscale login: $([ "$WITH_TS" = 1 ] && echo "SIM (usa sua auth key!)" || echo "não")
   Duração típica com KVM: 5–15 min.
 EOF
 if [ "$WITH_TS" = 1 ]; then
@@ -78,6 +84,10 @@ stop_vm() {
   fi
 }
 finish() {
+  if [ "${UAB_TEST_HOLD:-0}" = 1 ] && alive; then  # depuração: deixa a VM ligada
+    warn "VM mantida ligada (UAB_TEST_HOLD=1): ssh -p $PORT -i $KEY $ADMIN_USER@127.0.0.1; pare com: kill \$(cat $PIDF)"
+    return
+  fi
   stop_vm
   if [ "$KEEP" = 1 ]; then warn "Artefatos mantidos em ${TDIR#$UAB_ROOT/}"; else
     find "$TDIR" -maxdepth 1 -type f \( -name '*.iso' -o -name '*.qcow2' -o -name '*.fd' -o -name 'id_test*' -o -name 'test-password*' -o -name askpass \) -delete 2>/dev/null
@@ -86,17 +96,20 @@ finish() {
 }
 trap finish EXIT
 
+# Envia comandos (um por linha, pela entrada padrão) ao monitor do QEMU.
+# Os comandos vão como ARGUMENTO: a entrada padrão do python3 é o próprio script.
 monitor_cmd() {
-  python3 - "$MON" <<'EOF'
+  local cmds; cmds="$(cat)"
+  python3 -c '
 import socket, sys, time
 s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.settimeout(2)
 try: s.recv(4096)
 except Exception: pass
-for line in sys.stdin:
-    s.sendall(line.encode()); time.sleep(0.5)
+for line in sys.argv[2].splitlines():
+    s.sendall((line + "\n").encode()); time.sleep(0.5)
     try: print(s.recv(65536).decode(errors="replace"))
     except Exception: pass
-EOF
+' "$MON" "$cmds"
 }
 
 # ------------------------------------------------------------ ISO de teste
@@ -125,7 +138,7 @@ fi
 UAB_PASSWORD_HASH_FILE="$PW_HASH_FILE" UAB_NO_TS_KEY=$NO_TS "$UAB_ROOT/scripts/generate-autoinstall.sh" "$STAGE" "$BUILD_ID" \
   --extra-keys "$KEY.pub" \
   --override "HOSTNAME_=$TEST_HOST" --override "TAILSCALE_HOSTNAME=$TEST_HOST" \
-  --override NET_MODE=dhcp "${DISK_OVR[@]}" ${PW_OVR[@]+"${PW_OVR[@]}"}
+  --override NET_MODE=dhcp --override "SSH_PORT=$GUEST_PORT" "${DISK_OVR[@]}" ${PW_OVR[@]+"${PW_OVR[@]}"}
 python3 "$UAB_ROOT/scripts/lib/uab.py" check "$STAGE/nocloud" --payload "$STAGE/uab/payload" >"$TDIR/check.txt" \
   || { cat "$TDIR/check.txt"; die "ISO de teste inválida."; }
 HOSTNAME_="$TEST_HOST" "$UAB_ROOT/scripts/customize-iso.sh" "$SRC_ISO" "$STAGE" "$BUILD_ID" \
@@ -172,7 +185,7 @@ header "Iniciando VM"
 qemu-system-x86_64 -machine q35 "${ACCEL[@]}" -m 4096 -smp 2 -name uab-vmtest \
   "${FW[@]}" "${MEDIA_ARGS[@]}" \
   -drive "if=none,id=d0,format=qcow2,file=$DISK" -device "virtio-blk-pci,drive=d0,serial=UABTESTDISK0001,bootindex=1" \
-  -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:22" -device virtio-net-pci,netdev=n0 \
+  -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:$GUEST_PORT,hostfwd=tcp:127.0.0.1:$PORT22-:22" -device virtio-net-pci,netdev=n0 \
   -display none -serial "file:$SERIAL" -monitor "unix:$MON,server,nowait" \
   -pidfile "$PIDF" -daemonize
 ok "VM iniciada (pid $(cat "$PIDF")). Log serial: ${SERIAL#$UAB_ROOT/}"
@@ -223,6 +236,15 @@ else
     [ "$("${SSH[@]}" hostname)" = "$TEST_HOST" ] && t_ok "hostname = $TEST_HOST" || t_fail "hostname incorreto"
     "${SSH[@]}" 'systemctl is-active --quiet ssh.socket || systemctl is-active --quiet ssh.service' && t_ok "SSH ativo" || t_fail "SSH inativo"
     "${SSH[@]}" 'systemctl is-enabled --quiet ssh.socket || systemctl is-enabled --quiet ssh.service' && t_ok "SSH habilitado no boot" || t_fail "SSH não habilitado no boot"
+    if [ "$GUEST_PORT" != 22 ]; then
+      t_ok "SSH responde na porta escolhida ($GUEST_PORT)"
+      ssh -p "$PORT22" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "$ADMIN_USER@127.0.0.1" true >"$TDIR/port22.txt" 2>&1 && t_fail "porta 22 ainda aceita SSH" \
+        || { grep -qiE "refused|closed|reset|timed out|kex_exchange" "$TDIR/port22.txt" && t_ok "porta 22 fechada" || t_fail "porta 22: $(head -c 200 "$TDIR/port22.txt")"; }
+      "${SSH[@]}" "ss -Hltn | awk '{print \$4}' | grep -Eq '[:.]$GUEST_PORT\$' && ! ss -Hltn | awk '{print \$4}' | grep -Eq '[:.]22\$'" \
+        && t_ok "sshd escuta só na $GUEST_PORT" || t_fail "portas de escuta inesperadas: $("${SSH[@]}" "ss -Hltn | awk '{print \$4}' | tr '\n' ' '")"
+      "${SSH[@]}" "grep -qx 'port = $GUEST_PORT' /etc/fail2ban/jail.d/uab-sshd-port.conf" && t_ok "fail2ban vigia a porta $GUEST_PORT" || t_fail "fail2ban sem a porta $GUEST_PORT"
+    fi
     methods="$(ssh -p "$PORT" -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive \
       -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
       "$ADMIN_USER@127.0.0.1" true 2>&1 || true)"
@@ -270,6 +292,10 @@ else
         && t_ok "Coolify: admin criado na instalação e cadastro público fechado" || t_fail "Coolify com cadastro público aberto (admin não criado)"
       "${SSH[@]}" 'docker network inspect coolify -f "{{(index .IPAM.Config 0).Subnet}}"' 2>/dev/null | grep -q '^172\.30\.' \
         && t_ok "rede do Coolify na faixa isolada 172.30.0.0/16" || t_fail "rede do Coolify fora da faixa esperada"
+      if [ "$GUEST_PORT" != 22 ]; then
+        "${SSH[@]}" "docker exec coolify-db psql -U coolify -d coolify -tAc 'select port from servers where id=0'" 2>/dev/null | grep -qx "$GUEST_PORT" \
+          && t_ok "Coolify gerencia o servidor pela porta $GUEST_PORT" || t_fail "Coolify ainda usa outra porta SSH"
+      fi
       if [ -n "${PWFILE_FOR_SUDO:-}" ]; then
         "${SSH[@]}" "sudo -S -p '' sshd -T -C user=root,host=x,addr=192.168.1.9" <"$PWFILE_FOR_SUDO" 2>/dev/null | grep -qi '^permitrootlogin no' \
           && t_ok "root bloqueado vindo da rede local" || t_fail "root liberado na rede local"
@@ -282,23 +308,72 @@ else
         "${SSH[@]}" 'test ! -e /etc/uab/tailscale-authkey' && t_ok "auth key apagada do servidor" || t_fail "auth key ainda no disco"
       fi
     fi
+    # ---- extras
+    SUDO="sudo -S -p ''"; [ -n "${PWFILE_FOR_SUDO:-}" ] || SUDO="sudo -n"
+    rsh() { "${SSH[@]}" "$SUDO sh -c $(printf '%q' "$1")" <"${PWFILE_FOR_SUDO:-/dev/null}"; }
+    extras_diag() {
+      rsh 'cat /proc/cmdline; grep -E "uab-provision: .*(ajustes|update-grub|pool|ponte|DDNS|Cloudflare|GPU)" /var/log/uab-provision.log | tail -n 20
+        echo "--- grub.d"; for f in /etc/default/grub.d/*.cfg; do echo "# $f"; cat "$f"; done; grep -E "^GRUB_CMDLINE" /etc/default/grub
+        echo "--- grub.cfg"; ls -l /boot/grub/grub.cfg /boot/efi/EFI/ubuntu/grub.cfg 2>&1; cat /boot/efi/EFI/ubuntu/grub.cfg 2>/dev/null; grep -m3 -E "^\s*linux\s" /boot/grub/grub.cfg
+        findmnt /boot; ls -la /boot/.uab-installed* / 2>/dev/null | grep uab; echo "--- pools"; virsh pool-list --all --autostart' >"$TDIR/extras-diag.txt" 2>&1 || true
+    }
+    extras_diag
+    if [ "${DDNS_ENABLED:-no}" = yes ]; then
+      "${SSH[@]}" 'systemctl is-active --quiet ddclient && systemctl is-enabled --quiet ddclient' && t_ok "DDNS: ddclient ativo e habilitado" || t_fail "DDNS: ddclient inativo"
+      [ "$("${SSH[@]}" 'stat -c %a:%U /etc/ddclient.conf')" = "600:root" ] && t_ok "DDNS: config protegida (600 root)" || t_fail "DDNS: permissão errada em /etc/ddclient.conf"
+      "${SSH[@]}" 'test ! -e /etc/uab/ddns-password' && t_ok "DDNS: cópia da senha apagada de /etc/uab" || t_fail "DDNS: senha ainda em /etc/uab"
+    fi
+    if [ "${CLOUDFLARE_ENABLED:-no}" = yes ]; then
+      "${SSH[@]}" 'command -v cloudflared >/dev/null && systemctl is-enabled --quiet cloudflared' && t_ok "Cloudflare: cloudflared instalado e habilitado" || t_fail "Cloudflare: cloudflared ausente"
+      [ "$(rsh 'stat -c %a:%U /etc/cloudflared/token.env')" = "600:root" ] && t_ok "Cloudflare: token protegido (600 root)" || t_fail "Cloudflare: permissão errada no token"
+      "${SSH[@]}" 'ps -eo args | grep -v grep | grep -q -- "--token"' && t_fail "Cloudflare: token visível na linha de comando" || t_ok "Cloudflare: token fora da linha de comando"
+      "${SSH[@]}" 'test ! -e /etc/uab/cloudflare-token' && t_ok "Cloudflare: cópia do token apagada de /etc/uab" || t_fail "Cloudflare: token ainda em /etc/uab"
+    fi
+    if [ "${VIRT_ENABLED:-no}" = yes ]; then
+      "${SSH[@]}" 'systemctl is-active --quiet libvirtd && virsh -c qemu:///system list --all >/dev/null' && t_ok "Virtualização: libvirt ativo (usuário no grupo libvirt)" || t_fail "Virtualização: libvirt indisponível"
+      [ "$(rsh 'virsh pool-list --autostart --name' | tr -d ' \r' | grep -cxE 'default|isos')" = 2 ] && t_ok "Virtualização: pools default e isos (autostart)" || t_fail "Virtualização: pools ausentes: $(rsh 'virsh pool-list --all --autostart' | tr '\n' ' ')"
+      if [ "${VIRT_BRIDGE:-no}" = yes ]; then
+        "${SSH[@]}" 'ip route show default | grep -q " dev br0" && ip -4 addr show br0 | grep -q inet' && t_ok "Ponte br0 com IP e rota padrão" || t_fail "Ponte br0 não ficou ativa"
+        "${SSH[@]}" 'virsh -c qemu:///system net-list --name | grep -qx br0' && t_ok "Rede br0 no libvirt (VMs na rede local)" || t_fail "rede br0 ausente no libvirt"
+      fi
+    fi
+    if [ "${GPU_NVIDIA:-no}" = yes ]; then
+      "${SSH[@]}" 'grep -q "^gpu_info=" /var/lib/uab/status && grep "^gpu_info=" /var/lib/uab/status' >"$TDIR/gpu.txt" 2>&1 \
+        && t_ok "GPU: $(cut -d= -f2- "$TDIR/gpu.txt")" || t_fail "GPU: etapa não registrou resultado"
+    fi
+    if [ "${SERVER_TWEAKS:-no}" = yes ]; then
+      rsh 'grep -q consoleblank=0 /boot/grub/grub.cfg' && t_ok "Ajustes de servidor no GRUB" || { t_fail "ajustes de servidor ausentes do GRUB"; cat "$TDIR/extras-diag.txt" >&2; }
+    fi
     "${SSH[@]}" 'uab-status' >"$TDIR/uab-status.txt" 2>&1 && t_ok "uab-status executa" || t_fail "uab-status falhou"
 
     runs_before="$(grep -a -c 'UAB-PREFLIGHT: critério do disco' "$SERIAL")"
     header "Reboot com o pendrive ainda conectado"
-    printf 'system_reset\n' | monitor_cmd >/dev/null
+    boot_before="$("${SSH[@]}" cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+    # reboot NORMAL (como o usuário faria); se não houver como, reset forçado
+    rsh 'systemctl reboot' >/dev/null 2>&1 || printf 'system_reset\n' | monitor_cmd >/dev/null
     sleep 30
     deadline=$(( $(date +%s) + 15*60 ))
     wait_for "após reboot: sistema instalado volta (sem reinstalar) e SSH responde" "${SSH[@]}" 'test -f /var/lib/uab/ssh_keys.done' || true
     if "${SSH[@]}" true 2>/dev/null; then
+      boot_after="$("${SSH[@]}" cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+      if [ -n "$boot_before" ] && [ -n "$boot_after" ] && [ "$boot_before" != "$boot_after" ]; then t_ok "a VM reiniciou de fato (boot_id mudou)"
+      else t_fail "a VM NÃO reiniciou (boot_id igual): as verificações abaixo não valem"; fi
       "${SSH[@]}" 'systemctl is-active --quiet ssh.socket || systemctl is-active --quiet ssh.service' && t_ok "SSH ativo após reboot" || t_fail "SSH inativo após reboot"
       [ "${DOCKER_ENABLED:-no}" = yes ] && { "${SSH[@]}" 'systemctl is-active --quiet docker' && t_ok "Docker ativo após reboot" || t_fail "Docker inativo após reboot"; }
       [ "${TAILSCALE_ENABLED:-no}" = yes ] && { "${SSH[@]}" 'systemctl is-active --quiet tailscaled' && t_ok "tailscaled ativo após reboot" || t_fail "tailscaled inativo após reboot"; }
       "${SSH[@]}" 'getent hosts archive.ubuntu.com >/dev/null && ip route show default | grep -q .' && t_ok "rede e DNS ok após reboot" || t_fail "rede quebrada após reboot"
+      if [ "${VIRT_BRIDGE:-no}" = yes ] && [ "${VIRT_ENABLED:-no}" = yes ]; then
+        "${SSH[@]}" 'ip route show default | grep -q " dev br0"' && t_ok "ponte br0 volta após reboot" || t_fail "ponte br0 não voltou após reboot"
+      fi
+      [ "${SERVER_TWEAKS:-no}" = yes ] && { "${SSH[@]}" 'grep -q consoleblank=0 /proc/cmdline' && t_ok "ajustes de boot ativos após reboot" || { t_fail "ajustes de boot não ativos"; SUDO="sudo -S -p ''"; extras_diag; cat "$TDIR/extras-diag.txt" >&2; }; }
+      [ "${DDNS_ENABLED:-no}" = yes ] && { "${SSH[@]}" 'systemctl is-active --quiet ddclient' && t_ok "ddclient ativo após reboot" || t_fail "ddclient inativo após reboot"; }
       [ "${COCKPIT_ENABLED:-no}" = yes ] && { "${SSH[@]}" 'systemctl is-active --quiet cockpit.socket' && t_ok "Cockpit ativo após reboot" || t_fail "Cockpit inativo após reboot"; }
       if [ "${COOLIFY_ENABLED:-no}" = yes ]; then
-        ok_c=0; for _ in $(seq 1 18); do "${SSH[@]}" 'curl -fsS --max-time 5 http://127.0.0.1:8000/api/health' >/dev/null 2>&1 && { ok_c=1; break; }; sleep 10; done
-        [ "$ok_c" = 1 ] && t_ok "Coolify volta sozinho após reboot" || t_fail "Coolify não voltou após reboot"
+        ok_c=0; for _ in $(seq 1 36); do "${SSH[@]}" 'curl -fsS --max-time 5 http://127.0.0.1:8000/api/health' >/dev/null 2>&1 && { ok_c=1; break; }; sleep 10; done
+        if [ "$ok_c" = 1 ]; then t_ok "Coolify volta sozinho após reboot"; else
+          t_fail "Coolify não voltou após reboot (6 min)"
+          rsh 'uptime; systemctl is-active docker; docker ps -a --format "{{.Names}} {{.Status}}"; for c in coolify coolify-db coolify-redis coolify-proxy; do echo "--- $c"; docker inspect -f "restart={{.HostConfig.RestartPolicy.Name}} exit={{.State.ExitCode}} err={{.State.Error}}" $c; docker logs --tail 15 $c 2>&1; done; echo "--- docker journal"; journalctl -b -u docker --no-pager | tail -n 25' >&2 || true
+        fi
       fi
       runs_after="$(grep -a -c 'UAB-PREFLIGHT: critério do disco' "$SERIAL")"
       [ "$runs_after" = "$runs_before" ] && t_ok "instalador NÃO rodou de novo (proteção anti-reinstalação)" || t_fail "instalador rodou novamente após o reboot"

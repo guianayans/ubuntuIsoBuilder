@@ -424,6 +424,7 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
         raise HTTPException(500, "Falha ao preparar a ISO.")
     finally:
         data["password"] = data["ts_key"] = data["report_token"] = data["coolify_password"] = ""
+        data["ddns_password"] = data["cloudflare_token"] = ""
     builder.enqueue(bid)
     return {"id": bid, "delivery": delivery}
 

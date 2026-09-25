@@ -109,6 +109,24 @@ def build_network(cfg: dict) -> dict:
     return {"version": 2, "ethernets": {"uab-lan": eth}}
 
 
+def build_bridge_network(cfg: dict) -> dict:
+    """netplan com a placa principal (pelo MAC) dentro da ponte br0, que herda o
+    endereçamento escolhido (DHCP ou fixo) e o MAC (mantém a reserva do DHCP)."""
+    br = {"interfaces": ["uab-nic"], "macaddress": "__MAC__",
+          "parameters": {"stp": False, "forward-delay": 0}}
+    if cfg.get("NET_MODE", "dhcp") == "dhcp":
+        br.update({"dhcp4": True, "dhcp6": False, "dhcp-identifier": "mac"})
+    else:
+        br.update({"dhcp4": False, "dhcp6": False, "addresses": [cfg["NET_ADDRESS"]],
+                   "routes": [{"to": "default", "via": cfg["NET_GATEWAY"]}],
+                   "nameservers": {"addresses": [d for d in cfg["NET_DNS"].split(",") if d]}})
+        if cfg.get("NET_SEARCH"):
+            br["nameservers"]["search"] = [cfg["NET_SEARCH"]]
+    return {"version": 2, "renderer": "networkd",
+            "ethernets": {"uab-nic": {"match": {"macaddress": "__MAC__"}, "dhcp4": False, "dhcp6": False}},
+            "bridges": {"br0": br}}
+
+
 def build_storage_match(cfg: dict) -> dict:
     mtype, mval = cfg["STORAGE_MATCH_TYPE"], cfg.get("STORAGE_MATCH_VALUE", "")
     if mtype == "serial":
@@ -159,6 +177,14 @@ def render(args) -> None:
         tpl = fh.read()
     text = string.Template(tpl).substitute(quoted)
     ud = yaml.safe_load(text)
+    if not valid_ssh_port(cfg.get("SSH_PORT") or 22):
+        raise SystemExit(f"SSH_PORT inválida: {cfg.get('SSH_PORT')} (use 22 ou 1024-65535, fora de "
+                         f"{', '.join(map(str, sorted(SSH_PORT_RESERVED)))})")
+    if cfg.get("DDNS_ENABLED") == "yes":
+        if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", cfg.get("DDNS_HOSTNAME", "")):
+            raise SystemExit("DDNS_HOSTNAME inválido (ex.: meuservidor.ddns.net)")
+        if not re.match(r"^[^\s'\\]{1,128}$", cfg.get("DDNS_LOGIN", "")):
+            raise SystemExit("DDNS_LOGIN inválido")
     ai = ud["autoinstall"]
     ai["ssh"]["authorized-keys"] = keys
     ai["network"] = build_network(cfg)
@@ -194,10 +220,24 @@ def render(args) -> None:
             "UAB_STORAGE_MIN_GB": cfg.get("STORAGE_MIN_GB", "8"),
             "UAB_STORAGE_ALLOW_USB": cfg.get("STORAGE_ALLOW_USB", "no"),
             "UAB_SSH_AUTH": "password" if cfg.get("SSH_AUTH") == "password" else "key",
+            "UAB_SSH_PORT": str(int(cfg.get("SSH_PORT") or 22)),
+            # extras (mesmos recursos do host-mirror, opcionais)
+            "UAB_DDNS": "yes" if cfg.get("DDNS_ENABLED") == "yes" else "no",
+            "UAB_DDNS_HOSTNAME": cfg.get("DDNS_HOSTNAME", ""),
+            "UAB_DDNS_LOGIN": cfg.get("DDNS_LOGIN", ""),
+            "UAB_CLOUDFLARE": "yes" if cfg.get("CLOUDFLARE_ENABLED") == "yes" else "no",
+            "UAB_GPU": "yes" if cfg.get("GPU_NVIDIA") == "yes" else "no",
+            "UAB_VIRT": "yes" if cfg.get("VIRT_ENABLED") == "yes" else "no",
+            "UAB_VIRT_BRIDGE": "yes" if cfg.get("VIRT_ENABLED") == "yes" and cfg.get("VIRT_BRIDGE") == "yes" else "no",
+            "UAB_TWEAKS": "yes" if cfg.get("SERVER_TWEAKS") == "yes" else "no",
             "UAB_PANEL_URL": cfg.get("PANEL_URL", ""),
             # WireGuard pelo hub do painel (a configuração chega pelo relatório)
             "UAB_WG": "yes" if cfg.get("WG_ENABLED") == "yes" and cfg.get("PANEL_URL") else "no",
         }
+        if conf["UAB_VIRT_BRIDGE"] == "yes":
+            # modelo da ponte br0 (o provisionador troca __MAC__ pela placa principal)
+            write(os.path.join(os.path.dirname(args.payload_conf), "netplan-br0.yaml"),
+                  dump_yaml({"network": build_bridge_network(cfg)}), 0o644)
         body = "# Configuração do provisionador (sem segredos)\n" + "".join(
             f"{k}={shlex.quote(v)}\n" for k, v in conf.items())
         write(args.payload_conf, body, 0o644)
@@ -220,6 +260,18 @@ class Checker:
     def add(self, section: str, cond: bool, msg: str) -> bool:
         self.results.append((section, bool(cond), msg))
         return bool(cond)
+
+
+# Portas TCP já usadas por programas da ISO (Coolify, Traefik, Cockpit, web)
+SSH_PORT_RESERVED = {80, 443, 6001, 6002, 8000, 8080, 9090}
+
+
+def valid_ssh_port(v) -> bool:
+    s = str(v).strip()
+    if not s.isdigit():
+        return False
+    p = int(s)
+    return p == 22 or (1024 <= p <= 65535 and p not in SSH_PORT_RESERVED)
 
 
 def check(args) -> int:

@@ -198,6 +198,10 @@ def prepare_job(build_id: str, data: dict) -> str:
         _write(os.path.join(jd, "secrets", "tailscale-authkey"), data["ts_key"] + "\n")
     if data.get("coolify_password"):
         _write(os.path.join(jd, "secrets", "coolify-password"), data["coolify_password"] + "\n")
+    if data.get("ddns_password"):
+        _write(os.path.join(jd, "secrets", "ddns-password"), data["ddns_password"] + "\n")
+    if data.get("cloudflare_token"):
+        _write(os.path.join(jd, "secrets", "cloudflare-token"), data["cloudflare_token"] + "\n")
     # relatório ao painel + (opcional) chave do painel restrita ao Tailscale
     _write(os.path.join(jd, "secrets", "panel-token"), data["report_token"] + "\n")
     if data.get("panel_access"):
@@ -338,7 +342,9 @@ def start() -> None:
 def summary_of(cfg: dict) -> str:
     keep = ["UBUNTU_SERIES", "HOSTNAME_", "ADMIN_USER", "TIMEZONE", "LOCALE", "KEYBOARD_LAYOUT", "NET_MODE",
             "NET_ADDRESS", "STORAGE_MATCH_TYPE", "STORAGE_MATCH_VALUE", "STORAGE_LAYOUT",
-            "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "DOCKER_ENABLED", "EXTRA_PACKAGES", "SSH_AUTH",
-            "COOLIFY_ENABLED", "COCKPIT_ENABLED", "COOLIFY_ADMIN_EMAIL", "WG_ENABLED"]
+            "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "DOCKER_ENABLED", "EXTRA_PACKAGES", "SSH_AUTH", "SSH_PORT",
+            "COOLIFY_ENABLED", "COCKPIT_ENABLED", "COOLIFY_ADMIN_EMAIL", "WG_ENABLED",
+            "DDNS_ENABLED", "DDNS_HOSTNAME", "CLOUDFLARE_ENABLED", "GPU_NVIDIA", "VIRT_ENABLED", "VIRT_BRIDGE",
+            "SERVER_TWEAKS"]
     return json.dumps({k: cfg.get(k, "") for k in keep})
 

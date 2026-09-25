@@ -393,6 +393,12 @@ def validate_build(d: dict) -> dict:
     if ssh_auth not in ("key", "password"):
         raise Invalid("Modo de acesso SSH inválido.")
     c["SSH_AUTH"] = ssh_auth
+    port = str(d.get("ssh_port") or "22").strip()
+    if not (port.isdigit() and (int(port) == 22 or (1024 <= int(port) <= 65535
+                                                    and int(port) not in (6001, 6002, 8000, 8080, 9090)))):
+        raise Invalid("Porta SSH inválida: use 22 (padrão) ou de 1024 a 65535 "
+                      "(exceto 6001, 6002, 8000, 8080 e 9090, usadas pelos programas).")
+    c["SSH_PORT"] = str(int(port))
     pw = str(d.get("password") or "")
     min_pw = 12 if ssh_auth == "password" else 10
     if len(pw) < min_pw:
@@ -519,8 +525,35 @@ def validate_build(d: dict) -> dict:
     if pk and not all(re.match(r"^[a-z0-9][a-z0-9+.-]+$", p) for p in pk.split()):
         raise Invalid("Nome de pacote inválido.")
     c["EXTRA_PACKAGES"] = pk
+
+    # Extras (os mesmos recursos do host-mirror; todos opcionais)
+    ddns_pw = cf_token = ""
+    c["DDNS_ENABLED"] = "yes" if d.get("ddns") else "no"
+    c["DDNS_HOSTNAME"] = c["DDNS_LOGIN"] = ""
+    if d.get("ddns"):
+        c["DDNS_HOSTNAME"] = _req(d, "ddns_hostname").lower()
+        if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", c["DDNS_HOSTNAME"]):
+            raise Invalid("DDNS: hostname do No-IP inválido (ex.: meuservidor.ddns.net).")
+        c["DDNS_LOGIN"] = _req(d, "ddns_login")
+        if not re.match(r"^[^\s'\\]{1,128}$", c["DDNS_LOGIN"]):
+            raise Invalid("DDNS: informe o usuário (ou e-mail) do No-IP.")
+        ddns_pw = str(d.get("ddns_password") or "")
+        if not ddns_pw or "'" in ddns_pw or "\\" in ddns_pw or "\n" in ddns_pw:
+            raise Invalid("DDNS: informe a senha do No-IP (sem aspas simples nem barra invertida).")
+    c["CLOUDFLARE_ENABLED"] = "yes" if d.get("cloudflare") else "no"
+    if d.get("cloudflare"):
+        # aceita o token puro ou o comando inteiro copiado da Cloudflare
+        # ("cloudflared service install <token>" / "... run --token <token>")
+        found = re.findall(r"[A-Za-z0-9_=+/-]{80,4096}", str(d.get("cloudflare_token") or ""))
+        cf_token = found[-1] if found else ""
+        if not cf_token:
+            raise Invalid("Cloudflare: cole o token do túnel (o texto longo depois de --token).")
+    c["GPU_NVIDIA"] = "yes" if d.get("gpu") else "no"
+    c["VIRT_ENABLED"] = "yes" if d.get("virt") else "no"
+    c["VIRT_BRIDGE"] = "yes" if d.get("virt") and d.get("virt_bridge", True) else "no"
+    c["SERVER_TWEAKS"] = "yes" if d.get("tweaks") else "no"
     return {"config": c, "keys": keys, "password": pw, "ts_key": ts_key, "panel_access": panel_access,
-            "coolify_password": coolify_pw}
+            "coolify_password": coolify_pw, "ddns_password": ddns_pw, "cloudflare_token": cf_token}
 
 
 def validate_email_or_login(s: str) -> str:
