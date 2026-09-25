@@ -158,7 +158,7 @@ ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
 
 
 def generate_password() -> str:
-    return "-".join("".join(secrets.choice(ALPHABET) for _ in range(4)) for _ in range(4))
+    return "-".join("".join(secrets.choice(ALPHABET) for _ in range(4)) for _ in range(2))  # xxxx-xxxx
 
 
 # --------------------------------------------------------------------- contas

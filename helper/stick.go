@@ -5,8 +5,9 @@ package main
 // cliques, reinicia o computador pelo pendrive (com confirmação de formatação).
 //
 // Na tabela GPT da ISO (híbrida, com MBR de proteção 0xEE):
-//   - as partições "dados básicos" da ISO passam a "Linux": o Windows e o macOS
-//     deixam de oferecer "formatar" para elas (o boot não depende do tipo);
+//   - as partições "dados básicos" da ISO passam a "recuperação do Windows" com o
+//     atributo "sem letra de unidade": o Windows nunca monta essas partições (não
+//     aparece o D: pedindo para formatar). O boot não depende do tipo;
 //   - entra a partição 4 (FAT32, rótulo INSTALAR);
 //   - a cópia de segurança da GPT vai para o fim do pendrive.
 
@@ -33,8 +34,12 @@ const (
 
 var (
 	gptTypeBasicData = mustGUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
-	gptTypeLinuxFS   = mustGUID("0FC63DAF-8483-4772-8E79-3D69D8477DE4")
+	// Windows RE: o Windows nunca dá letra a esse tipo (o tipo "Linux" ele montou num teste real)
+	gptTypeWinRE = mustGUID("DE94BBA4-06D1-4D40-A16A-BFD50179D6AC")
 )
+
+// atributos GPT: 0 = necessária à plataforma; 63 = sem letra de unidade (Windows)
+const gptAttrHideFromWindows = uint64(1)<<63 | 1
 
 // mustGUID converte o texto do GUID para o formato em disco (3 campos little-endian).
 func mustGUID(s string) [16]byte {
@@ -124,7 +129,8 @@ func addToolsPartition(dev rwAt, devSize int64, files map[string][]byte) (uint64
 		var t [16]byte
 		copy(t[:], e[0:16])
 		if t == gptTypeBasicData {
-			copy(e[0:16], gptTypeLinuxFS[:]) // Windows/macOS deixam de oferecer "formatar"
+			copy(e[0:16], gptTypeWinRE[:]) // o Windows não monta nem oferece "formatar"
+			le.PutUint64(e[48:], le.Uint64(e[48:])|gptAttrHideFromWindows)
 		}
 	}
 	if free < 0 {

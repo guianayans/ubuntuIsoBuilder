@@ -17,8 +17,14 @@ html,body{background:var(--uab-bg)!important;color:var(--uab-text);font-family:s
 a{color:var(--uab-accent)}
 
 /* ---- cabeçalho */
-#masthead{background:color-mix(in srgb,var(--uab-bg) 85%,transparent)!important;background-image:none!important;
-  border-bottom:1px solid var(--uab-line);box-shadow:none!important;backdrop-filter:blur(8px)}
+/* sem backdrop-filter: ele cria um contexto de empilhamento e prendia o menu do
+   usuário (admin ▾) atrás da página. O cabeçalho fica acima de tudo. */
+#masthead{background:var(--uab-bg)!important;background-image:none!important;
+  border-bottom:1px solid var(--uab-line);box-shadow:none!important;position:relative;z-index:1050!important;overflow:visible!important}
+#masthead .dropdown-menu,.user-menu-container .dropdown-menu{z-index:1060!important;background:var(--uab-card)!important;
+  border:1px solid var(--uab-line)!important;border-radius:12px!important;box-shadow:0 12px 30px rgba(0,0,0,.35)!important}
+#masthead .dropdown-item{color:var(--uab-text)!important;border-radius:8px}
+#masthead .dropdown-item:hover{background:var(--uab-soft)!important;color:var(--uab-accent)!important}
 #masthead .title{color:var(--uab-text)!important;font-weight:700;letter-spacing:-.01em;text-shadow:none!important}
 #masthead .title2{color:var(--uab-muted)!important;text-shadow:none!important}
 #masthead .title::before{content:"";display:inline-block;width:30px;height:30px;margin-right:10px;vertical-align:-6px;border-radius:9px;

@@ -184,7 +184,8 @@ if [ -n "${STICK_HELPER:-}" ]; then
   sgdisk -p "$STICK" | tail -n 5 >&2
   pn="$(sgdisk -p "$STICK" | awk '$NF=="INSTALAR"{print $1}')"
   [ -n "$pn" ] && ok "partição $pn: INSTALAR" || die "partição INSTALAR ausente"
-  sgdisk -i 1 "$STICK" | grep -q "Linux filesystem" && ok "partição da ISO marcada como Linux (Windows/macOS não oferecem formatar)" || die "tipo da partição 1 inesperado"
+  sgdisk -i 1 "$STICK" | grep -q "Windows RE" && sgdisk -i 1 "$STICK" | grep -qE "Attribute flags: [89a-fA-F]" \
+    && ok "partição da ISO oculta para o Windows (tipo recuperação + sem letra de unidade)" || { sgdisk -i 1 "$STICK" >&2; die "tipo/atributos da partição 1 inesperados"; }
   start="$(sgdisk -i "$pn" "$STICK" | awk '/First sector/{print $3}')"
   dd if="$STICK" of="$TDIR/p4.img" bs=512 skip="$start" count=$((64*2048)) status=none
   fsck.fat -n "$TDIR/p4.img" >/dev/null && ok "FAT32 da INSTALAR íntegro (fsck.fat)" || die "FAT32 inválido"

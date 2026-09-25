@@ -52,3 +52,20 @@ func TestVentoyReal(t *testing.T) {
 	t.Logf("montado em %s (%s), livre %d bytes, pastas %v", v.Mount, v.FS, v.Free, v.Folders)
 	v.Release()
 }
+
+// Tabela GPT montada pelo sgdisk (como a da ISO): UAB_TEST_GPT_IMG=/caminho/img
+func TestAddToolsPartitionImage(t *testing.T) {
+	p := os.Getenv("UAB_TEST_GPT_IMG")
+	if p == "" {
+		t.Skip("sem imagem")
+	}
+	f, err := os.OpenFile(p, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, _ := f.Stat()
+	if _, err := addToolsPartition(f, fi.Size(), map[string][]byte{"a.txt": []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+}
