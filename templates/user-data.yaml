@@ -1,0 +1,51 @@
+#cloud-config
+# Template base do Autoinstall (Subiquity) entregue via cloud-init NoCloud.
+# Os marcadores no formato $${NOME} são substituídos por scripts/lib/uab.py (valores
+# serializados como strings YAML seguras). As seções network, storage e
+# ssh.authorized-keys são preenchidas programaticamente.
+# Referência: https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html
+autoinstall:
+  version: 1
+  # Nenhuma pergunta na tela: instalação 100% desassistida.
+  interactive-sections: []
+  refresh-installer:
+    update: false
+  locale: ${LOCALE}
+  keyboard:
+    layout: ${KEYBOARD_LAYOUT}
+    variant: ${KEYBOARD_VARIANT}
+  timezone: ${TIMEZONE}
+  identity:
+    hostname: ${HOSTNAME}
+    username: ${ADMIN_USER}
+    realname: ${ADMIN_REALNAME}
+    password: ${PASSWORD_HASH}
+  ssh:
+    install-server: true
+    # Senha permanece aceita apenas até o provisionador (uab-provision)
+    # confirmar a chave pública e aplicar PasswordAuthentication no.
+    allow-pw: true
+    authorized-keys: []
+  apt:
+    # Sem internet durante a instalação, instala a partir da ISO em vez de abortar.
+    fallback: offline-install
+    # O instalador roda "apt-get update" no fim sem nova tentativa: uma falha
+    # momentânea do espelho derrubaria a instalação. O apt passa a tentar de novo.
+    # (grava /etc/apt/apt.conf.d/94curtin-config, que sobrevive a essa etapa)
+    conf: |
+      Acquire::Retries "10";
+      Acquire::http::Timeout "30";
+      Acquire::https::Timeout "30";
+  updates: security
+  network: {}
+  storage: {}
+  early-commands:
+    # Verifica o disco de destino ANTES de qualquer escrita. Aborta se ambíguo.
+    - sh /cdrom/uab/preflight.sh
+  late-commands:
+    # Instala o provisionador de primeiro boot, ferramentas e o marcador anti-reinstalação.
+    - sh /cdrom/uab/late-install.sh
+  error-commands:
+    # Mostra o motivo da falha no console para quem estiver na frente da máquina.
+    - sh /cdrom/uab/on-error.sh
+  shutdown: reboot

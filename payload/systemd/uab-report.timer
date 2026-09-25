@@ -1,0 +1,11 @@
+[Unit]
+Description=ubuntu-autoinstall-builder: relatório ao painel no boot e a cada 10 minutos
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

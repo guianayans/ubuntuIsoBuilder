@@ -1,0 +1,10 @@
+[Unit]
+Description=ubuntu-autoinstall-builder: relatório de estado ao painel
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/uab-report
+TimeoutStartSec=2min
+Nice=10

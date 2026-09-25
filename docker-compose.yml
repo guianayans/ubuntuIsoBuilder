@@ -1,0 +1,104 @@
+# ISO Builder — interface web em https://iso.gvtserver.online
+# Variáveis (defina no Coolify):
+#   ADMIN_PASSWORD  (obrigatória, mínimo 12 caracteres; sem ela o login do admin fica desativado)
+#   ADMIN_EMAIL     (padrão yanguimaraesviana@gmail.com)
+# Roteamento: Traefik do Coolify via proxy.yml
+#   (copie para /data/coolify/proxy/dynamic/IsoBuilder.yaml).
+services:
+  iso-builder:
+    container_name: iso-builder
+    build:
+      # Caminho absoluto: funciona mesmo se o Coolify/docker compose rodar de outro diretório
+      context: /pendriver/ubuntu-autoinstall-builder
+      dockerfile: web/Dockerfile
+    image: iso-builder-local:latest
+    pull_policy: build
+    restart: unless-stopped
+    environment:
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-yanguimaraesviana@gmail.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?defina ADMIN_PASSWORD no Coolify}
+      PUBLIC_URL: ${PUBLIC_URL:-https://iso.gvtserver.online}
+      # Horas que uma ISO gerada fica disponível para download
+      ISO_TTL_HOURS: ${ISO_TTL_HOURS:-48}
+      # Máximo de ISOs guardadas ao mesmo tempo (~4 GB cada)
+      MAX_STORED_ISOS: ${MAX_STORED_ISOS:-4}
+      # false = apaga a ISO oficial do Ubuntu (~3 GB) após cada geração; a próxima baixa de novo
+      KEEP_BASE_ISO: ${KEEP_BASE_ISO:-true}
+      # Limite padrão de ISOs por acesso temporário
+      TEMP_MAX_BUILDS: ${TEMP_MAX_BUILDS:-3}
+      # Validade máxima (dias) do link embutido no gravador personalizado
+      DL_TOKEN_DAYS: ${DL_TOKEN_DAYS:-7}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      # Painel de máquinas: auth key do Tailscale para o PAINEL entrar na Tailnet
+      # (necessária só para o terminal no navegador). Recomendado: tag:iso-painel.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-iso-painel}
+      # De onde a chave do painel é aceita nos servidores (padrão: só Tailnet)
+      PANEL_KEY_FROM: ${PANEL_KEY_FROM:-100.64.0.0/10,fd7a:115c:a1e0::/48}
+      # WireGuard pelo SEU servidor (ponto de encontro): endereço público + porta UDP
+      # que os servidores instalados usam para chegar aqui. Ex.: meu-ddns.exemplo.com:51822
+      # (abra essa porta UDP no roteador apontando para este servidor). Vazio = desligado.
+      HUB_ENDPOINT: ${HUB_ENDPOINT:-}
+      HUB_PORT: ${HUB_PORT:-51822}
+      HUB_SOCKS: ${HUB_SOCKS:-wg-hub:1080}
+      WG_STATE: /data/wg
+      COOKIE_SECURE: "true"
+    volumes:
+      # Banco, ISOs geradas e cache da ISO oficial do Ubuntu
+      - iso_builder_data:/data
+      # estado da VPN compartilhado com o hub (sem chaves privadas)
+      - iso_builder_wg:/data/wg
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4).status==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - coolify
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  # Hub WireGuard: os servidores instalados conectam PARA FORA até aqui (funciona
+  # atrás de qualquer NAT/CGNAT do cliente). Cada dispositivo seu só alcança o
+  # servidor da máquina dele; servidores não alcançam sua rede nem uns aos outros.
+  wg-hub:
+    build:
+      context: /pendriver/ubuntu-autoinstall-builder/web/hub
+      dockerfile: Dockerfile
+    image: iso-builder-hub-local:latest
+    pull_policy: build
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      # a pasta compartilhada /state pertence ao usuário do painel (uid 1000);
+      # sem isto o root do hub não lê desired.json nem grava hub-status.json
+      - DAC_OVERRIDE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    environment:
+      HUB_PORT: ${HUB_PORT:-51822}
+    ports:
+      - '${HUB_PORT:-51822}:${HUB_PORT:-51822}/udp'
+    volumes:
+      - iso_builder_wg:/state
+      - iso_builder_hubkeys:/hubkeys
+    networks:
+      - coolify
+
+volumes:
+  iso_builder_data: null
+  iso_builder_wg: null
+  iso_builder_hubkeys: null
+
+networks:
+  coolify:
+    external: true

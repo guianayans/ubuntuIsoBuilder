@@ -1,0 +1,19 @@
+[Unit]
+Description=ubuntu-autoinstall-builder: provisionamento de primeiro boot (SSH, Tailscale, Docker)
+Documentation=file:///opt/uab/README-SERVER.txt
+Wants=network-online.target
+After=network-online.target cloud-init.service cloud-config.service
+# Tentar indefinidamente: perder o acesso remoto é falha crítica.
+StartLimitIntervalSec=0
+
+[Service]
+# simple: não segura o boot (multi-user.target) enquanto espera a rede.
+Type=simple
+ExecStart=/usr/local/sbin/uab-provision
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=5min
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

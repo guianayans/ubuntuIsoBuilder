@@ -1,0 +1,45 @@
+# ---- Segredos: NUNCA versionar
+secrets/*
+!secrets/.gitkeep
+*.hash
+*authkey*
+*.key
+*.pem
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+id_test
+id_test.pub
+.env
+*.secret
+
+# ---- Configuração local (específica do seu ambiente)
+config/install.env
+config/authorized_keys
+config/*.local
+
+# ---- Artefatos grandes / gerados
+cache/*
+!cache/.gitkeep
+work/*
+!work/.gitkeep
+output/*
+!output/.gitkeep
+*.iso
+*.iso.part
+*.qcow2
+*.img
+*.fd
+
+# ---- Diversos
+*.log
+*.tmp
+*.bak.*
+.DS_Store
+__pycache__/
+*.pyc
+
+# ---- Interface web / gravador
+helper/dist/
+web-data/

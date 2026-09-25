@@ -1,0 +1,11 @@
+.git
+work
+cache
+output
+secrets
+config/install.env
+config/authorized_keys
+helper/dist
+**/__pycache__
+*.iso
+*.qcow2
