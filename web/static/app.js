@@ -28,7 +28,26 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function go(h) { if (location.hash !== h) location.hash = h; else route(); }
+// Endereços limpos (iso.gvtserver.online/maquinas). Por dentro as telas continuam
+// identificadas por "#/…"; /remoto é do MeshCentral, então a página dele é /acesso-remoto.
+const ROUTE_ALIAS = { "#/remoto": "/acesso-remoto" };
+function toPath(h) { return ROUTE_ALIAS[h] || (String(h).replace(/^#/, "") || "/"); }
+function curRoute() {
+  const p = location.pathname || "/";
+  const alias = Object.entries(ROUTE_ALIAS).find(([, v]) => v === p);
+  return alias ? alias[0] : "#" + p;
+}
+function go(h) { const p = toPath(h); if (location.pathname !== p || location.hash) history.pushState(null, "", p); route(); }
+// links internos (href="#/…") navegam sem recarregar e sem "#" no endereço
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest('a[href^="#/"]');
+  if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target === "_blank") return;
+  e.preventDefault();
+  go(a.getAttribute("href"));
+});
+// links antigos com "#/…" (favoritos, app instalado, mensagens já enviadas)
+function legacyHash() { if (location.hash.startsWith("#/")) history.replaceState(null, "", toPath(location.hash)); }
+legacyHash();
 
 /* -------------------------------------------------- detecção do sistema */
 function detectOS() {
@@ -47,16 +66,17 @@ function shell() {
   $("#top").classList.toggle("hidden", !ME);
   if (!ME) return;
   $("#whoEmail").textContent = ME.email + (ME.role === "admin" ? " · admin" : "");
-  const rb = $("#remoteBtn"), ru = ME.role === "admin" ? FEATURES.remote_url : "";
+  const rb = $("#remoteBtn"), ru = (ME.role === "admin" || ME.mode === "partner") ? FEATURES.remote_url : "";
   rb.classList.toggle("hidden", !ru);
   if (ru) {  // dentro do painel (se liberado) ou em nova aba
     rb.href = FEATURES.remote_embed ? "#/remoto" : ru;
     if (FEATURES.remote_embed) rb.removeAttribute("target"); else rb.target = "_blank";
   }
   const dl = ME.mode === "download";
-  const links = dl ? [[ME.build_id ? "#/iso/" + ME.build_id : "#/", "Minha ISO"]] : [["#/", "Nova ISO"], ["#/isos", "Minhas ISOs"]];
+  const links = dl ? [[ME.build_id ? "#/iso/" + ME.build_id : "#/", "Minha ISO"]]
+    : ME.mode === "partner" ? [["#/maquinas", "Máquinas"]] : [["#/", "Nova ISO"], ["#/isos", "Minhas ISOs"]];
   if (ME.role === "admin") links.push(["#/maquinas", "Máquinas"], ["#/acessos", "Acessos"], ["#/sistema", "Sistema"]);
-  const cur = location.hash || "#/";
+  const cur = curRoute();
   const isOn = h => cur === h || (!dl && h === "#/isos" && cur.startsWith("#/iso/"));
   $("#nav").innerHTML = links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("");
   $("#whoEmail").title = ME.email;
@@ -92,7 +112,7 @@ async function route() {
     try { FEATURES = (await api("/api/me")).features || FEATURES; route.featLoaded = true; } catch (e) { }
   }
   if (FEATURES.wireguard && !route.wgDefault) { route.wgDefault = true; W.wireguard = true; }
-  const h = location.hash || "#/";
+  const h = curRoute();
   if (!ME && h !== "#/login") return go("#/login");
   shell();
   refreshJobs();
@@ -105,6 +125,11 @@ async function route() {
     if (h !== "#/iso/" + ME.build_id) return go("#/iso/" + ME.build_id);
     return renderBuild(ME.build_id);
   }
+  if (ME.mode === "partner") {  // sócio: só as máquinas liberadas (e o Remoto delas)
+    if (h === "#/remoto" && FEATURES.remote_url) return renderRemote();
+    if (h !== "#/maquinas") return go("#/maquinas");
+    return renderMachines();
+  }
   if (h === "#/isos") return renderBuilds();
   if (h.startsWith("#/iso/")) return renderBuild(h.slice(6));
   if (h === "#/acessos" && ME.role === "admin") return renderUsers();
@@ -113,7 +138,8 @@ async function route() {
   if (h === "#/maquinas" && ME.role === "admin") return renderMachines();
   return renderWizard();
 }
-window.addEventListener("hashchange", route);
+window.addEventListener("popstate", route);
+window.addEventListener("hashchange", () => { legacyHash(); route(); });
 
 /* -------------------------------------------------- login */
 function renderLogin() {
@@ -424,7 +450,7 @@ async function renderBuilds() {
   const q = d.quota ? `<p class="muted small">Você usou ${d.quota.used} de ${d.quota.max} ISOs deste acesso.</p>` : "";
   $("#bl").innerHTML = q + (d.builds.length ? `<div class="table-wrap"><table class="rtable"><tr><th>Servidor</th><th>Ubuntu</th><th>Status</th><th>Criada</th>${ME.role === "admin" ? "<th>Conta</th>" : ""}<th></th></tr>
     ${d.builds.map(b => `<tr><td class="rt-title"><b>${esc(b.hostname)}</b></td><td data-label="Ubuntu">${esc(b.series)}</td><td data-label="Status"><span class="pill ${b.status}">${STATUS[b.status] || esc(b.status)}</span></td>
-      <td data-label="Criada">${fmtDate(b.created_at)}</td>${ME.role === "admin" ? `<td class="small" data-label="Conta">${esc(b.owner)}</td>` : ""}<td class="rt-actions"><div class="row"><a class="btn sm" href="#/iso/${b.id}">Abrir</a>${ME.mode === "download" || ["queued", "running"].includes(b.status) ? "" : `<button class="btn sm danger" data-del="${b.id}">Excluir</button>`}</div></td></tr>`).join("")}
+      <td data-label="Criada" class="nowrap">${fmtDate(b.created_at)}</td>${ME.role === "admin" ? `<td class="small" data-label="Conta">${esc(b.owner)}</td>` : ""}<td class="rt-actions"><div class="row"><a class="btn sm" href="#/iso/${b.id}">Abrir</a>${ME.mode === "download" || ["queued", "running"].includes(b.status) ? "" : `<button class="btn sm danger" data-del="${b.id}">Excluir</button>`}</div></td></tr>`).join("")}
     </table></div>` : `<p class="muted">Nenhuma ISO ainda.</p><a class="btn primary" href="#/">Criar a primeira</a>`);
   $$("#bl [data-del]").forEach(b => b.onclick = () => delBuild(b.dataset.del, renderBuilds));
 }
@@ -568,7 +594,8 @@ function renderDownload(b) {
 /* -------------------------------------------------- admin: acessos */
 function credText(c) {
   const extra = c.mode === "download" && c.iso ? `\nISO:      ${c.iso} (entre e siga os passos para gravar o pendrive)` : "";
-  return `Acesso ao ISO Builder\n\nEndereço: ${c.url}\nE-mail:   ${c.email}\nSenha:    ${c.password}\nVálido até: ${fmtDate(c.expires_at)}${extra}`;
+  const until = c.mode === "partner" ? "Conta de sócio (sem prazo)" : `Válido até: ${fmtDate(c.expires_at)}`;
+  return `Acesso ao ISO Builder\n\nEndereço: ${c.url}\nE-mail:   ${c.email}\nSenha:    ${c.password}\n${until}${extra}`;
 }
 function showCred(c, title) {
   $("#cred").innerHTML = `<div class="card"><h2>${esc(title)}</h2>
@@ -586,13 +613,14 @@ async function renderUsers() {
     <div class="choice">
       <label><input type="radio" name="mode" value="build" checked><span><b>Pode gerar ISOs</b><span class="muted small">A pessoa preenche o assistente e gera as próprias ISOs.</span></span></label>
       <label><input type="radio" name="mode" value="download"><span><b>Só baixar uma ISO pronta</b><span class="muted small">Você gera a ISO; a pessoa só baixa e grava o pendrive. Ela não vê senha nem auth key.</span></span></label>
+      <label><input type="radio" name="mode" value="partner"><span><b>Sócio (permanente)</b><span class="muted small">Sem prazo e sem ISOs. Acessa só as máquinas que você liberar, pelo painel e pelo Remoto, com as permissões que escolher.</span></span></label>
     </div>
     <label class="f hidden" id="isoPick"><span>ISO para este acesso</span><select name="build_id"></select>
       <small>A ISO fica guardada até o fim da validade do acesso.</small></label>
     <div class="grid">
       <label class="f"><span>Para quem (opcional)</span><input name="label" placeholder="ex.: Suporte da filial Centro"></label>
-      <label class="f"><span>E-mail de login</span><div class="suffix"><input name="prefix" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small>Só o prefixo; vazio = aleatório.</small></label>
-      <label class="f"><span>Validade</span><select name="duration"><option value="1h">1 hora</option><option value="24h" selected>24 horas</option><option value="3d">3 dias</option><option value="7d">7 dias</option><option value="30d">30 dias</option></select></label>
+      <label class="f"><span>E-mail de login</span><div class="suffix"><input name="prefix" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small id="pfxHelp">Só o prefixo; vazio = aleatório.</small></label>
+      <label class="f" id="durF"><span>Validade</span><select name="duration"><option value="1h">1 hora</option><option value="24h" selected>24 horas</option><option value="3d">3 dias</option><option value="7d">7 dias</option><option value="30d">30 dias</option></select></label>
       <label class="f" id="maxB"><span>Máximo de ISOs</span><input name="max_builds" type="number" min="1" max="20" value="3"></label>
     </div>
     <div id="uerr"></div><button class="btn primary" type="submit">Criar acesso</button></form></div>
@@ -603,8 +631,9 @@ async function renderUsers() {
     ? mine.map(b => `<option value="${b.id}">${esc(b.hostname)} · Ubuntu ${esc(b.series)} · ${fmtDate(b.created_at)}</option>`).join("")
     : `<option value="">Nenhuma ISO pronta: gere uma em “Nova ISO”</option>`;
   $$('#uf input[name="mode"]').forEach(r => r.onchange = () => {
-    const dl = $('#uf input[name="mode"]:checked').value === "download";
-    $("#isoPick").classList.toggle("hidden", !dl); $("#maxB").classList.toggle("hidden", dl);
+    const m = $('#uf input[name="mode"]:checked').value, dl = m === "download", pt = m === "partner";
+    $("#isoPick").classList.toggle("hidden", !dl); $("#maxB").classList.toggle("hidden", dl || pt); $("#durF").classList.toggle("hidden", pt);
+    $("#pfxHelp").textContent = pt ? "Prefixo, ou o e-mail completo do sócio (qualquer domínio)." : "Só o prefixo; vazio = aleatório.";
   });
   $("#uf").onsubmit = async ev => {
     ev.preventDefault();
@@ -624,22 +653,27 @@ async function loadUsers() {
   if (!d.users.length) { $("#ul").innerHTML = `<p class="muted">Nenhum acesso criado.</p>`; return; }
   $("#ul").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th>Login</th><th>Situação</th><th>Validade</th><th>Último acesso</th><th>Tipo / ISOs</th><th></th></tr>
     ${d.users.map(u => `<tr><td class="rt-title"><b>${esc(u.email)}</b>${u.label ? `<br><span class="muted small">${esc(u.label)}</span>` : ""}</td>
-      <td data-label="Situação"><span class="pill ${u.state === "ativa" ? "done" : "error"}">${esc(u.state)}</span></td><td data-label="Validade">${fmtDate(u.expires_at)}</td>
-      <td data-label="Último acesso">${fmtDate(u.last_login)}</td><td data-label="Tipo / ISOs" class="rt-block">${u.mode === "download"
+      <td data-label="Situação"><span class="pill ${u.state === "ativa" ? "done" : "error"}">${esc(u.state)}</span></td><td data-label="Validade" class="nowrap">${u.mode === "partner" ? "sem prazo" : fmtDate(u.expires_at)}</td>
+      <td data-label="Último acesso" class="nowrap">${fmtDate(u.last_login)}</td><td data-label="Tipo / ISOs"><div>${u.mode === "partner"
+        ? `<b>Sócio</b><br><span class="small muted">${u.perm_count ? u.perm_count + (u.perm_count === 1 ? " máquina liberada" : " máquinas liberadas") : "nenhuma máquina liberada"}</span>`
+        : u.mode === "download"
         ? `Só download<br><span class="small ${u.build_ok ? "muted" : "err"}">${u.build_hostname ? esc(u.build_hostname) : "ISO removida"}${!u.build_ok ? " (indisponível)" : u.build_status !== "done" ? " (sendo gerada)" : ""}</span>
-          <br><button class="btn sm ${u.build_ok ? "" : "primary"} u-mt8" data-a="relink" data-id="${u.id}">${u.build_ok ? "Trocar ISO" : "Vincular outra ISO"}</button>
           <div class="hidden u-mt8" id="rl-${u.id}"><select>${isoOptions(u.build_ok ? u.build_id : "")}</select>
             <div class="row u-mt8"><button class="btn sm primary" data-a="relink-save" data-id="${u.id}" ${ready.length ? "" : "disabled"}>Vincular</button>
             <button class="btn sm" data-a="relink-cancel" data-id="${u.id}">Cancelar</button></div></div>`
-        : `${u.builds}/${u.max_builds} ISOs`}</td>
-      <td class="rt-actions"><div class="row"><button class="btn sm" data-a="reset" data-id="${u.id}">Nova senha</button>
-      <button class="btn sm" data-a="extend" data-id="${u.id}">+24h</button>
-      ${u.state === "ativa" ? `<button class="btn sm danger" data-a="revoke" data-id="${u.id}">Revogar</button>` : ""}
-      <button class="btn sm danger" data-a="delete" data-id="${u.id}">Excluir</button></div></td></tr>`).join("")}</table></div>`;
+        : `${u.builds}/${u.max_builds} ISOs`}</div></td>
+      <td class="rt-actions"><div class="row">${u.mode === "partner"
+        ? `<button class="btn sm primary" data-a="perms" data-id="${u.id}" data-email="${esc(u.email)}">Permissões</button>`
+        : u.mode === "download" ? `<button class="btn sm ${u.build_ok ? "" : "primary"}" data-a="relink" data-id="${u.id}">${u.build_ok ? "Trocar ISO" : "Vincular ISO"}</button>` : ""}
+      ${kebab(`<button data-a="reset" data-id="${u.id}">Nova senha</button>
+        ${u.mode === "partner" ? "" : `<button data-a="extend" data-id="${u.id}">Mais 24 horas de validade</button>`}
+        ${u.state === "ativa" ? `<button class="danger" data-a="revoke" data-id="${u.id}">Revogar acesso</button>` : ""}
+        <button class="danger" data-a="delete" data-id="${u.id}">Excluir conta</button>`)}</div></td></tr>`).join("")}</table></div>`;
   $$("#ul [data-a]").forEach(btn => btn.onclick = async () => {
     const id = btn.dataset.id, a = btn.dataset.a;
+    if (a === "perms") return openPerms(id, btn.dataset.email);
     const box = $("#rl-" + id);
-    if (a === "relink" || a === "relink-cancel") { box.classList.toggle("hidden", a === "relink-cancel"); btn.closest("td").querySelector('[data-a="relink"]').classList.toggle("hidden", a === "relink"); return; }
+    if (a === "relink" || a === "relink-cancel") { box.classList.toggle("hidden", a === "relink-cancel"); $(`#ul [data-a="relink"][data-id="${id}"]`).classList.toggle("hidden", a === "relink"); return; }
     try {
       if (a === "relink-save") {
         const bid = box.querySelector("select").value;
@@ -650,17 +684,95 @@ async function loadUsers() {
       if (a === "reset") { if (!confirm("Gerar nova senha? A atual deixa de funcionar.")) return; showCred(await api(`/api/admin/users/${id}/reset`, { method: "POST" }), "Nova senha gerada"); }
       if (a === "extend") { await api(`/api/admin/users/${id}/extend`, { method: "POST", body: { duration: "24h" } }); toast("Validade: mais 24 horas a partir de agora."); }
       if (a === "revoke") { if (!confirm("Revogar este acesso agora?")) return; await api(`/api/admin/users/${id}/revoke`, { method: "POST" }); }
-      if (a === "delete") { if (!confirm("Excluir a conta e as ISOs dela?")) return; await api(`/api/admin/users/${id}`, { method: "DELETE" }); }
+      if (a === "delete") { if (!confirm("Excluir a conta (e as ISOs dela, se houver)? Sócios perdem também o acesso ao Remoto.")) return; await api(`/api/admin/users/${id}`, { method: "DELETE" }); }
       loadUsers();
     } catch (e) { toast(e.message); }
   });
+}
+
+
+/* -------------------------------------------------- menu "⋯" das tabelas */
+const kebab = items => `<details class="kebab"><summary class="btn sm" aria-label="Mais ações" title="Mais ações">⋯</summary><div class="kebab-pop">${items}</div></details>`;
+const closeKebabs = except => $$("details.kebab[open]").forEach(d => { if (d !== except) d.open = false; });
+document.addEventListener("toggle", e => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("kebab") || !d.open) return;
+  closeKebabs(d);
+  const r = $("summary", d).getBoundingClientRect(), pop = $(".kebab-pop", d);
+  const up = r.bottom + pop.offsetHeight + 8 > innerHeight && r.top > pop.offsetHeight + 8;
+  pop.style.top = (up ? r.top - pop.offsetHeight - 6 : r.bottom + 6) + "px";
+  pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + "px";
+}, true);
+document.addEventListener("click", e => { const d = e.target.closest("details.kebab"); if (!d || e.target.closest(".kebab-pop button")) closeKebabs(null); });
+addEventListener("scroll", () => closeKebabs(null), true);
+addEventListener("resize", () => closeKebabs(null));
+
+/* -------------------------------------------------- sócios: permissões por máquina */
+const PCOLS = [["view", "Ver"], ["terminal", "Terminal"], ["desktop", "Tela"], ["files", "Arquivos"], ["vpn", "VPN"], ["config", "Configurações"]];
+async function openPerms(uid, email) {
+  closeOverlay();
+  OVL = { perms: uid };
+  const el = document.createElement("div");
+  el.id = "ovl";
+  el.innerHTML = `<div class="ovl-bg"></div><aside class="ovl" role="dialog" aria-modal="true">
+    <header class="ovl-h"><div><b>Permissões de ${esc(email)}</b><br><span class="muted small">Marque o que o sócio pode fazer em cada máquina. <b>Admin</b> marca tudo; dá para desmarcar depois.</span></div>
+      <button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></header>
+    <div class="ovl-b" id="pBody">Carregando…</div></aside>`;
+  document.body.appendChild(el);
+  document.body.classList.add("noscroll");
+  $(".ovl-bg", el).onclick = closeOverlay; $("#ovlClose").onclick = closeOverlay;
+  let d;
+  try { d = await api(`/api/admin/users/${uid}/perms`); } catch (e) { $("#pBody").innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
+  const B = d.bits, ALL = Object.values(B).reduce((a, b) => a | b, 0), NODE_ALL = B.view | B.terminal | B.desktop | B.files;
+  const cur = {}; d.items.forEach(i => { cur[i.kind + ":" + i.ref] = i.perms; });
+  const row = (kind, ref, name, sub, online) => {
+    const key = kind + ":" + ref, p = cur[key] || 0, all = kind === "machine" ? ALL : NODE_ALL;
+    const cols = PCOLS.map(([k, t]) => (kind === "node" && (k === "vpn" || k === "config"))
+      ? `<td data-label="${t}" class="muted small">—</td>`
+      : `<td data-label="${t}"><input type="checkbox" data-k="${key}" data-b="${B[k]}" ${p & B[k] ? "checked" : ""} aria-label="${t}"></td>`).join("");
+    return `<tr data-row="${key}" data-all="${all}"><td class="rt-title">${dot(online)} <b>${esc(name)}</b><br><span class="muted small">${esc(sub)}</span></td>
+      <td data-label="Admin"><label class="switch-mini"><input type="checkbox" data-admin="${key}" ${(p & all) === all ? "checked" : ""}> Admin</label></td>${cols}</tr>`;
+  };
+  const head = `<tr><th>Máquina</th><th>Tudo</th>${PCOLS.map(([, t]) => `<th>${t}</th>`).join("")}</tr>`;
+  $("#pBody").innerHTML = `${d.note ? `<div class="note warn">${esc(d.note)}</div>` : ""}
+    <h3>Máquinas do painel</h3>
+    ${d.machines.length ? `<div class="table-wrap"><table class="rtable ptable">${head}${d.machines.map(m => row("machine", m.id, m.label || m.hostname, m.hostname, m.online)).join("")}</table></div>` : `<p class="muted">Nenhuma máquina instalada ainda.</p>`}
+    ${d.nodes.length ? `<h3>Só no Remoto</h3><p class="muted small">Computadores adicionados por convite (não vieram de uma ISO).</p>
+      <div class="table-wrap"><table class="rtable ptable">${head}${d.nodes.map(n => row("node", n.id, n.name, n.os, n.online)).join("")}</table></div>` : ""}
+    <div class="row u-mt16"><button class="btn primary" id="pSave">Salvar permissões</button><button class="btn" id="pCancel">Cancelar</button></div>
+    <p class="muted small u-mt8">Terminal vale para o terminal do painel e o do Remoto. Tela e Arquivos são pelo Remoto (a máquina precisa do agente). Marcar qualquer item já inclui Ver.</p>`;
+  const sync = key => {
+    const tr = $(`#pBody tr[data-row="${CSS.escape(key)}"]`), all = +tr.dataset.all;
+    let p = 0; $$(`input[data-k="${CSS.escape(key)}"]`, tr).forEach(c => { if (c.checked) p |= +c.dataset.b; });
+    if (p && !(p & B.view)) { $(`input[data-k="${CSS.escape(key)}"][data-b="${B.view}"]`, tr).checked = true; p |= B.view; }
+    $(`input[data-admin]`, tr).checked = (p & all) === all;
+    cur[key] = p;
+  };
+  $$("#pBody input[data-k]").forEach(c => c.onchange = () => {
+    if (!c.checked && +c.dataset.b === B.view) $$(`input[data-k="${CSS.escape(c.dataset.k)}"]`).forEach(x => { x.checked = false; });  // sem ver = sem nada
+    sync(c.dataset.k);
+  });
+  $$("#pBody input[data-admin]").forEach(c => c.onchange = () => {
+    $$(`input[data-k="${CSS.escape(c.dataset.admin)}"]`).forEach(x => { x.checked = c.checked; });
+    sync(c.dataset.admin);
+  });
+  $("#pCancel").onclick = closeOverlay;
+  $("#pSave").onclick = async () => {
+    const items = Object.entries(cur).filter(([, p]) => p).map(([k, p]) => { const [kind, ...ref] = k.split(":"); return { kind, ref: ref.join(":"), perms: p }; });
+    $("#pSave").disabled = true;
+    try {
+      const r = await api(`/api/admin/users/${uid}/perms`, { method: "POST", body: { items } });
+      toast(r.warning || "Permissões salvas.");
+      closeOverlay(); loadUsers();
+    } catch (e) { toast(e.message); $("#pSave").disabled = false; }
+  };
 }
 
 /* -------------------------------------------------- admin: sistema */
 async function renderRemoteFrame() {
   let u = FEATURES.remote_url;
   if (FEATURES.remote_sso) {  // remoto do próprio ISO Builder: abre já logado
-    try { u = (await api("/api/admin/remoto/login")).url; } catch (e) { }
+    try { u = (await api("/api/remoto/login")).url; } catch (e) { }
   }
   const label = FEATURES.remote_sso ? location.host + "/remoto" : u.replace(/^https:\/\//, "").replace(/\/$/, "");
   view.innerHTML = `<div class="spread"><div><h1>Acesso remoto</h1><p class="muted">${esc(label)}</p></div>
@@ -747,7 +859,8 @@ function panelBanner(p) {
 async function loadMachines() {
   let d;
   try { d = await api("/api/machines"); } catch (e) { $("#ml").innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
-  $("#pbanner").innerHTML = d.hub && d.hub.online
+  if (ME.role !== "admin") $("#pbanner").innerHTML = "";  // aviso de configuração do painel: só o admin
+  else $("#pbanner").innerHTML = d.hub && d.hub.online
     ? `<div class="note ok">Terminal no navegador pelo <b>WireGuard do seu servidor</b>${d.panel.state === "Running" ? " e pelo Tailscale" : ""}. Máquinas com o túnel conectado abrem direto.</div>`
     : panelBanner(d.panel);
   if (!d.machines.length) {
@@ -777,7 +890,7 @@ const RMODES = [["desktop", "Tela"], ["terminal", "Terminal"], ["files", "Arquiv
 let RDEV = { at: 0, list: [] };
 async function remoteDevices(force) {
   if (!force && Date.now() - RDEV.at < 20000) return RDEV.list;
-  RDEV = { at: Date.now(), list: (await api("/api/admin/remoto/devices")).devices };
+  RDEV = { at: Date.now(), list: (await api("/api/remoto/devices")).devices };
   return RDEV.list;
 }
 const osIcon = o => /windows/i.test(o) ? "🪟" : /mac|darwin/i.test(o) ? "" : /linux|ubuntu|debian/i.test(o) ? "🐧" : "💻";
@@ -785,13 +898,13 @@ const osIcon = o => /windows/i.test(o) ? "🪟" : /mac|darwin/i.test(o) ? "" : /
 async function renderRemote() {
   if (!FEATURES.remote_sso) return renderRemoteFrame();  // outro remote (REMOTE_URL): página dele inteira
   view.innerHTML = `<div class="spread"><div><h1>Remoto</h1><p class="muted">Tela, terminal e arquivos dos computadores com o agente, direto no navegador.</p></div>
-    <div class="row"><button class="btn primary" id="rInvite">Adicionar computador</button><button class="btn" id="rFull">Opções avançadas ↗</button></div></div>
+    <div class="row">${ME.role === "admin" ? `<button class="btn primary" id="rInvite">Adicionar computador</button>` : ""}<button class="btn" id="rFull">Opções avançadas ↗</button></div></div>
     <div id="rInv"></div><div class="card"><div class="spread"><input id="rSearch" placeholder="Buscar pelo nome, sistema ou IP" class="u-w100 rsearch"><button class="btn sm" id="rReload">Atualizar</button></div>
     <div id="rList" class="u-mt12">Carregando…</div></div>`;
   $("#rReload").onclick = () => loadRemote(true);
   $("#rSearch").oninput = () => loadRemote(false);
-  $("#rFull").onclick = async () => { try { window.open((await api("/api/admin/remoto/login")).url, "_blank", "noopener"); } catch (e) { toast(e.message); } };
-  $("#rInvite").onclick = remoteInvite;
+  $("#rFull").onclick = async () => { try { window.open((await api("/api/remoto/login")).url, "_blank", "noopener"); } catch (e) { toast(e.message); } };
+  if ($("#rInvite")) $("#rInvite").onclick = remoteInvite;
   await loadRemote(true);
   timer = setInterval(() => { if (!document.hidden && !$("#ovl")) loadRemote(true); }, 20000);
 }
@@ -857,19 +970,20 @@ async function remoteMode(d, mode, root = document) {
   const ld = $(".rv-frame .rload", root); if (ld) ld.style.display = "";
   try {
     f.onload = () => { const l = $(".rv-frame .rload", root); if (l) l.style.display = "none"; };
-    f.src = (await api(`/api/admin/remoto/view?node=${encodeURIComponent(d.id)}&mode=${mode}`)).url;
+    f.src = (await api(`/api/remoto/view?node=${encodeURIComponent(d.id)}&mode=${mode}`)).url;
   } catch (e) { toast(e.message); }
 }
 
 // Máquinas: a mesma tela, dentro da janela do servidor (quando ele tem o agente).
 function tabTela() {
-  const d = OVL.rdev;
-  $("#ovlBody").innerHTML = `<div class="spread"><div class="row">${RMODES.map(([m, t]) => `<button class="btn sm" data-rm="${m}">${t}</button>`).join("")}</div>
+  const d = OVL.rdev, P = OVL.m.perms ?? 63, bit = { desktop: 4, terminal: 2, files: 8 };
+  const modes = RMODES.filter(([m]) => P & bit[m]);
+  $("#ovlBody").innerHTML = `<div class="spread"><div class="row">${modes.map(([m, t]) => `<button class="btn sm" data-rm="${m}">${t}</button>`).join("")}</div>
       <span class="muted small">pelo Remoto (MeshCentral)</span></div>
     <div class="rframe rv-frame u-mt12"><div class="muted rload">Conectando…</div><iframe title="Remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>`;
   const pick = m => { $$("#ovlBody [data-rm]").forEach(b => b.classList.toggle("primary", b.dataset.rm === m)); remoteMode(d, m, $("#ovlBody")); };
   $$("#ovlBody [data-rm]").forEach(b => b.onclick = () => pick(b.dataset.rm));
-  pick("desktop");
+  pick(modes[0][0]);
 }
 
 function closeOverlay() {
@@ -899,14 +1013,18 @@ async function openMachine(id, tab = "resumo") {
   $("#ovlClose").onclick = () => { if (!OVL.ws || confirm("Fechar e encerrar o terminal?")) closeOverlay(); };
   $$("#ovlTabs button").forEach(b => b.onclick = () => { if (OVL.tab === "terminal" && b.dataset.t !== "terminal" && OVL.ws && !confirm("Sair do terminal encerra a sessão. Continuar?")) return; showTab(b.dataset.t); });
   await refreshMachine();
+  // só as abas que a conta pode usar (o admin pode tudo; o sócio, o que foi liberado)
+  const P = OVL.m.perms ?? 63, need = { terminal: 2, vpn: 16, config: 32 };
+  $$("#ovlTabs button").forEach(b => { const n = need[b.dataset.t]; if (n && !(P & n)) b.remove(); });
+  if (need[tab] && !(P & need[tab])) tab = "resumo";
   // com o agente do Remoto no servidor: aba "Tela" (mesmo nome de computador)
-  if (FEATURES.remote_sso) {
+  if (FEATURES.remote_sso && (P & 14)) {
     try {
       const h = (OVL.m.hostname || "").toLowerCase();
       OVL.rdev = (await remoteDevices(false)).find(x => x.name.toLowerCase() === h && x.online);
     } catch (e) { }
     if (OVL && OVL.rdev) {
-      $("#ovlTabs").insertAdjacentHTML("afterbegin", `<button data-t="tela">Tela</button>`);
+      $("#ovlTabs").insertAdjacentHTML("afterbegin", `<button data-t="tela">Tela</button>`);  // o Remoto aplica as permissões do sócio
       $("#ovlTabs button[data-t=tela]").onclick = () => {
         if (OVL.tab === "terminal" && OVL.ws && !confirm("Sair do terminal encerra a sessão. Continuar?")) return;
         showTab("tela");
@@ -1145,14 +1263,14 @@ function tabConfig() {
     <div class="grid2">${kv("ID da máquina", `<span class="mono small">${esc(m.id)}</span>`)}${kv("ISO de origem", m.build_hostname ? `<a href="#/iso/${esc(m.build_id)}">${esc(m.build_hostname)}</a>` : esc(m.build_id))}
       ${kv("Acesso pelo painel", m.panel_access ? "sim (chave do painel na ISO)" : "não")}${kv("Último IP de origem", `<span class="mono">${esc(m.source_ip)}</span>`)}</div>
     <details><summary>Relatório completo (JSON)</summary><pre class="log">${esc(JSON.stringify(m.report, null, 2))}</pre></details>
-    <div class="note warn u-mt16">Remover da lista não mexe no servidor. Se ele continuar ligado, reaparece no próximo relatório (a cada 10 min).</div>
-    <button class="btn danger" id="mdel">Remover da lista</button>`;
+    ${ME.role === "admin" ? `<div class="note warn u-mt16">Remover da lista não mexe no servidor. Se ele continuar ligado, reaparece no próximo relatório (a cada 10 min).</div>
+    <button class="btn danger" id="mdel">Remover da lista</button>` : ""}`;
   $("#mf").onsubmit = async ev => {
     ev.preventDefault();
     try { await api("/api/machines/" + OVL.id, { method: "POST", body: Object.fromEntries(new FormData(ev.target)) }); await refreshMachine(); toast("Salvo."); $("#merr").innerHTML = ""; }
     catch (e) { $("#merr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; }
   };
-  $("#mdel").onclick = async () => { if (!confirm("Remover esta máquina da lista?")) return; await api("/api/machines/" + OVL.id, { method: "DELETE" }); closeOverlay(); loadMachines(); };
+  if ($("#mdel")) $("#mdel").onclick = async () => { if (!confirm("Remover esta máquina da lista?")) return; await api("/api/machines/" + OVL.id, { method: "DELETE" }); closeOverlay(); loadMachines(); };
 }
 
 route();
@@ -1212,7 +1330,7 @@ $("#installBtn").onclick = installApp;
     if (dist < TRIGGER) return reset();
     busy = true; ind.classList.add("spin"); show(TRIGGER);
     // No assistente, só relê os dados (não apaga o que já foi digitado); no resto, recarrega a página.
-    if ((location.hash || "#/") === "#/" && ME && ME.mode !== "download") {
+    if (curRoute() === "#/" && ME && ME.mode !== "download") {
       if ($("#wf")) collect();  // guarda o que já foi digitado antes de redesenhar
       try { await route(); } catch (e) { }
       setTimeout(() => { busy = false; reset(); }, 350);
@@ -1233,7 +1351,7 @@ async function refreshJobs() {
   if (!ME) { box.classList.add("hidden"); return; }
   let run = [];
   try { run = (await api("/api/builds")).builds.filter(b => b.status === "queued" || b.status === "running"); } catch (e) { }
-  const here = (location.hash || "").replace("#/iso/", "");
+  const here = curRoute().replace("#/iso/", "");
   const show = run.filter(b => b.id !== here);  // na própria página da ISO a barra já aparece
   box.innerHTML = show.map(b => `<a class="job" href="#/iso/${b.id}"><span class="job-spin" aria-hidden="true"></span>
     <span class="job-txt">Gerando a ISO de <b>${esc(b.hostname)}</b> · ${Math.round(b.progress)}%<span class="muted small"> · ${esc(b.message || "")}</span></span>
@@ -1246,7 +1364,7 @@ async function refreshJobs() {
 function onBack() {
   if (document.hidden || !ME) return;
   refreshJobs();
-  if ((location.hash || "").startsWith("#/iso/")) route();
+  if (curRoute().startsWith("#/iso/")) route();
 }
 document.addEventListener("visibilitychange", onBack);
 addEventListener("pageshow", e => { if (e.persisted) onBack(); });

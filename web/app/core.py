@@ -127,6 +127,10 @@ def init_db() -> None:
             );
             """
         )
+        # sócios: permissões por máquina do painel ("machine") ou aparelho só do Remoto ("node")
+        con.execute("""CREATE TABLE IF NOT EXISTS partner_perms (
+            user_id INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, perms INTEGER NOT NULL,
+            PRIMARY KEY (user_id, kind, ref))""")
         # aviso de desligamento/reinício enviado pela máquina (bolinha vermelha na hora)
         mcols = {r[1] for r in con.execute("PRAGMA table_info(machines)")}
         if "off_at" not in mcols:
@@ -180,6 +184,10 @@ class User:
     @property
     def download_only(self) -> bool:
         return self.role == "temp" and self.mode == "download"
+
+    @property
+    def is_partner(self) -> bool:  # sócio: conta permanente, só as máquinas liberadas
+        return self.role == "temp" and self.mode == "partner"
 
     def public(self) -> dict:
         return {"email": self.email, "role": self.role, "label": self.label, "expires_at": self.expires_at,
@@ -564,3 +572,39 @@ def validate_email_or_login(s: str) -> str:
     if s == ADMIN_EMAIL:
         raise Invalid("Esse e-mail é da conta administradora.")
     return s
+
+
+# --------------------------------------------------------------------- sócios
+# Permissões por máquina (bits). "Admin" na tela = todas.
+P_VIEW, P_TERMINAL, P_DESKTOP, P_FILES, P_VPN, P_CONFIG = 1, 2, 4, 8, 16, 32
+P_ALL = P_VIEW | P_TERMINAL | P_DESKTOP | P_FILES | P_VPN | P_CONFIG
+P_NODE_ALL = P_VIEW | P_TERMINAL | P_DESKTOP | P_FILES  # aparelho só do Remoto: sem VPN/config
+PARTNER_UNTIL = 253402300799  # 9999-12-31: sócio não expira (revogar/excluir é manual)
+
+
+def partner_perms(user_id: int) -> dict[tuple[str, str], int]:
+    with db() as con:
+        return {(r["kind"], r["ref"]): r["perms"] for r in
+                con.execute("SELECT kind, ref, perms FROM partner_perms WHERE user_id=?", (user_id,))}
+
+
+def set_partner_perms(user_id: int, items: list[dict]) -> None:
+    rows = []
+    for it in items:
+        kind, ref = str(it.get("kind")), str(it.get("ref") or "")
+        if kind not in ("machine", "node") or not re.fullmatch(r"[A-Za-z0-9@$_\-]{4,120}", ref):
+            raise Invalid("Máquina inválida nas permissões.")
+        perms = int(it.get("perms") or 0) & (P_ALL if kind == "machine" else P_NODE_ALL)
+        if perms:
+            rows.append((user_id, kind, ref, perms | P_VIEW))  # qualquer permissão inclui ver
+    with db() as con:
+        con.execute("DELETE FROM partner_perms WHERE user_id=?", (user_id,))
+        con.executemany("INSERT INTO partner_perms (user_id, kind, ref, perms) VALUES (?,?,?,?)", rows)
+
+
+def machine_perms(u: "User", machine_id: str) -> int:
+    if u.is_admin:
+        return P_ALL
+    if not u.is_partner:
+        return 0
+    return partner_perms(u.id).get(("machine", machine_id), 0)

@@ -721,6 +721,25 @@ antigo (dados próprios, começa vazio).
 - **Visual:** `remote/web/public/styles/isobuilder.css` (claro/escuro, laranja do painel),
   sobre a interface moderna do MeshCentral (`siteStyle: 3`).
 
+## Sócios (acesso a máquinas escolhidas)
+
+Em **Acessos → Sócio (permanente)** você cria uma conta sem prazo (prefixo ou e-mail completo
+de qualquer domínio). O sócio **não** gera ISOs, não cria acessos e não adiciona computadores:
+ele só vê as máquinas que você liberar em **Permissões**, com estes itens por máquina:
+
+| Item | O que libera |
+|---|---|
+| Ver | aparece em Máquinas (Resumo, Conectar) |
+| Terminal | terminal do painel e do Remoto |
+| Tela / Arquivos | pelo Remoto (a máquina precisa do agente) |
+| VPN | gerar acessos WireGuard daquela máquina |
+| Configurações | nome, notas e endereço SSH |
+
+**Admin** marca tudo de uma vez (dá para desmarcar itens depois). Computadores que só existem
+no Remoto (adicionados por convite) também aparecem para liberar. No Remoto, o painel cria a
+conta `socio-<id>` no MeshCentral e aplica as mesmas permissões por aparelho — o próprio
+MeshCentral bloqueia o que não foi liberado. Excluir o sócio remove também essa conta.
+
 ## Porta do SSH
 
 O padrão é a **22**. Para usar outra, preencha **Porta do SSH** no assistente web

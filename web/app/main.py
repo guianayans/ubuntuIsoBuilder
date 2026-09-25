@@ -145,11 +145,13 @@ async def logout(request: Request, response: Response):
     return {"ok": True}
 
 
-@app.get("/api/admin/remoto/login")
-def remoto_login(_: core.User = Depends(admin_user)):
-    """Endereço do remoto já logado (token de 60 min; só o admin)."""
+@app.get("/api/remoto/login")
+def remoto_login(u: core.User = Depends(current_user)):
+    """Endereço do remoto já logado (token de 60 min) com a conta de quem pediu."""
     if REMOTE_LOCAL and remoto.available():
-        return {"url": remoto.PATH + "?login=" + remoto.login_token()}
+        return {"url": remoto.PATH + "?login=" + remoto.login_token(_remoto_user(u))}
+    if not u.is_admin:
+        raise HTTPException(403, "sem acesso ao Remoto")
     return {"url": REMOTE_URL}
 
 
@@ -158,11 +160,15 @@ def _remoto_ready():
         raise HTTPException(404, "O remoto ainda não está no ar.")
 
 
-@app.get("/api/admin/remoto/devices")
-async def remoto_devices(_: core.User = Depends(admin_user)):
+@app.get("/api/remoto/devices")
+async def remoto_devices(u: core.User = Depends(current_user)):
     _remoto_ready()
+    who = _remoto_user(u)
+    import time as _t
+    if u.is_partner and _t.time() - _partner_synced.get(u.id, 0) > 600:
+        await _sync_partner(u.id)  # máquinas novas com o mesmo nome entram sozinhas
     try:
-        return {"devices": await remoto.devices(), "group_ready": bool(remoto.mesh_id())}
+        return {"devices": await remoto.devices(who), "group_ready": bool(remoto.mesh_id())}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"O remoto não respondeu ({type(exc).__name__}).")
 
@@ -180,22 +186,23 @@ async def remoto_invite(request: Request, _: core.User = Depends(admin_user)):
         raise HTTPException(502, f"Não foi possível gerar o convite: {exc}")
 
 
-@app.get("/api/admin/remoto/view")
-def remoto_view(node: str, mode: str = "desktop", _: core.User = Depends(admin_user)):
+@app.get("/api/remoto/view")
+def remoto_view(node: str, mode: str = "desktop", u: core.User = Depends(current_user)):
     _remoto_ready()
-    try:
-        return {"url": remoto.view_url(node, mode)}
+    try:  # o MeshCentral recusa o que a conta não pode (tela/terminal/arquivos)
+        return {"url": remoto.view_url(node, mode, _remoto_user(u))}
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
 
 @app.get("/api/me")
 def me(u: core.User = Depends(current_user)):
+    remote_ok = REMOTE_LOCAL and remoto.available() and (u.is_admin or (u.is_partner and bool(core.partner_perms(u.id))))
     return {"user": u.public(), "admin_email": core.ADMIN_EMAIL if u.is_admin else None,
             "features": {"wireguard": wg.enabled(),
-                         "remote_url": REMOTE_URL if u.is_admin and (not REMOTE_LOCAL or remoto.available()) else "",
-                         "remote_embed": REMOTE_EMBED and u.is_admin,
-                         "remote_sso": REMOTE_LOCAL and u.is_admin and remoto.available(),
+                         "remote_url": (REMOTE_URL if (u.is_admin and (not REMOTE_LOCAL or remoto.available())) or remote_ok else ""),
+                         "remote_embed": REMOTE_EMBED and (u.is_admin or remote_ok),
+                         "remote_sso": remote_ok,
                          "remote_agent": bool(remoto.mesh_id())}}
 
 
@@ -214,7 +221,8 @@ def _user_row(r) -> dict:
             "max_builds": r["max_builds"], "builds": n, "mode": r["mode"], "build_id": r["build_id"],
             "build_hostname": linked["hostname"] if linked else None,
             "build_ok": bool(linked and linked["status"] in ("done", "queued", "running")),
-            "build_status": linked["status"] if linked else None}
+            "build_status": linked["status"] if linked else None,
+            "perm_count": len(core.partner_perms(r["id"])) if r["mode"] == "partner" else 0}
 
 
 def _link_build(con, build_id: str, until: int, allow_pending: bool = False) -> str:
@@ -276,6 +284,22 @@ def create_temp_user(con, *, prefix: str, label: str, duration: str, mode: str, 
             "mode": mode, "iso": hostname}
 
 
+def create_partner(who: str, label: str) -> dict:
+    """Sócio: conta permanente (sem validade), sem ISOs; acessa só as máquinas liberadas."""
+    who = who.strip().lower()
+    email = who if "@" in who else guest_email(who)
+    if not core.EMAIL_RE.match(email) or email == core.ADMIN_EMAIL:
+        raise core.Invalid("E-mail do sócio inválido.")
+    password = core.generate_password()
+    with core.db() as con:
+        if con.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+            raise core.Invalid(f"Já existe uma conta {email}.")
+        con.execute("INSERT INTO users (email,label,pw_hash,created_at,expires_at,max_builds,mode,build_id) "
+                    "VALUES (?,?,?,?,?,?,?,?)", (email, label, core.hash_password(password), core.now(),
+                                                 core.PARTNER_UNTIL, 0, "partner", None))
+    return {"email": email, "password": password, "expires_at": None, "url": PUBLIC_URL, "mode": "partner", "iso": None}
+
+
 @app.get("/api/login-info")
 def login_info():
     """Público: o login mostra só o prefixo e completa com este domínio."""
@@ -295,6 +319,8 @@ async def create_user(request: Request, _: core.User = Depends(admin_user)):
         max_builds = max(1, min(20, int(d.get("max_builds") or core.TEMP_MAX_BUILDS)))
     except (TypeError, ValueError):
         raise core.Invalid("Limite de ISOs inválido.")
+    if d.get("mode") == "partner":
+        return create_partner(str(d.get("prefix") or d.get("email") or ""), label)
     mode = "download" if d.get("mode") == "download" else "build"
     with core.db() as con:
         return create_temp_user(con, prefix=str(d.get("prefix") or d.get("email") or ""), label=label,
@@ -363,8 +389,16 @@ async def relink_user(uid: int, request: Request, _: core.User = Depends(admin_u
 
 
 @app.delete("/api/admin/users/{uid}")
-def delete_user(uid: int, _: core.User = Depends(admin_user)):
+async def delete_user(uid: int, _: core.User = Depends(admin_user)):
     with core.db() as con:
+        was_partner = con.execute("SELECT 1 FROM users WHERE id=? AND mode='partner'", (uid,)).fetchone()
+    if was_partner and REMOTE_LOCAL and remoto.available():
+        try:
+            await remoto.delete_partner(uid)
+        except Exception:  # noqa: BLE001
+            pass
+    with core.db() as con:
+        con.execute("DELETE FROM partner_perms WHERE user_id=?", (uid,))
         for r in con.execute("SELECT id FROM builds WHERE user_id=?", (uid,)).fetchall():
             builder.delete_build_files(r["id"])
         con.execute("DELETE FROM builds WHERE user_id=?", (uid,))
@@ -372,6 +406,81 @@ def delete_user(uid: int, _: core.User = Depends(admin_user)):
         con.execute("DELETE FROM dl_tokens WHERE created_by=?", (uid,))
         con.execute("DELETE FROM users WHERE id=?", (uid,))
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ sócios (permissões por máquina)
+def _partner(uid: int):
+    with core.db() as con:
+        r = con.execute("SELECT * FROM users WHERE id=? AND mode='partner'", (uid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "sócio não encontrado")
+    return r
+
+
+def _machine_hosts() -> dict[str, str]:
+    with core.db() as con:
+        return {r["id"]: r["hostname"] for r in con.execute("SELECT id, hostname FROM machines")}
+
+
+_partner_synced: dict[int, float] = {}
+
+
+async def _sync_partner(uid: int) -> str:
+    """Aplica as permissões do sócio no Remoto. Devolve aviso (vazio = ok)."""
+    if not (REMOTE_LOCAL and remoto.available()):
+        return ""
+    r = _partner(uid)
+    perms = core.partner_perms(uid)
+    mp = {ref: p for (k, ref), p in perms.items() if k == "machine"}
+    np_ = {ref: p for (k, ref), p in perms.items() if k == "node"}
+    try:
+        await remoto.sync_partner(uid, r["label"] or r["email"], mp, np_, _machine_hosts())
+    except Exception as exc:  # noqa: BLE001
+        return f"Permissões salvas, mas o Remoto não respondeu ({type(exc).__name__}); tento de novo quando o sócio abrir o Remoto."
+    import time as _t
+    _partner_synced[uid] = _t.time()
+    return ""
+
+
+@app.get("/api/admin/users/{uid}/perms")
+async def get_partner_perms(uid: int, _: core.User = Depends(admin_user)):
+    _partner(uid)
+    machines = [{"id": m["id"], "hostname": m["hostname"], "label": m["label"], "online": m["online"]} for m in _machines()]
+    hosts = {m["hostname"].lower() for m in machines}
+    nodes, note = [], ""
+    if REMOTE_LOCAL and remoto.available():
+        try:  # aparelhos que só existem no Remoto (PCs adicionados por convite)
+            nodes = [{"id": d["id"], "name": d["name"], "os": d["os"], "online": d["online"]}
+                     for d in await remoto.devices() if d["name"].lower() not in hosts]
+        except Exception as exc:  # noqa: BLE001
+            note = f"O Remoto não respondeu ({type(exc).__name__}): só as máquinas do painel aparecem."
+    items = [{"kind": k, "ref": ref, "perms": p} for (k, ref), p in core.partner_perms(uid).items()]
+    return {"items": items, "machines": machines, "nodes": nodes, "note": note,
+            "bits": {"view": core.P_VIEW, "terminal": core.P_TERMINAL, "desktop": core.P_DESKTOP,
+                     "files": core.P_FILES, "vpn": core.P_VPN, "config": core.P_CONFIG}}
+
+
+@app.post("/api/admin/users/{uid}/perms")
+async def save_partner_perms(uid: int, request: Request, _: core.User = Depends(admin_user)):
+    _partner(uid)
+    d = await body(request)
+    items = d.get("items") if isinstance(d.get("items"), list) else []
+    core.set_partner_perms(uid, items[:500])
+    return {"ok": True, "warning": await _sync_partner(uid)}
+
+
+def _need(u: core.User, mid: str, bit: int) -> None:
+    if not core.machine_perms(u, mid) & bit:
+        raise HTTPException(404 if bit == core.P_VIEW else 403, "sem permissão nesta máquina")
+
+
+def _remoto_user(u: core.User) -> str:
+    """Conta do MeshCentral de quem está logado (admin ou sócio)."""
+    if u.is_admin:
+        return "admin"
+    if u.is_partner:
+        return remoto.partner_user(u.id)
+    raise HTTPException(403, "sem acesso ao Remoto")
 
 
 # ------------------------------------------------------------------ ISO oficial (admin)
@@ -422,6 +531,8 @@ def _get_build(bid: str, u: core.User):
 
 @app.get("/api/builds")
 def list_builds(u: core.User = Depends(current_user)):
+    if u.is_partner:
+        return {"builds": [], "quota": None}
     with core.db() as con:
         if u.is_admin:
             rows = con.execute("SELECT * FROM builds ORDER BY created_at DESC LIMIT 100").fetchall()
@@ -440,6 +551,8 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
     d = await body(request)
     if u.download_only:
         raise HTTPException(403, "Este acesso é somente para baixar a ISO já preparada.")
+    if u.is_partner:
+        raise HTTPException(403, "Contas de sócio não geram ISOs.")
     if not u.is_admin:
         with core.db() as con:
             n = con.execute("SELECT COUNT(*) FROM builds WHERE user_id=?", (u.id,)).fetchone()[0]
@@ -733,19 +846,42 @@ def _get_machine(mid: str):
     return r
 
 
+def _for_user(ms: list[dict], u: core.User) -> list[dict]:
+    if u.is_admin:
+        for m in ms:
+            m["perms"] = core.P_ALL
+        return ms
+    if not u.is_partner:
+        raise HTTPException(403, "sem acesso")
+    pp = core.partner_perms(u.id)
+    out = []
+    for m in ms:
+        p = pp.get(("machine", m["id"]), 0)
+        if p & core.P_VIEW:
+            for k in ("downloads", "delivered_to", "owner_email"):  # dados de contas: só o admin
+                m.pop(k, None)
+            m["perms"] = p
+            out.append(m)
+    return out
+
+
 @app.get("/api/machines")
-def list_machines(_: core.User = Depends(admin_user)):
-    return {"machines": _machines(), "panel": panel.ts_status(), "hub": wg.hub_status() if wg.enabled() else None}
+def list_machines(u: core.User = Depends(current_user)):
+    return {"machines": _for_user(_machines(), u), "panel": panel.ts_status() if u.is_admin else None,
+            "hub": wg.hub_status() if wg.enabled() else None}
 
 
 @app.get("/api/machines/{mid}")
-def get_machine(mid: str, _: core.User = Depends(admin_user)):
-    return {"machine": _machines("WHERE id=?", (mid,))[0] if _get_machine(mid) else None, "panel": panel.ts_status()}
+def get_machine(mid: str, u: core.User = Depends(current_user)):
+    _get_machine(mid)
+    _need(u, mid, core.P_VIEW)
+    return {"machine": _for_user(_machines("WHERE id=?", (mid,)), u)[0], "panel": panel.ts_status()}
 
 
 @app.post("/api/machines/{mid}")
-async def update_machine(mid: str, request: Request, _: core.User = Depends(admin_user)):
+async def update_machine(mid: str, request: Request, u: core.User = Depends(current_user)):
     _get_machine(mid)
+    _need(u, mid, core.P_CONFIG)
     d = await body(request)
     label = str(d.get("label") or "").strip()[:60]
     notes = str(d.get("notes") or "")[:2000]
@@ -773,29 +909,33 @@ def delete_machine(mid: str, _: core.User = Depends(admin_user)):
 
 # ------------------------------------------------------------------ VPN WireGuard por máquina
 @app.get("/api/machines/{mid}/wg")
-def machine_wg(mid: str, _: core.User = Depends(admin_user)):
+def machine_wg(mid: str, u: core.User = Depends(current_user)):
     _get_machine(mid)
+    _need(u, mid, core.P_VPN)
     return {"enabled": wg.enabled(), "hub": wg.hub_status(), "endpoint": wg.HUB_ENDPOINT,
             "machine": wg.machine_info(mid), "clients": wg.list_clients(mid)}
 
 
 @app.post("/api/machines/{mid}/wg/clients")
-async def machine_wg_client(mid: str, request: Request, u: core.User = Depends(admin_user)):
+async def machine_wg_client(mid: str, request: Request, u: core.User = Depends(current_user)):
     _get_machine(mid)
+    _need(u, mid, core.P_VPN)
     d = await body(request)
     name = re.sub(r"[^\w .@()-]", "", str(d.get("name") or "")).strip()[:40] or "Dispositivo"
     return wg.create_client(mid, name, u.email)
 
 
 @app.delete("/api/machines/{mid}/wg/clients/{cid}")
-def machine_wg_client_delete(mid: str, cid: int, _: core.User = Depends(admin_user)):
+def machine_wg_client_delete(mid: str, cid: int, u: core.User = Depends(current_user)):
+    _need(u, mid, core.P_VPN)
     wg.delete_client(mid, cid)
     return {"ok": True}
 
 
 @app.post("/api/machines/{mid}/wg/lan")
-async def machine_wg_lan(mid: str, request: Request, _: core.User = Depends(admin_user)):
+async def machine_wg_lan(mid: str, request: Request, u: core.User = Depends(current_user)):
     _get_machine(mid)
+    _need(u, mid, core.P_VPN)
     d = await body(request)
     wg.set_lan(mid, bool(d.get("enabled")), str(d.get("cidr") or ""), str(d.get("iface") or ""))
     return {"ok": True, "machine": wg.machine_info(mid)}
@@ -814,7 +954,7 @@ async def machine_terminal(ws: WebSocket, mid: str):
     origin = ws.headers.get("origin", "")
     host = ws.headers.get("x-forwarded-host") or ws.headers.get("host", "")
     u = core.session_user(ws.cookies.get(COOKIE))
-    if not u or not u.is_admin or (origin and origin.split("://", 1)[-1] != host):
+    if not u or (origin and origin.split("://", 1)[-1] != host) or not (core.machine_perms(u, mid) & core.P_TERMINAL):
         await ws.close(code=4403)
         return
     await ws.accept()
@@ -936,6 +1076,16 @@ def service_worker():
 
 
 @app.get("/")
-def index():
+@app.get("/login")
+@app.get("/isos")
+@app.get("/iso")
+@app.get("/iso/{bid}")
+@app.get("/maquinas")
+@app.get("/acessos")
+@app.get("/sistema")
+@app.get("/acesso-remoto")  # /remoto é do MeshCentral (proxy)
+def index(bid: str = ""):
+    # endereços limpos: toda tela do painel responde a mesma página; o app.js
+    # olha o caminho e mostra a tela certa (F5 e links diretos funcionam)
     from fastapi.responses import HTMLResponse
     return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
