@@ -47,6 +47,12 @@ function shell() {
   $("#top").classList.toggle("hidden", !ME);
   if (!ME) return;
   $("#whoEmail").textContent = ME.email + (ME.role === "admin" ? " · admin" : "");
+  const rb = $("#remoteBtn"), ru = ME.role === "admin" ? FEATURES.remote_url : "";
+  rb.classList.toggle("hidden", !ru);
+  if (ru) {  // dentro do painel (se liberado) ou em nova aba
+    rb.href = FEATURES.remote_embed ? "#/remoto" : ru;
+    if (FEATURES.remote_embed) rb.removeAttribute("target"); else rb.target = "_blank";
+  }
   const dl = ME.mode === "download";
   const links = dl ? [[ME.build_id ? "#/iso/" + ME.build_id : "#/", "Minha ISO"]] : [["#/", "Nova ISO"], ["#/isos", "Minhas ISOs"]];
   if (ME.role === "admin") links.push(["#/maquinas", "Máquinas"], ["#/acessos", "Acessos"], ["#/sistema", "Sistema"]);
@@ -81,6 +87,7 @@ async function route() {
   if (h.startsWith("#/iso/")) return renderBuild(h.slice(6));
   if (h === "#/acessos" && ME.role === "admin") return renderUsers();
   if (h === "#/sistema" && ME.role === "admin") return renderSystem();
+  if (h === "#/remoto" && ME.role === "admin" && FEATURES.remote_url) return renderRemote();
   if (h === "#/maquinas" && ME.role === "admin") return renderMachines();
   return renderWizard();
 }
@@ -127,7 +134,7 @@ let GUEST_DOMAIN = "gvtserver.online";
 async function loadGuestDomain() { try { GUEST_DOMAIN = (await api("/api/admin/guest-domain")).domain; } catch (e) { } }
 let autoSwitched = false;  // chave deixada em branco: mudou para usuário e senha
 const STEPS = ["Sistema", "Acesso", "Rede", "Disco", "Acesso remoto", "Programas", "Revisar"];
-let FEATURES = { wireguard: false };
+let FEATURES = { wireguard: false, remote_url: "", remote_embed: false };
 
 const field = (name, label, attrs = "", help = "") =>
   `<label class="f"><span>${label}</span><input name="${name}" value="${esc(W[name])}" ${attrs}>${help ? `<small>${help}</small>` : ""}</label>`;
@@ -203,7 +210,7 @@ function stepHTML() {
       <div id="coolifyBox" class="${W.apps.startsWith("coolify") ? "" : "hidden"}">
         <div class="note">O admin do Coolify é criado já na instalação e o cadastro público é fechado (sem isso, o primeiro a abrir a página vira admin). Use um e-mail de <b>domínio real</b> (o Coolify confere o DNS) e uma senha que não esteja em vazamentos conhecidos. A senha vai na ISO e é apagada do servidor depois de usada.</div>
         <div class="grid">${field("coolify_email", "E-mail do admin do Coolify", 'type="email" placeholder="ex.: ti@empresa-exemplo.com"')}
-          <label class="f"><span>Senha do admin do Coolify</span><input type="password" name="coolify_password" value="${esc(W.coolify_password)}" autocomplete="new-password"><small>12+ caracteres, com maiúscula, minúscula, número e símbolo.</small></label>
+          <label class="f"><span>Senha do admin do Coolify</span><input type="password" name="coolify_password" value="${esc(W.coolify_password)}" autocomplete="new-password"><small>12+ caracteres, com maiúscula, minúscula, número e símbolo, e que não apareça em vazamentos de dados (o Coolify recusa essas).</small></label>
           <label class="f"><span>Repita a senha</span><input type="password" name="coolify_password2" value="${esc(W.coolify_password2)}" autocomplete="new-password"></label></div>
       </div>
       ${toggle("panel_access", "Acesso pelo painel (terminal no navegador)", "O servidor aparece em “Máquinas” e o painel pode abrir um terminal SSH nele, com uma chave própria aceita só pela Tailnet. Sem isso, ele aparece na lista mas o acesso é só do seu computador.")}
@@ -408,7 +415,7 @@ async function renderBuild(id) {
 }
 
 async function delBuild(id, after) {
-  if (!confirm("Excluir esta ISO do servidor? O download e o gravador personalizado dela param de funcionar.")) return;
+  if (!confirm("Excluir esta ISO do servidor? O download e o gravador personalizado dela param de funcionar; servidores já instalados com ela continuam aparecendo em Máquinas.")) return;
   try { await api("/api/builds/" + id, { method: "DELETE" }); toast("ISO excluída."); after ? after() : go("#/isos"); } catch (e) { toast(e.message); }
 }
 
@@ -417,7 +424,7 @@ function tutorialFor(os, b) {
   if (os === "windows" || os === "windows-arm64") return `
     <ol>
       <li>Conecte o pendrive (8 GB ou mais; <b>tudo nele será apagado</b>).</li>
-      <li>Abra o arquivo <b>Gravador-Pendrive-Windows.exe</b> que você baixou.</li>
+      <li>Abra o arquivo <b>isoBuilder-Windows.exe</b> que você baixou.</li>
       <li>Se aparecer <i>“O Windows protegeu o computador”</i>: clique em <b>Mais informações</b> → <b>Executar assim mesmo</b>. (Aparece porque o programa não tem certificado pago de assinatura.)</li>
       <li>Clique <b>Sim</b> na pergunta de permissão de administrador (necessária para gravar no pendrive).</li>
       <li>O gravador abre no navegador e <b>baixa sozinho a ISO ${iso}</b> (~${fmtBytes(b.iso_size)}) para a pasta Downloads, conferindo se veio íntegra. Se a internet cair, ele continua de onde parou.</li>
@@ -427,7 +434,7 @@ function tutorialFor(os, b) {
   if (os === "macos") return `
     <ol>
       <li>Conecte o pendrive (8 GB ou mais; <b>tudo nele será apagado</b>).</li>
-      <li>Abra o <b>Gravador-Pendrive-macOS.zip</b> baixado (ele vira <b>Gravador de Pendrive</b>) e mova para a pasta Aplicativos, se quiser.</li>
+      <li>Abra o <b>isoBuilder-macOS.zip</b> baixado (ele vira o app <b>isoBuilder</b>) e mova para a pasta Aplicativos, se quiser.</li>
       <li>Na primeira vez: clique com o <b>botão direito → Abrir → Abrir</b>. No macOS 15 (Sequoia) ou mais novo: tente abrir, depois vá em <b>Ajustes do Sistema → Privacidade e Segurança</b> e clique em <b>Abrir Mesmo Assim</b>. (Aparece porque o app não é notarizado pela Apple.)</li>
       <li>O gravador abre no navegador e <b>baixa sozinho a ISO ${iso}</b> (~${fmtBytes(b.iso_size)}) para Downloads, conferindo se veio íntegra. Depois escolha o pendrive, confirme e clique <b>Gravar pendrive</b>.</li>
       <li>O Mac pede a <b>sua senha</b> (necessária para gravar no pendrive).</li>
@@ -435,25 +442,25 @@ function tutorialFor(os, b) {
     </ol>`;
   if (os === "linux") return `
     <ol><li>Dê permissão ao gravador baixado e rode com sudo (ele baixa a ISO sozinho):</li></ol>
-    <pre class="log">chmod +x gravador-linux-amd64 && sudo ./gravador-linux-amd64</pre>
+    <pre class="log">chmod +x isobuilder-linux-amd64 && sudo ./isobuilder-linux-amd64</pre>
     <p class="small">Ou manualmente: <code>sudo dd if=${iso} of=/dev/sdX bs=4M conv=fsync status=progress</code> (confira o /dev/sdX com <code>lsblk</code>!).</p>`;
   return `<p>Grave o pendrive a partir de um computador Windows ou Mac: abra este site nele e siga as instruções.</p>`;
 }
 
 function renderDownload(b) {
   const os = detectOS();
-  const helperName = { windows: "Gravador para Windows", "windows-arm64": "Gravador para Windows (ARM)", macos: "Gravador para Mac", linux: "Gravador para Linux" }[os];
+  const helperName = { windows: "isoBuilder para Windows", "windows-arm64": "isoBuilder para Windows (ARM)", macos: "isoBuilder para Mac", linux: "isoBuilder para Linux" }[os];
   view.innerHTML = deliveryCard(b.id) + `
   <div class="spread"><div><h1>ISO pronta: ${esc(b.hostname)}</h1>
     <p class="muted">Ubuntu ${esc(b.series)} · ${fmtBytes(b.iso_size)} · disponível até ${fmtDate(b.expires_at)}</p></div>
     <span class="pill done">Pronta</span></div>
   ${b.summary.TAILSCALE_ENABLED === "yes" ? `<div class="note warn">A ISO contém a auth key do Tailscale e o hash da senha: guarde o arquivo e o pendrive com cuidado.</div>` : ""}
   <div class="dl">
-    ${os !== "mobile" ? `<div class="stepbox"><span class="n">1</span><div><h2>Baixe o gravador (já vem com a ISO) ou só a ISO</h2>
+    ${os !== "mobile" ? `<div class="stepbox"><span class="n">1</span><div><h2>Baixe o isoBuilder (gravador que já vem com a ISO) ou só a ISO</h2>
       <div class="row"><a class="btn primary big-dl" href="/download/bundle/${b.id}/${os}" download>⬇ Baixar para ${OS_NAME[os]}</a>
         <a class="btn" href="/download/iso/${b.id}" download>⬇ Baixar só a ISO (${fmtBytes(b.iso_size)})</a>
         <a class="btn sm" href="/download/sha256/${b.id}" download>.sha256</a></div>
-      <p class="muted small u-mt8"><b>Recomendado:</b> o gravador é um único arquivo pequeno; ao abrir, ele baixa a ISO <b>${esc(b.iso_name)}</b> sozinho, confere a integridade e grava o pendrive. Link válido até ${fmtDate(Math.min(b.expires_at, Date.now() / 1000 + 7 * 86400))}.<br>
+      <p class="muted small u-mt8"><b>Recomendado:</b> o isoBuilder é um único arquivo pequeno; ao abrir, ele baixa a ISO <b>${esc(b.iso_name)}</b> sozinho, confere a integridade e grava o pendrive. Link válido até ${fmtDate(Math.min(b.expires_at, Date.now() / 1000 + 7 * 86400))}.<br>
       <b>Só a ISO:</b> para gravar do seu jeito (Rufus em modo DD, balenaEtcher, <code>dd</code>). Veja “Outras formas de baixar” abaixo.</p></div></div>`
     : `<div class="stepbox"><span class="n">1</span><div><h2>Abra este site no computador</h2>
       <p>Para gravar o pendrive, acesse este endereço num computador Windows ou Mac com o pendrive conectado.</p>
@@ -585,6 +592,15 @@ async function loadUsers() {
 }
 
 /* -------------------------------------------------- admin: sistema */
+function renderRemote() {
+  const u = FEATURES.remote_url;
+  view.innerHTML = `<div class="spread"><div><h1>Acesso remoto</h1><p class="muted">${esc(u.replace(/^https:\/\//, "").replace(/\/$/, ""))}</p></div>
+    <a class="btn" href="${esc(u)}" target="_blank" rel="noopener noreferrer">Abrir em nova aba</a></div>
+    <div class="rframe u-mt12"><div class="muted rload">Carregando…</div>
+    <iframe src="${esc(u)}" title="Acesso remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>`;
+  $(".rframe iframe").onload = () => { const l = $(".rload"); if (l) l.remove(); };
+}
+
 async function renderSystem() {
   view.innerHTML = `<h1>Sistema</h1><div class="card"><h2>WireGuard (seu servidor como ponto de encontro)</h2><div id="hubCard">Carregando…</div></div>
     <div class="card"><h2>Painel na Tailnet</h2><div id="pnl">Carregando…</div></div>
@@ -640,7 +656,8 @@ const fmtUptime = s => {
   return (d ? d + "d " : "") + (h ? h + "h " : "") + m + "min";
 };
 const sshTarget = m => m.ssh_host || (m.wg && m.wg.connected ? m.wg.server_ip : "") || m.tailscale_ip || (m.wg ? m.wg.server_ip : "") || (m.local_ips[0] || "").split(" ").pop().split("/")[0] || "";
-const dot = on => `<span class="dot ${on ? "on" : "off"}" title="${on ? "online" : "offline"}"></span>`;
+const mstate = m => m.online ? "online" : m.off_reason === "reboot" ? "reiniciando" : m.off_reason ? "desligado" : "offline";
+const dot = (on, t) => `<span class="dot ${on ? "on" : "off"}" title="${t || (on ? "online" : "offline")}"></span>`;
 
 async function renderMachines() {
   view.innerHTML = `<div class="spread"><div><h1>Máquinas</h1>
@@ -670,8 +687,8 @@ async function loadMachines() {
   }
   $("#ml").innerHTML = `<div class="table-wrap"><table><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
     ${d.machines.map(m => `<tr class="clickable" data-m="${m.id}">
-      <td>${dot(m.online)}</td>
-      <td><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span></td>
+      <td>${dot(m.online, mstate(m))}</td>
+      <td><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</td>
       <td class="small">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
       <td>${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span><br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
       <td class="small">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
@@ -719,7 +736,7 @@ async function refreshMachine() {
   const d = await api("/api/machines/" + OVL.id);
   OVL.m = d.machine; OVL.panel = d.panel;
   const m = OVL.m;
-  $("#ovlTitle").innerHTML = `${dot(m.online)} <b>${esc(m.label || m.hostname)}</b> <span class="muted small">${m.online ? "online" : "offline"} · visto ${fmtAgo(m.last_seen)}</span>`;
+  $("#ovlTitle").innerHTML = `${dot(m.online, mstate(m))} <b>${esc(m.label || m.hostname)}</b> <span class="muted small">${mstate(m)} · ${m.off_at ? "avisou " + fmtAgo(m.off_at) : "visto " + fmtAgo(m.last_seen)}</span>`;
 }
 
 function showTab(t) {

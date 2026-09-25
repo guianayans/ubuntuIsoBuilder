@@ -56,7 +56,7 @@ func loadBundle() *Bundle {
 	if b := readOverlay(exe); b.valid() {
 		return b
 	}
-	// macOS: Gravador de Pendrive.app/Contents/Resources/uab-download.json
+	// macOS: isoBuilder.app/Contents/Resources/uab-download.json
 	p := filepath.Join(filepath.Dir(exe), "..", "Resources", "uab-download.json")
 	if data, err := os.ReadFile(p); err == nil {
 		var b Bundle

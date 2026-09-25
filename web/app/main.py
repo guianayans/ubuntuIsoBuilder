@@ -26,6 +26,15 @@ PREFIX_RE = re.compile(r"^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$")
 COOKIE = "uab_session"
 MAX_BODY = 256 * 1024
 
+# Atalho no topo (só admin) para o acesso remoto; vazio = sem o botão.
+# REMOTE_EMBED=true abre DENTRO do painel (o app remoto precisa permitir este domínio
+# em frame-ancestors); false = abre em nova aba.
+REMOTE_URL = os.environ.get("REMOTE_URL", "https://remote.gvtserver.online/").strip()
+if not REMOTE_URL.startswith("https://"):
+    REMOTE_URL = ""
+REMOTE_ORIGIN = "/".join(REMOTE_URL.split("/")[:3]) if REMOTE_URL else ""
+REMOTE_EMBED = bool(REMOTE_URL) and os.environ.get("REMOTE_EMBED", "true").strip().lower() in ("1", "true", "yes", "sim")
+
 app = FastAPI(title="Ubuntu Autoinstall Builder", docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -63,7 +72,8 @@ async def security(request: Request, call_next):
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     resp.headers["Content-Security-Policy"] = (
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
-        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        f"connect-src 'self'; frame-src 'self' {REMOTE_ORIGIN if REMOTE_EMBED else ''}; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'self'")
     if request.url.path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
     return resp
@@ -136,7 +146,8 @@ async def logout(request: Request, response: Response):
 @app.get("/api/me")
 def me(u: core.User = Depends(current_user)):
     return {"user": u.public(), "admin_email": core.ADMIN_EMAIL if u.is_admin else None,
-            "features": {"wireguard": wg.enabled()}}
+            "features": {"wireguard": wg.enabled(), "remote_url": REMOTE_URL if u.is_admin else "",
+                         "remote_embed": REMOTE_EMBED and u.is_admin}}
 
 
 # ------------------------------------------------------------------ contas temporárias (admin)
@@ -441,10 +452,9 @@ def delete_build(bid: str, u: core.User = Depends(current_user)):
     builder.delete_build_files(bid)
     with core.db() as con:
         con.execute("DELETE FROM dl_tokens WHERE build_id=?", (bid,))
-        if u.is_admin:
-            con.execute("DELETE FROM builds WHERE id=?", (bid,))
-        else:  # continua contando no limite do convidado
-            con.execute("UPDATE builds SET status='deleted', iso_path=NULL WHERE id=?", (bid,))
+        # o registro fica (oculto): servidores já instalados com esta ISO continuam
+        # aparecendo em Máquinas, e o convidado continua com a ISO contada no limite
+        con.execute("UPDATE builds SET status='deleted', iso_path=NULL, message='ISO excluída do servidor' WHERE id=?", (bid,))
     return {"ok": True}
 
 
@@ -474,10 +484,10 @@ def download_sha(bid: str, u: core.User = Depends(current_user)):
 
 
 HELPERS = {
-    "windows": ("Gravador-Pendrive-Windows.exe", "application/vnd.microsoft.portable-executable"),
-    "windows-arm64": ("Gravador-Pendrive-Windows-ARM64.exe", "application/vnd.microsoft.portable-executable"),
-    "macos": ("Gravador-Pendrive-macOS.zip", "application/zip"),
-    "linux": ("gravador-linux-amd64", "application/octet-stream"),
+    "windows": ("isoBuilder-Windows.exe", "application/vnd.microsoft.portable-executable"),
+    "windows-arm64": ("isoBuilder-Windows-ARM64.exe", "application/vnd.microsoft.portable-executable"),
+    "macos": ("isoBuilder-macOS.zip", "application/zip"),
+    "linux": ("isobuilder-linux-amd64", "application/octet-stream"),
 }
 
 
@@ -521,7 +531,7 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
         with zipfile.ZipFile(base) as zin, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
             for info in zin.infolist():
                 zout.writestr(info, zin.read(info.filename))  # preserva permissões de execução
-            ri = zipfile.ZipInfo("Gravador de Pendrive.app/Contents/Resources/uab-download.json")
+            ri = zipfile.ZipInfo("isoBuilder.app/Contents/Resources/uab-download.json")
             ri.external_attr = 0o100644 << 16
             ri.compress_type = zipfile.ZIP_DEFLATED
             zout.writestr(ri, cfg)
@@ -566,9 +576,11 @@ async def agent_report(request: Request):
         raise HTTPException(401, "token inválido")
     th = core.token_hash(token)
     import time as _t
-    if _t.time() - _agent_last.get(th, 0) < 5:  # no máximo 1 relatório a cada 5 s por ISO
+    shutdown = request.headers.get("x-uab-event", "") == "shutdown"
+    lk = th + (":off" if shutdown else "")  # o aviso de desligamento não disputa o limite com o relatório
+    if _t.time() - _agent_last.get(lk, 0) < 5:  # no máximo 1 relatório a cada 5 s por ISO
         raise HTTPException(429, "devagar")
-    _agent_last[th] = _t.time()
+    _agent_last[lk] = _t.time()
     raw = await request.body()
     if len(raw) > AGENT_MAX_BODY:
         raise HTTPException(413, "relatório grande demais")
@@ -581,6 +593,15 @@ async def agent_report(request: Request):
         assert isinstance(data, dict)
     except (ValueError, AssertionError):
         raise HTTPException(400, "JSON inválido")
+    if shutdown:  # "estou desligando/reiniciando": marca offline na hora, sem mexer no relatório
+        mid = str(data.get("machine_id") or "")
+        if not re.match(r"^[0-9a-f]{32}$", mid):
+            raise HTTPException(400, "machine_id inválido")
+        reason = "reboot" if data.get("reason") == "reboot" else "poweroff"
+        with core.db() as con:
+            con.execute("UPDATE machines SET off_at=?, off_reason=? WHERE id=?",
+                        (core.now(), reason, core.token_hash(f"{b['id']}:{mid}")[:16]))
+        return {"ok": True}
     rep_ = panel.clean(data)
     mid = str(rep_.get("machine_id") or "")
     host = str(rep_.get("hostname") or "")
@@ -592,7 +613,8 @@ async def agent_report(request: Request):
         con.execute(
             "INSERT INTO machines (id,build_id,machine_id,hostname,first_seen,last_seen,report,source_ip) "
             "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET hostname=excluded.hostname, "
-            "last_seen=excluded.last_seen, report=excluded.report, source_ip=excluded.source_ip",
+            "last_seen=excluded.last_seen, report=excluded.report, source_ip=excluded.source_ip, "
+            "off_at=NULL, off_reason=''",
             (key, b["id"], mid, host, now_, now_, json.dumps(rep_), client_ip(request)))
     resp = {"ok": True, "interval": 600}
     wg_pub = str((data.get("wg") or {}).get("pubkey") or "") if isinstance(data.get("wg"), dict) else ""

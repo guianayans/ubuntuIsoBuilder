@@ -152,11 +152,13 @@ async def open_ssh(m, username: str):
 def machine_row(r, builds: dict | None = None) -> dict:
     rep = json.loads(r["report"] or "{}")
     ts = rep.get("tailscale") or {}
-    online = core.now() - r["last_seen"] < ONLINE_SECONDS
+    off = r["off_at"] is not None  # a máquina avisou que estava desligando/reiniciando
+    online = not off and core.now() - r["last_seen"] < ONLINE_SECONDS
     b = (builds or {}).get(r["build_id"]) or {}
     return {
         "id": r["id"], "build_id": r["build_id"], "hostname": r["hostname"], "label": r["label"],
         "notes": r["notes"], "first_seen": r["first_seen"], "last_seen": r["last_seen"], "online": online,
+        "off_at": r["off_at"], "off_reason": r["off_reason"] if off else "",
         "ssh_host": r["ssh_host"], "ssh_port": r["ssh_port"], "source_ip": r["source_ip"],
         "admin_user": rep.get("admin_user", ""), "ssh_auth": rep.get("ssh_auth", ""),
         "tailscale_ip": next((ip for ip in ts.get("ips", []) if "." in ip), ""),

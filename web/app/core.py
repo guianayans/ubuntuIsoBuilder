@@ -127,6 +127,12 @@ def init_db() -> None:
             );
             """
         )
+        # aviso de desligamento/reinício enviado pela máquina (bolinha vermelha na hora)
+        mcols = {r[1] for r in con.execute("PRAGMA table_info(machines)")}
+        if "off_at" not in mcols:
+            con.execute("ALTER TABLE machines ADD COLUMN off_at INTEGER")
+        if "off_reason" not in mcols:
+            con.execute("ALTER TABLE machines ADD COLUMN off_reason TEXT NOT NULL DEFAULT ''")
 
 
 # --------------------------------------------------------------------- senhas
@@ -309,6 +315,20 @@ PUBKEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-
 EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$")
 
 
+def password_leaked(pw: str) -> bool | None:
+    """Mesma checagem que o Coolify faz (Have I Been Pwned, k-anonimato: só os 5
+    primeiros caracteres do SHA-1 saem daqui). None = não foi possível consultar."""
+    import urllib.request
+    h = hashlib.sha1(pw.encode()).hexdigest().upper()
+    try:
+        req = urllib.request.Request(f"https://api.pwnedpasswords.com/range/{h[:5]}",
+                                     headers={"Add-Padding": "true", "User-Agent": "iso-builder"})
+        body = urllib.request.urlopen(req, timeout=8).read().decode()
+    except Exception:  # noqa: BLE001
+        return None
+    return any(l.split(":")[0] == h[5:] and l.split(":")[1].strip() != "0" for l in body.splitlines() if ":" in l)
+
+
 class Invalid(ValueError):
     pass
 
@@ -487,6 +507,9 @@ def validate_build(d: dict) -> dict:
             raise Invalid("Senha do Coolify: mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo.")
         if "'" in coolify_pw or "\n" in coolify_pw:
             raise Invalid("A senha do Coolify não pode conter aspas simples nem quebra de linha.")
+        if password_leaked(coolify_pw):
+            raise Invalid("Essa senha do Coolify aparece em vazamentos de dados conhecidos, e o Coolify "
+                          "recusaria criar o admin com ela. Escolha outra.")
         cemail = _req(d, "coolify_email").lower() or ADMIN_EMAIL
         if not EMAIL_RE.match(cemail):
             raise Invalid("E-mail do admin do Coolify inválido.")

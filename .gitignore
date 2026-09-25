@@ -43,3 +43,6 @@ __pycache__/
 # ---- Interface web / gravador
 helper/dist/
 web-data/
+
+# ---- gerados pelo helper/build.sh
+helper/rsrc_windows_*.syso

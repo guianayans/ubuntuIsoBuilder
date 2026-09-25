@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Compila o Gravador de Pendrive para Windows e macOS (e Linux) em helper/dist/.
-#   dist/Gravador-Pendrive-Windows.exe         (x64)
-#   dist/Gravador-Pendrive-Windows-ARM64.exe
-#   dist/Gravador-Pendrive-macOS.zip           (app universal: Intel + Apple Silicon)
-#   dist/gravador-linux-amd64
+# Compila o isoBuilder (gravador de pendrive) para Windows e macOS (e Linux) em helper/dist/.
+#   dist/isoBuilder-Windows.exe         (x64)
+#   dist/isoBuilder-Windows-ARM64.exe
+#   dist/isoBuilder-macOS.zip           (app universal: Intel + Apple Silicon)
+#   dist/isobuilder-linux-amd64
+# Ícone: assets/make-icon.py gera assets/icon.{png,icns,ico} (versionados).
 # Uso: helper/build.sh [versão]
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,36 +19,45 @@ export GOTELEMETRY=off XDG_CONFIG_HOME="${UAB_GO_CONFIG:-$ROOT/work/tools/config
 LD="-s -w -X main.version=$VERSION"
 rm -rf dist; mkdir -p dist
 
+# Windows: ícone + nome/versão do arquivo embutidos no .exe (rsrc_windows_*.syso)
+python3 assets/winres.py assets/icon.ico . "$VERSION"
+trap 'rm -f rsrc_windows_*.syso' EXIT
+
 "$GO" vet ./...
 "$GO" test ./...
 
-GOOS=windows GOARCH=amd64 "$GO" build -ldflags "$LD -H windowsgui" -o dist/Gravador-Pendrive-Windows.exe .
-GOOS=windows GOARCH=arm64 "$GO" build -ldflags "$LD -H windowsgui" -o dist/Gravador-Pendrive-Windows-ARM64.exe .
-GOOS=linux   GOARCH=amd64 "$GO" build -ldflags "$LD" -o dist/gravador-linux-amd64 .
+GOOS=windows GOARCH=amd64 "$GO" build -ldflags "$LD -H windowsgui" -o dist/isoBuilder-Windows.exe .
+GOOS=windows GOARCH=arm64 "$GO" build -ldflags "$LD -H windowsgui" -o dist/isoBuilder-Windows-ARM64.exe .
+GOOS=linux   GOARCH=amd64 "$GO" build -ldflags "$LD" -o dist/isobuilder-linux-amd64 .
 
 # macOS: .app com os dois binários e um lançador que escolhe a arquitetura.
-APP="dist/Gravador de Pendrive.app"
+APP="dist/isoBuilder.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-GOOS=darwin GOARCH=arm64 "$GO" build -ldflags "$LD" -o "$APP/Contents/MacOS/gravador-arm64" .
-GOOS=darwin GOARCH=amd64 "$GO" build -ldflags "$LD" -o "$APP/Contents/MacOS/gravador-x86_64" .
-cat >"$APP/Contents/MacOS/Gravador" <<'EOF'
+GOOS=darwin GOARCH=arm64 "$GO" build -ldflags "$LD" -o "$APP/Contents/MacOS/isoBuilder-arm64" .
+GOOS=darwin GOARCH=amd64 "$GO" build -ldflags "$LD" -o "$APP/Contents/MacOS/isoBuilder-x86_64" .
+cp assets/icon.icns "$APP/Contents/Resources/isoBuilder.icns"
+cat >"$APP/Contents/MacOS/isoBuilder" <<'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ARCH="$(uname -m)"
 [ "$ARCH" = arm64 ] || ARCH=x86_64
-exec "$DIR/gravador-$ARCH" "$@"
+# Roda em segundo plano e encerra o lançador: assim, abrir o app de novo (ex.: depois
+# de fechar a aba durante a gravação) inicia outro lançador, que reabre a página do
+# isoBuilder que continua rodando. (Com "exec", o macOS só "ativaria" o app e nada aparecia.)
+"$DIR/isoBuilder-$ARCH" "$@" </dev/null >/dev/null 2>&1 &
 EOF
 chmod 755 "$APP/Contents/MacOS/"*
 cat >"$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Gravador de Pendrive</string>
-  <key>CFBundleDisplayName</key><string>Gravador de Pendrive</string>
+  <key>CFBundleName</key><string>isoBuilder</string>
+  <key>CFBundleDisplayName</key><string>isoBuilder</string>
+  <key>CFBundleIconFile</key><string>isoBuilder</string>
   <key>CFBundleIdentifier</key><string>local.autoinstall-builder.gravador</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
-  <key>CFBundleExecutable</key><string>Gravador</string>
+  <key>CFBundleExecutable</key><string>isoBuilder</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><true/>
@@ -56,8 +66,8 @@ EOF
 ( cd dist && python3 - <<'EOF'
 # zip preservando permissões de execução (o zip do Python mantém o modo Unix)
 import os, zipfile
-with zipfile.ZipFile("Gravador-Pendrive-macOS.zip", "w", zipfile.ZIP_DEFLATED) as z:
-    for root, dirs, files in os.walk("Gravador de Pendrive.app"):
+with zipfile.ZipFile("isoBuilder-macOS.zip", "w", zipfile.ZIP_DEFLATED) as z:
+    for root, dirs, files in os.walk("isoBuilder.app"):
         for d in dirs:
             p = os.path.join(root, d); zi = zipfile.ZipInfo(p + "/"); zi.external_attr = (0o40755 << 16) | 0x10; z.writestr(zi, "")
         for f in files:

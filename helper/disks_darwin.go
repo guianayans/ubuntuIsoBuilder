@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 func osListDisks() ([]Disk, error) {
@@ -61,7 +62,18 @@ func osPrepareDisk(d Disk) error {
 	return nil
 }
 
-func osOpenDevice(d Disk) (*os.File, error) { return os.OpenFile(d.Path, os.O_RDWR, 0) }
+func osOpenDevice(d Disk) (*os.File, error) {
+	f, err := os.OpenFile(d.Path, os.O_RDWR, 0)
+	if errors.Is(err, syscall.EPERM) {
+		// Mesmo como root, o macOS bloqueia o acesso direto a discos removíveis até o
+		// app receber permissão (Privacidade e Segurança).
+		_ = exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles").Start()
+		return nil, fmt.Errorf("%w. O macOS bloqueou o acesso ao pendrive: abra Ajustes do Sistema → "+
+			"Privacidade e Segurança → Acesso Total ao Disco, ative \"isoBuilder\" "+
+			"(se não estiver na lista, clique em + e escolha o app), feche o Gravador e abra de novo", err)
+	}
+	return f, err
+}
 
 func osFinalize(d Disk) { _ = exec.Command("diskutil", "eject", "/dev/"+d.ID).Run() }
 
@@ -87,7 +99,7 @@ func osRunPrivileged(args []string) error {
 		parts = append(parts, `" "`, "quoted form of "+appleQuote(a))
 	}
 	script := "do shell script " + strings.Join(parts, " & ") +
-		` with prompt "O Gravador de Pendrive precisa da sua senha para gravar o pendrive." with administrator privileges`
+		` with prompt "O isoBuilder precisa da sua senha para gravar o pendrive." with administrator privileges`
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -99,3 +111,19 @@ func osRunPrivileged(args []string) error {
 	return nil
 }
 
+
+// DKIOCSYNCHRONIZECACHE = _IO('d', 22): pede ao pendrive para gravar o cache interno.
+const dkiocSynchronizeCache = 0x20006416
+
+// syncDevice: no macOS, fsync em /dev/rdiskN (acesso cru, sem cache do sistema)
+// falha com "inappropriate ioctl for device". Nesse caso usa o ioctl de disco;
+// se o pendrive também não o aceitar, não há cache do sistema a descarregar e o
+// eject no fim termina de esvaziar o do pendrive. A verificação relê tudo depois.
+func syncDevice(f *os.File) error {
+	err := f.Sync()
+	if err == nil || !(errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP)) {
+		return err
+	}
+	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), dkiocSynchronizeCache, 0)
+	return nil
+}

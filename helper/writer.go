@@ -195,7 +195,7 @@ func writeImage(isoPath string, dev *os.File, devSize int64, p *progress) (strin
 	if _, err := dev.WriteAt(head, 0); err != nil {
 		return "", fmt.Errorf("falha ao gravar o início do pendrive: %w", err)
 	}
-	if err := dev.Sync(); err != nil {
+	if err := syncDevice(dev); err != nil {
 		return "", fmt.Errorf("falha ao descarregar o cache: %w", err)
 	}
 	want := hex.EncodeToString(h.Sum(nil))

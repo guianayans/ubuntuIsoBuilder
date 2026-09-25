@@ -27,7 +27,7 @@ Depois da instalação e do primeiro boot o servidor fica com:
 
 1. [Requisitos](#requisitos)
 2. [Construção](#construção) · [Gerar novamente](#gerar-novamente) · [Validar](#validar) · [Testar](#testar)
-3. [Interface web](#interface-web-isogvtserveronline) · [Gravador de Pendrive](#gravador-de-pendrive-helper)
+3. [Interface web](#interface-web-isogvtserveronline) · [isoBuilder (gravador)](#isobuilder-gravador-de-pendrive-helper)
 4. [Criar o pendrive](#criar-o-pendrive)
 5. [Instalação na máquina remota](#instalação-na-máquina-remota)
 6. [Primeiro acesso](#primeiro-acesso)
@@ -194,7 +194,7 @@ Com KVM leva ~5–15 min (medido: 24.04 ≈ 4 min, 26.04 ≈ 12 min). Log serial
 
 Uma interface web para gerar a ISO pelo navegador, sem terminal. Ela usa os mesmos
 scripts do projeto, e o usuário grava o pendrive no próprio computador com o
-**Gravador de Pendrive** (Windows e Mac).
+**isoBuilder**, o gravador de pendrive (Windows e Mac).
 
 ### Fluxo do usuário
 
@@ -257,8 +257,10 @@ Em "Outras formas de baixar" continuam disponíveis a ISO sozinha, o `.sha256` e
 ### Máquinas conectadas (menu **Máquinas**)
 
 Toda ISO gerada pela interface web faz o servidor **se reportar ao painel**:
-no primeiro boot e depois a cada 10 minutos (`uab-report.timer`). O servidor
-envia, por HTTPS, com um token único por ISO (no banco fica só o hash):
+no primeiro boot e depois a cada 10 minutos (`uab-report.timer`). Ao desligar ou
+reiniciar, manda um aviso curto (`uab-report-shutdown.service`) e a bolinha fica
+vermelha na hora; sem aviso (queda de energia), fica vermelha após 25 min sem relatório.
+O servidor envia, por HTTPS, com um token único por ISO (no banco fica só o hash):
 
 - hostname e usuário administrador;
 - IPs do Tailscale e da rede local, gateway;
@@ -396,17 +398,21 @@ Cada ISO ocupa ~4 GB, e a ISO oficial em cache ocupa ~3–4 GB por versão. Os d
 ficam no volume `iso_builder_data`. O painel **Sistema** mostra o espaço livre e
 permite baixar ou atualizar a ISO oficial.
 
-### Gravador de Pendrive (`helper/`)
+### isoBuilder, gravador de pendrive (`helper/`)
 
 Programa em Go, sem dependências e sem instalação. Abre uma página local
 (`127.0.0.1` + token aleatório) no navegador.
 
 | Arquivo | Sistema |
 |---|---|
-| `Gravador-Pendrive-Windows.exe` | Windows 10/11 x64 (pede permissão de administrador) |
-| `Gravador-Pendrive-Windows-ARM64.exe` | Windows em ARM |
-| `Gravador-Pendrive-macOS.zip` | macOS 11+, Intel e Apple Silicon (pede a senha do Mac na hora de gravar) |
-| `gravador-linux-amd64` | Linux (`sudo`) |
+| `isoBuilder-Windows.exe` | Windows 10/11 x64 (pede permissão de administrador) |
+| `isoBuilder-Windows-ARM64.exe` | Windows em ARM |
+| `isoBuilder-macOS.zip` | macOS 11+, Intel e Apple Silicon (pede a senha do Mac na hora de gravar) |
+| `isobuilder-linux-amd64` | Linux (`sudo`) |
+
+Ícone: `helper/assets/icon.png` (+ `.icns` do Mac e `.ico` do Windows), gerados por
+`python3 helper/assets/make-icon.py`. No Windows o ícone e o nome/versão vão dentro do
+`.exe` (`helper/assets/winres.py`, sem ferramentas externas).
 
 Proteções do gravador:
 - lista só discos USB, SD ou removíveis, nunca o disco do sistema;

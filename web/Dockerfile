@@ -1,7 +1,7 @@
 # Interface web do ubuntu-autoinstall-builder (iso.gvtserver.online).
 # Contexto de build: raiz do projeto (veja docker-compose.yml).
 
-# ---- 1. Gravador de Pendrive (Windows/macOS/Linux), compilado do código-fonte
+# ---- 1. isoBuilder, gravador de pendrive (Windows/macOS/Linux), compilado do código-fonte
 FROM golang:1-bookworm AS helper
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /src

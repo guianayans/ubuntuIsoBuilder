@@ -14,6 +14,18 @@ TOKEN_FILE=/etc/uab/panel-token
 [ -n "${UAB_PANEL_URL:-}" ] && [ -s "$TOKEN_FILE" ] || exit 0
 VERBOSE=0; [ "${1:-}" = -v ] && VERBOSE=1
 
+# Chamado pelo uab-report-shutdown.service ao desligar/reiniciar: aviso curto para
+# o painel marcar a máquina como desligada na hora (sem isso, leva até 25 min).
+if [ "${1:-}" = --shutdown ]; then
+  reason=poweroff
+  systemctl list-jobs --no-legend 2>/dev/null | grep -qE '(reboot|kexec)\.target' && reason=reboot
+  printf '{"machine_id":"%s","reason":"%s"}' "$(cat /etc/machine-id)" "$reason" \
+    | curl -fsS -o /dev/null --max-time 6 -X POST -H "X-UAB-Event: shutdown" \
+        -H "Authorization: Bearer $(cat "$TOKEN_FILE")" -H "Content-Type: application/json" \
+        --data-binary @- "$UAB_PANEL_URL/api/agent/report" || true
+  exit 0
+fi
+
 payload="$(python3 - <<'PY'
 import json, os, re, shutil, socket, subprocess
 

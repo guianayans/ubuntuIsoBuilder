@@ -24,6 +24,7 @@ install -m 0755 "$SRC/payload/uab-report.sh" "$T/usr/local/sbin/uab-report"
 install -m 0755 "$SRC/payload/uab-wg-apply.py" "$T/usr/local/sbin/uab-wg-apply"
 install -m 0644 "$SRC/payload/systemd/uab-report.service" "$T/etc/systemd/system/uab-report.service"
 install -m 0644 "$SRC/payload/systemd/uab-report.timer" "$T/etc/systemd/system/uab-report.timer"
+install -m 0644 "$SRC/payload/systemd/uab-report-shutdown.service" "$T/etc/systemd/system/uab-report-shutdown.service"
 [ -f "$SRC/payload/panel_key" ] && install -m 0644 "$SRC/payload/panel_key" "$T/etc/uab/panel_key"
 for f in "$SRC"/payload/server-tools/*.sh; do
   [ -f "$f" ] || continue
@@ -50,6 +51,7 @@ install -d "$T/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/uab-provision.service "$T/etc/systemd/system/multi-user.target.wants/uab-provision.service"
 install -d "$T/etc/systemd/system/timers.target.wants"
 ln -sf /etc/systemd/system/uab-report.timer "$T/etc/systemd/system/timers.target.wants/uab-report.timer"
+ln -sf /etc/systemd/system/uab-report-shutdown.service "$T/etc/systemd/system/multi-user.target.wants/uab-report-shutdown.service"
 
 # SSH precisa subir sozinho após o reboot (socket ou serviço, conforme a versão).
 if command -v curtin >/dev/null 2>&1; then

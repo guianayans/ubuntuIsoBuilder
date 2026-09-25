@@ -1,4 +1,4 @@
-// Gravador de Pendrive — ubuntu-autoinstall-builder.
+// isoBuilder (gravador de pendrive) — ubuntu-autoinstall-builder.
 //
 // Abre uma interface local (http://127.0.0.1:<porta>/<token>/) no navegador,
 // encontra a ISO baixada, lista SOMENTE pendrives/discos USB e grava a ISO
@@ -33,7 +33,7 @@ import (
 	"time"
 )
 
-//go:embed ui/index.html
+//go:embed ui/index.html assets/icon.ico assets/icon.png
 var uiFS embed.FS
 
 var version = "dev"
@@ -45,6 +45,16 @@ type Disk struct {
 	Serial string `json:"serial,omitempty"`
 	Size   int64  `json:"size"`
 	Bus    string `json:"bus"`
+	// Key identifica o MESMO pendrive mesmo que o sistema troque o nome dele
+	// (ex.: disk4 -> disk5 no macOS depois de uma falha ou de reconectar).
+	Key string `json:"key"`
+}
+
+func diskKey(d Disk) string {
+	if d.Serial != "" {
+		return "s:" + d.Serial + "|" + strconv.FormatInt(d.Size, 10)
+	}
+	return "m:" + d.Name + "|" + strconv.FormatInt(d.Size, 10) + "|" + d.Bus
 }
 
 type ISO struct {
@@ -61,22 +71,48 @@ func listDisks() ([]Disk, error) {
 		if size == 0 {
 			size = 8_000_000_000
 		}
-		return []Disk{{ID: "fake0", Path: f, Name: "Pendrive de teste (arquivo)", Size: size, Bus: "TESTE"}}, nil
+		id := "fake0"
+		if v := os.Getenv("UAB_FAKE_DISK_ID"); v != "" { // testes: simula o sistema renomeando o pendrive
+			id = v
+		}
+		d := Disk{ID: id, Path: f, Name: "Pendrive de teste (arquivo)", Size: size, Bus: "TESTE"}
+		d.Key = diskKey(d)
+		return []Disk{d}, nil
 	}
-	return osListDisks()
+	disks, err := osListDisks()
+	for i := range disks {
+		disks[i].Key = diskKey(disks[i])
+	}
+	return disks, err
 }
 
-func findDisk(id string) (Disk, error) {
+// findDisk acha o pendrive pelo nome atual; se o sistema o renomeou, acha pela
+// identidade (nº de série/modelo + tamanho), desde que só UM pendrive combine.
+func findDisk(id, key string) (Disk, error) {
 	disks, err := listDisks()
 	if err != nil {
 		return Disk{}, err
 	}
 	for _, d := range disks {
-		if d.ID == id {
+		if d.ID == id && (key == "" || d.Key == key) {
 			return d, nil
 		}
 	}
-	return Disk{}, errors.New("pendrive não encontrado (foi removido?). Atualize a lista")
+	if key != "" {
+		var m []Disk
+		for _, d := range disks {
+			if d.Key == key {
+				m = append(m, d)
+			}
+		}
+		if len(m) == 1 {
+			return m[0], nil
+		}
+		if len(m) > 1 {
+			return Disk{}, errors.New("há mais de um pendrive igual conectado; escolha na lista de novo")
+		}
+	}
+	return Disk{}, errors.New("pendrive não encontrado (foi removido?). Reconecte e atualize a lista")
 }
 
 func prepareDisk(d Disk) error {
@@ -101,7 +137,7 @@ func finalizeDisk(d Disk) {
 
 // runWrite executa a gravação completa em um disco já validado.
 func runWrite(isoPath, diskID string, p *progress) {
-	d, err := findDisk(diskID) // revalida: o disco ainda existe e ainda é USB/externo
+	d, err := findDisk(diskID, "") // revalida: o disco ainda existe e ainda é USB/externo
 	if err != nil {
 		p.finish("error", err.Error(), "")
 		return
@@ -269,6 +305,13 @@ func (a *app) startFetch() {
 	}()
 }
 
+func serveAsset(w http.ResponseWriter, name, ctype string) {
+	b, _ := uiFS.ReadFile(name)
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Cache-Control", "max-age=86400")
+	_, _ = w.Write(b)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -284,6 +327,9 @@ func (a *app) handler() http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:")
 		_, _ = w.Write(b)
+	})
+	mux.HandleFunc(prefix+"/icon.png", func(w http.ResponseWriter, r *http.Request) {
+		serveAsset(w, "assets/icon.png", "image/png")
 	})
 	mux.HandleFunc(prefix+"/api/state", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, a.state())
@@ -336,6 +382,7 @@ func (a *app) handler() http.Handler {
 	mux.HandleFunc(prefix+"/api/write", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Disk    string `json:"disk"`
+			Key     string `json:"key"`
 			Confirm bool   `json:"confirm"`
 		}
 		if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil || !req.Confirm {
@@ -353,7 +400,7 @@ func (a *app) handler() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": "selecione a ISO e aguarde a conferência"})
 			return
 		}
-		d, err := findDisk(req.Disk)
+		d, err := findDisk(req.Disk, req.Key)
 		if err != nil {
 			a.mu.Unlock()
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
@@ -378,6 +425,21 @@ func (a *app) handler() http.Handler {
 		}()
 		writeJSON(w, 200, map[string]string{"ok": "1"})
 	})
+	// "Tentar de novo": descarta o resultado da gravação anterior (erro ou concluída)
+	mux.HandleFunc(prefix+"/api/reset", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, 405, map[string]string{"error": "use POST"})
+			return
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.busy {
+			writeJSON(w, 409, map[string]string{"error": "gravação em andamento"})
+			return
+		}
+		a.job = nil
+		writeJSON(w, 200, map[string]string{"ok": "1"})
+	})
 	mux.HandleFunc(prefix+"/api/fetch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || a.bundle == nil {
 			writeJSON(w, 400, map[string]string{"error": "nada para baixar"})
@@ -399,7 +461,7 @@ func (a *app) handler() http.Handler {
 			return
 		}
 		writeJSON(w, 200, map[string]string{"ok": "1"})
-		go func() { time.Sleep(300 * time.Millisecond); os.Exit(0) }()
+		go func() { time.Sleep(300 * time.Millisecond); clearInstance(); os.Exit(0) }()
 	})
 
 	// Proteções: só aceita Host 127.0.0.1:<porta> (contra DNS rebinding) e
@@ -415,6 +477,10 @@ func (a *app) handler() http.Handler {
 				http.Error(w, "origem inválida", http.StatusForbidden)
 				return
 			}
+		}
+		if r.URL.Path == "/favicon.ico" { // pedido automático do navegador (fora do token; só o ícone)
+			serveAsset(w, "assets/icon.ico", "image/x-icon")
+			return
 		}
 		if !strings.HasPrefix(r.URL.Path, prefix+"/") {
 			http.NotFound(w, r)
@@ -432,7 +498,7 @@ func (a *app) handler() http.Handler {
 // macOS: roda a gravação como root via janela de senha nativa e acompanha
 // o progresso por um arquivo de status.
 func runViaPrivilegedWorker(iso, diskID string, p *progress) {
-	dir, err := os.MkdirTemp("", "gravador")
+	dir, err := os.MkdirTemp("", "isobuilder")
 	if err != nil {
 		p.finish("error", err.Error(), "")
 		return
@@ -519,6 +585,16 @@ func main() {
 		return
 	}
 
+	// Já existe um isoBuilder aberto (ex.: a aba foi fechada no meio da gravação)?
+	// Reabre a página dele em vez de iniciar outro, que não saberia da gravação.
+	if url := runningInstance(); url != "" {
+		fmt.Println("isoBuilder já está aberto em:", url)
+		if !*noBrowser {
+			osOpenBrowser(url)
+		}
+		return
+	}
+
 	relaunched, err := osEnsureElevated()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Erro:", err)
@@ -538,7 +614,8 @@ func main() {
 		a.startFetch()
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s/", a.port, a.token)
-	fmt.Println("Gravador de Pendrive aberto em:", url)
+	saveInstance(url)
+	fmt.Println("isoBuilder aberto em:", url)
 	fmt.Println("(feche esta janela para encerrar)")
 	if !*noBrowser {
 		osOpenBrowser(url)
@@ -550,6 +627,7 @@ func main() {
 			idle := time.Since(a.lastSeen) > 30*time.Minute && !a.busy
 			a.mu.Unlock()
 			if idle {
+				clearInstance()
 				os.Exit(0)
 			}
 		}
@@ -559,4 +637,47 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Erro:", err)
 		os.Exit(1)
 	}
+}
+
+// ------------------------------------------------------------------ instância única
+// Endereço da página do isoBuilder em execução (só do próprio usuário, 0600).
+func instanceFile() string {
+	if p := os.Getenv("UAB_INSTANCE_FILE"); p != "" {
+		return p
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "isoBuilder", "instance")
+}
+
+func saveInstance(url string) {
+	p := instanceFile()
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	_ = os.WriteFile(p, []byte(url), 0o600)
+}
+
+func clearInstance() { _ = os.Remove(instanceFile()) }
+
+// runningInstance devolve o endereço de um isoBuilder que ainda responde, ou "".
+func runningInstance() string {
+	b, err := os.ReadFile(instanceFile())
+	if err != nil {
+		return ""
+	}
+	url := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(url, "http://127.0.0.1:") {
+		return ""
+	}
+	c := &http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get(url + "api/state")
+	if err != nil {
+		return ""
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	return url
 }

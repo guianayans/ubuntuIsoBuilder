@@ -1,0 +1,15 @@
+[Unit]
+Description=ubuntu-autoinstall-builder: avisa o painel ao desligar/reiniciar
+# Parado ANTES da rede e do DNS (ordem inversa no desligamento)
+Wants=network-online.target
+After=network-online.target nss-lookup.target systemd-resolved.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/uab-report --shutdown
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

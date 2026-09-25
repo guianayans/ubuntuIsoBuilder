@@ -90,7 +90,7 @@ func osFinalize(d Disk) { _ = exec.Command("sync").Run() }
 
 func osEnsureElevated() (bool, error) {
 	if os.Geteuid() != 0 && os.Getenv("UAB_FAKE_DISK") == "" {
-		return false, errors.New("no Linux, execute com sudo: sudo ./gravador")
+		return false, errors.New("no Linux, execute com sudo: sudo ./isobuilder-linux-amd64")
 	}
 	return false, nil
 }

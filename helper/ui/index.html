@@ -3,12 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gravador de Pendrive</title>
+<title>isoBuilder</title>
+<link rel="icon" type="image/png" sizes="1024x1024" href="icon.png">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="icon.png">
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--text:#14171c;--muted:#5d6673;--line:#e3e6eb;--accent:#e95420;--accent-ink:#fff;--ok:#1f8a4c;--err:#c62828;--warn-bg:#fff4e5;--warn:#8a4b00;--radius:14px}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--text:#eef0f3;--muted:#9aa3ae;--line:#2a2f37;--warn-bg:#2b2112;--warn:#f0b35a}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif}
+.brand{display:flex;align-items:center;gap:12px}
 main{max-width:720px;margin:0 auto;padding:32px 16px 64px}
 h1{font-size:22px;margin:0 0 4px}
 .sub{color:var(--muted);margin:0 0 24px}
@@ -41,7 +45,7 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
 </head>
 <body>
 <main>
-  <h1>Gravador de Pendrive</h1>
+  <h1 class="brand"><img src="icon.png" alt="" width="40" height="40">isoBuilder</h1>
   <p class="sub">Grava a ISO do instalador automático do Ubuntu Server no seu pendrive.</p>
 
   <section class="card" id="s1">
@@ -66,13 +70,13 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
     <div id="job"></div>
   </section>
 
-  <footer>Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio. <button class="btn" id="quit" style="margin-left:8px">Fechar o gravador</button></footer>
+  <footer>Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio. <button class="btn" id="quit" style="margin-left:8px">Fechar o isoBuilder</button></footer>
 </main>
 <script>
 const $ = s => document.querySelector(s);
 const fmt = n => { const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1000&&i<4){n/=1000;i++} return (i?n.toFixed(1):n)+' '+u[i]; };
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let S = {}, selDisk = null, confirmed = false;
+let S = {}, selDisk = null, selKey = null, confirmed = false;
 
 async function api(path, body){
   const r = await fetch('api/'+path, body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {});
@@ -120,12 +124,16 @@ function render(){
 
   // 2. Discos
   const disks = S.disks || [];
-  if(selDisk && !disks.find(d=>d.id===selDisk)) { selDisk=null; confirmed=false; }
+  // o sistema pode renomear o pendrive (ex.: disk4 -> disk5): reencontra pelo modelo/série/tamanho
+  if(selDisk && !disks.find(d=>d.id===selDisk && d.key===selKey)) {
+    const same = disks.filter(d=>d.key===selKey);
+    if(same.length===1) selDisk = same[0].id; else { selDisk=null; selKey=null; confirmed=false; }
+  }
   $('#disks').innerHTML = (S.disk_error?`<div class="err">${esc(S.disk_error)}</div>`:'') + (disks.length ? disks.map(d=>`
     <button class="opt ${selDisk===d.id?'sel':''}" data-disk="${esc(d.id)}">
       <span class="big">🔌</span><span class="grow"><b>${esc(d.name||'Pendrive')}</b><small>${fmt(d.size)} · ${esc(d.bus)}${d.serial?' · '+esc(d.serial):''}</small></span>
     </button>`).join('') : '<div class="empty">Nenhum pendrive encontrado. Conecte o pendrive e clique em “Atualizar lista”. Discos internos nunca aparecem aqui.</div>');
-  document.querySelectorAll('[data-disk]').forEach(b=>b.onclick=()=>{ if(S.busy) return; selDisk=b.dataset.disk; confirmed=false; render(); });
+  document.querySelectorAll('[data-disk]').forEach(b=>b.onclick=()=>{ if(S.busy) return; selDisk=b.dataset.disk; selKey=(disks.find(d=>d.id===selDisk)||{}).key||null; confirmed=false; render(); });
   stepClass('#s2', selDisk?'done':(isoOk?'active':''));
 
   // 3. Gravar
@@ -137,11 +145,17 @@ function render(){
     let html = `<b>${phases[job.phase]||''}</b> — ${esc(job.message)}`;
     if(['writing','verifying'].includes(job.phase)){
       const eta = job.speed>0 ? Math.max(0,(job.total-job.done)/job.speed) : 0;
-      html += `<div class="bar"><i style="width:${job.percent.toFixed(1)}%"></i></div><small class="muted">${job.percent.toFixed(0)}% · ${fmt(job.speed)}/s · ~${Math.ceil(eta/60)} min restantes</small>`;
+      html += `<div class="bar"><i style="width:${job.percent.toFixed(1)}%"></i></div><small class="muted">${job.percent.toFixed(0)}% · ${fmt(job.speed)}/s · ~${Math.ceil(eta/60)} min restantes. Pode fechar esta aba: a gravação continua; para acompanhar, abra o isoBuilder de novo.</small>`;
     }
     if(job.phase==='done') html = `<div class="ok" style="font-size:18px">✔ ${esc(job.message)}</div><p class="muted">Próximo passo: conecte o pendrive no servidor, ligue e escolha o boot pelo pendrive (F12, F11, F8 ou Esc). A instalação é automática.</p>`;
-    if(job.phase==='error') html = `<div class="err">✖ ${esc(job.message)}</div><div class="row"><button class="btn" onclick="location.reload()">Tentar de novo</button></div>`;
+    if(job.phase==='error') html = `<div class="err">✖ ${esc(job.message)}</div><div class="row"><button class="btn" id="again">Tentar de novo</button></div>`;
     $('#job').innerHTML = html;
+    const ag = document.getElementById('again');
+    if(ag) ag.onclick = async () => {  // limpa o erro e mantém a ISO e o pendrive escolhidos
+      ag.disabled = true; confirmed = false;
+      try { await api('reset', {}); } catch(e){ alert(e.message); }
+      poll();
+    };
     stepClass('#s3', job.phase==='done'?'done':'active');
     return;
   }
@@ -158,7 +172,7 @@ function render(){
   $('#ck').onchange = e => { confirmed = e.target.checked; render(); };
   $('#go').onclick = async () => {
     $('#go').disabled = true;
-    try { await api('write', {disk: selDisk, confirm: true}); } catch(e){ alert(e.message); }
+    try { await api('write', {disk: selDisk, key: selKey, confirm: true}); } catch(e){ alert(e.message); }
     poll();
   };
 }
@@ -167,7 +181,7 @@ async function selectIso(p){ try{ await api('select',{path:p}); }catch(e){ alert
 async function poll(){ try{ S = await api('state'); render(); }catch(e){} }
 $('#useIso').onclick = () => { const p=$('#isoPath').value.trim().replace(/^"|"$/g,''); if(p) selectIso(p); };
 $('#refresh').onclick = poll;
-$('#quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>Gravador fechado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }catch(e){ alert(e.message); } };
+$('#quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder fechado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }catch(e){ alert(e.message); } };
 poll(); setInterval(()=>{ if(!document.hidden) poll(); }, 1500);
 </script>
 </body>

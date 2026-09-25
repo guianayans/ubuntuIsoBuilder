@@ -348,6 +348,14 @@ if [ "$COOLIFY_ENABLED" = yes ]; then
       if [ "${#CPW}" -ge 12 ] && printf '%s' "$CPW" | grep -q '[a-z]' && printf '%s' "$CPW" | grep -q '[A-Z]' \
          && printf '%s' "$CPW" | grep -q '[0-9]' && printf '%s' "$CPW" | grep -q '[^A-Za-z0-9]' \
          && ! printf '%s' "$CPW" | grep -q "'"; then
+        # Mesma checagem do Coolify (Have I Been Pwned; só 5 caracteres do SHA-1 saem daqui)
+        h="$(printf '%s' "$CPW" | sha1sum | cut -c1-40 | tr a-f A-F)"
+        if curl -fsS --max-time 8 -H 'Add-Padding: true' "https://api.pwnedpasswords.com/range/${h:0:5}" 2>/dev/null \
+             | tr -d '\r' | grep -q "^${h:5}:[1-9]"; then
+          warn "Essa senha aparece em vazamentos conhecidos; o Coolify recusaria criar o admin. Escolha outra."
+          CPW=""; h=""; continue
+        fi
+        h=""
         ask_secret CPW2 "Confirme a senha do Coolify"
         [ "$CPW" = "$CPW2" ] && break
         warn "As senhas não conferem."
