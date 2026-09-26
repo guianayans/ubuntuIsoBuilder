@@ -214,8 +214,14 @@ html,body{overscroll-behavior-y:contain}
   .menu-btn{display:inline-flex;margin-left:auto}
   .brand-name{display:inline}
 }
+/* acima de 900px, se os itens não couberem (e-mail, Remoto, "Instalar app"…),
+   o app.js marca .compact e o topo usa o mesmo botão de menu, sem cortar item */
+header.top.fit-noemail .who .email{display:none}
+header.top.fit-nolabel .who .rlabel{display:none}
+header.top.compact nav#nav,header.top.compact .who{display:none}
+header.top.compact .menu-btn{display:inline-flex;margin-left:auto}
 .mnav-bg{position:fixed;inset:0;z-index:4;background:rgba(10,12,16,.45)}
-@media (min-width:901px){.mnav,.mnav-bg{display:none!important}}
+@media (min-width:901px){header.top:not(.compact) .mnav,header.top:not(.compact)+.mnav-bg{display:none!important}}
 
 /* ---- assistente: no celular, passo atual + barra de progresso no lugar da lista */
 .steps-m{display:none}

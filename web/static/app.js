@@ -80,6 +80,7 @@ function shell() {
   const isOn = h => cur === h || (!dl && h === "#/isos" && cur.startsWith("#/iso/"));
   $("#nav").innerHTML = links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("");
   $("#whoEmail").title = ME.email;
+  $("#logout").title = "Sair de " + ME.email;
   // menu das telas estreitas (celular, janela pequena): tudo em uma lista, sem rolagem lateral
   $("#mnav").innerHTML = `<nav class="mnav-links">${links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("")}
     ${installEvt ? `<a href="#" class="mnav-remote" id="mInstall">Instalar app</a>` : ""}
@@ -89,7 +90,26 @@ function shell() {
   const mi = $("#mInstall"); if (mi) mi.onclick = e => { e.preventDefault(); setMenu(false); installApp(); };
   $$("#mnav a").forEach(a => a.onclick = () => setMenu(false));
   setMenu(false);
+  fitHeader();
 }
+// Menu do topo: se os itens não couberem, vai enxugando em degraus
+// (esconde o e-mail → o texto "Remoto" → usa o botão ☰) em vez de cortar o último item.
+const FIT_STEPS = ["fit-noemail", "fit-nolabel", "compact"];
+function fitHeader() {
+  const top = $("#top"), nav = $("#nav");
+  if (!top || top.classList.contains("hidden")) return;
+  const was = top.classList.contains("compact");
+  top.classList.remove(...FIT_STEPS);
+  if (innerWidth > 900) {
+    for (const step of FIT_STEPS) {
+      if (nav.scrollWidth <= nav.clientWidth + 1) break;
+      top.classList.add(step);
+    }
+  }
+  if (was && !top.classList.contains("compact")) setMenu(false);
+}
+addEventListener("resize", () => requestAnimationFrame(fitHeader));
+if (document.fonts) document.fonts.ready.then(fitHeader);
 function setMenu(open) {
   $("#mnav").classList.toggle("hidden", !open);
   $("#mnavBg").classList.toggle("hidden", !open);
