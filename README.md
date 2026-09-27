@@ -276,8 +276,10 @@ hardware (UUID da placa-mãe; se vier genérico, o MAC da 1ª placa de rede fís
 não o número em si. Se o **mesmo PC** for reinstalado com a **mesma ISO**, a entrada
 nova herda apelido, notas, SSH manual, permissões de sócio e o túnel WireGuard
 (mesmo IP e mesmos acessos de dispositivos), e a antiga some. Só junta quando a
-antiga está parada há 15 min ou mais, para não misturar VMs clonadas ligadas ao
-mesmo tempo. Outra ISO, ou o mesmo pendrive em outro PC, continuam como máquinas
+antiga avisou que desligou ou está parada há 15 min ou mais; se ainda não estava no
+1º relatório, tenta de novo a cada relatório nas primeiras 2 h da entrada nova (o que
+você já editou na nova é mantido). Assim VMs clonadas ligadas ao mesmo tempo não se
+misturam. Outra ISO, ou o mesmo pendrive em outro PC, continuam como máquinas
 separadas. Pendrives gravados antes dessa versão não mandam o hash; neles a
 entrada antiga fica vermelha até ser removida.
 
