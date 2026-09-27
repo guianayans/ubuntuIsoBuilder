@@ -279,7 +279,10 @@ nova herda apelido, notas, SSH manual, permissões de sócio e o túnel WireGuar
 antiga avisou que desligou ou está parada há 15 min ou mais; se ainda não estava no
 1º relatório, tenta de novo a cada relatório nas primeiras 2 h da entrada nova (o que
 você já editou na nova é mantido). Assim VMs clonadas ligadas ao mesmo tempo não se
-misturam. Outra ISO, ou o mesmo pendrive em outro PC, continuam como máquinas
+misturam. O IP da VPN (10.77.x.x) é do túnel, não da rede do cliente: o PC pode ter
+ganhado outro IP na rede local que a VPN continua igual. Só o "acesso à rede local"
+é desligado se a rede do PC reinstalado mudou (ou a placa mudou de nome); é só
+ligar de novo na aba da VPN. Outra ISO, ou o mesmo pendrive em outro PC, continuam como máquinas
 separadas. Pendrives gravados antes dessa versão não mandam o hash; neles a
 entrada antiga fica vermelha até ser removida.
 

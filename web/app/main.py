@@ -855,8 +855,25 @@ def _adopt_reinstalled(con, key: str, build_id: str, hw: str) -> bool:
         con.execute("UPDATE wg_machines SET machine_key=?, server_pubkey=? WHERE machine_key=?",
                     (key, wnew["server_pubkey"] if wnew else wold["server_pubkey"], old["id"]))
         con.execute("UPDATE wg_clients SET machine_key=? WHERE machine_key=?", (key, old["id"]))
+        # "acesso à rede local" só continua se a rede ainda existir no PC reinstalado
+        # (outra rede ou outro nome de placa: desliga, senão o servidor recusaria o túnel)
+        if wold["lan"] and not _lan_still_there(cur["report"], wold["lan_cidr"], wold["lan_if"]):
+            con.execute("UPDATE wg_machines SET lan=0, lan_cidr='', lan_if='' WHERE machine_key=?", (key,))
     con.execute("DELETE FROM machines WHERE id=?", (old["id"],))
     return True
+
+
+def _lan_still_there(report: str, cidr: str, iface: str) -> bool:
+    import ipaddress
+    try:
+        net = ipaddress.ip_network(cidr)
+        for item in json.loads(report or "{}").get("local_ips") or []:
+            ifn, _, addr = str(item).partition(" ")
+            if ifn == iface and ipaddress.ip_interface(addr).network == net:
+                return True
+    except ValueError:
+        pass
+    return False
 
 
 def _machines(where: str = "", args: tuple = ()) -> list[dict]:
