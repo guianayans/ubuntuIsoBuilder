@@ -137,6 +137,8 @@ def init_db() -> None:
             con.execute("ALTER TABLE machines ADD COLUMN off_at INTEGER")
         if "off_reason" not in mcols:
             con.execute("ALTER TABLE machines ADD COLUMN off_reason TEXT NOT NULL DEFAULT ''")
+        if "hw_id" not in mcols:  # hash da identidade do hardware (reconhece o PC reinstalado)
+            con.execute("ALTER TABLE machines ADD COLUMN hw_id TEXT NOT NULL DEFAULT ''")
 
 
 # --------------------------------------------------------------------- senhas

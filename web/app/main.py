@@ -799,19 +799,51 @@ async def agent_report(request: Request):
     if not re.match(r"^[0-9a-f]{32}$", mid) or not core.HOSTNAME_RE.match(host):
         raise HTTPException(400, "machine_id/hostname inválidos")
     key = core.token_hash(f"{b['id']}:{mid}")[:16]
+    hw = str(rep_.get("hw_id") or "")
+    hw = hw if re.fullmatch(r"[0-9a-f]{64}", hw) else ""
     now_ = core.now()
     with core.db() as con:
+        new = not con.execute("SELECT 1 FROM machines WHERE id=?", (key,)).fetchone()
         con.execute(
-            "INSERT INTO machines (id,build_id,machine_id,hostname,first_seen,last_seen,report,source_ip) "
-            "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET hostname=excluded.hostname, "
+            "INSERT INTO machines (id,build_id,machine_id,hostname,first_seen,last_seen,report,source_ip,hw_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET hostname=excluded.hostname, "
             "last_seen=excluded.last_seen, report=excluded.report, source_ip=excluded.source_ip, "
-            "off_at=NULL, off_reason=''",
-            (key, b["id"], mid, host, now_, now_, json.dumps(rep_), client_ip(request)))
+            "hw_id=excluded.hw_id, off_at=NULL, off_reason=''",
+            (key, b["id"], mid, host, now_, now_, json.dumps(rep_), client_ip(request), hw))
+        moved = _adopt_reinstalled(con, key, b["id"], hw) if new and hw else False
+    if moved:
+        wg.write_desired()
     resp = {"ok": True, "interval": 600}
     wg_pub = str((data.get("wg") or {}).get("pubkey") or "") if isinstance(data.get("wg"), dict) else ""
     if wg_pub and json.loads(b["summary"] or "{}").get("WG_ENABLED") == "yes":
         resp["wg"] = wg.register_server(key, wg_pub) if wg.enabled() else {"pending": "hub não configurado no painel"}
     return resp
+
+
+REINSTALL_QUIET = 900  # a entrada antiga precisa estar parada há 15 min (evita juntar VMs clonadas ligadas)
+
+
+def _adopt_reinstalled(con, key: str, build_id: str, hw: str) -> bool:
+    """Mesmo PC reinstalado com a MESMA ISO (mesmo hardware, machine-id novo): a entrada
+    nova herda nome, anotações, SSH, permissões de sócio e o túnel WireGuard (mesmo IP e
+    acessos de dispositivos) da antiga, que é removida. Outra ISO ou outro PC nunca se misturam."""
+    old = con.execute(
+        "SELECT * FROM machines WHERE build_id=? AND hw_id=? AND id!=? AND (last_seen<? OR off_at IS NOT NULL) "
+        "ORDER BY last_seen DESC LIMIT 1", (build_id, hw, key, core.now() - REINSTALL_QUIET)).fetchone()
+    if not old:
+        return False
+    con.execute("UPDATE machines SET label=?, notes=?, ssh_host=?, ssh_port=? WHERE id=?",
+                (old["label"], old["notes"], old["ssh_host"], old["ssh_port"], key))
+    con.execute("UPDATE OR IGNORE partner_perms SET ref=? WHERE kind='machine' AND ref=?", (key, old["id"]))
+    con.execute("DELETE FROM partner_perms WHERE kind='machine' AND ref=?", (old["id"],))
+    if not con.execute("SELECT 1 FROM wg_machines WHERE machine_key=?", (key,)).fetchone():
+        con.execute("UPDATE wg_machines SET machine_key=? WHERE machine_key=?", (key, old["id"]))
+        con.execute("UPDATE wg_clients SET machine_key=? WHERE machine_key=?", (key, old["id"]))
+    else:  # o novo já tem túnel próprio: o antigo sai (revogado)
+        con.execute("DELETE FROM wg_clients WHERE machine_key=?", (old["id"],))
+        con.execute("DELETE FROM wg_machines WHERE machine_key=?", (old["id"],))
+    con.execute("DELETE FROM machines WHERE id=?", (old["id"],))
+    return True
 
 
 def _machines(where: str = "", args: tuple = ()) -> list[dict]:

@@ -271,6 +271,16 @@ O servidor envia, por HTTPS, com um token único por ISO (no banco fica só o ha
 
 Nenhuma senha ou chave é enviada.
 
+**PC reinstalado não duplica.** O relatório leva também um *hash* da identidade do
+hardware (UUID da placa-mãe; se vier genérico, o MAC da 1ª placa de rede física), e
+não o número em si. Se o **mesmo PC** for reinstalado com a **mesma ISO**, a entrada
+nova herda apelido, notas, SSH manual, permissões de sócio e o túnel WireGuard
+(mesmo IP e mesmos acessos de dispositivos), e a antiga some. Só junta quando a
+antiga está parada há 15 min ou mais, para não misturar VMs clonadas ligadas ao
+mesmo tempo. Outra ISO, ou o mesmo pendrive em outro PC, continuam como máquinas
+separadas. Pendrives gravados antes dessa versão não mandam o hash; neles a
+entrada antiga fica vermelha até ser removida.
+
 A lista mostra quem está **online** (relatório nos últimos 25 min). Clicar numa
 máquina abre um **overlay** com:
 

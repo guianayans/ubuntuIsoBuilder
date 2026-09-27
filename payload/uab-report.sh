@@ -27,7 +27,7 @@ if [ "${1:-}" = --shutdown ]; then
 fi
 
 payload="$(python3 - <<'PY'
-import json, os, re, shutil, socket, subprocess
+import hashlib, json, os, re, shutil, socket, subprocess
 
 def sh(*cmd, timeout=10):
     try:
@@ -107,10 +107,38 @@ def ssh_port():
     return int(conf.get("UAB_SSH_PORT") or 22)
 
 
+def hw_id():
+    """Identidade do HARDWARE (não muda ao formatar): UUID da placa-mãe (SMBIOS) ou,
+    se o fabricante deixou genérico/vazio, o MAC da 1ª placa de rede física. Vai só
+    o hash: o painel reconhece o mesmo PC reinstalado sem receber o número em si."""
+    ident = ""
+    try:
+        u = open("/sys/class/dmi/id/product_uuid").read().strip().lower()
+        h = u.replace("-", "")
+        if (re.fullmatch(r"[0-9a-f]{32}", h) and len(set(h)) > 2
+                and u not in ("03000200-0400-0500-0006-000700080009", "00020003-0004-0005-0006-000700080009")):
+            ident = "smbios:" + u
+    except OSError:
+        pass
+    if not ident:
+        try:
+            for n in sorted(os.listdir("/sys/class/net")):
+                if not os.path.exists(f"/sys/class/net/{n}/device"):
+                    continue  # só placas físicas (sem bridge, docker, wg, tailscale…)
+                mac = open(f"/sys/class/net/{n}/address").read().strip().lower()
+                if re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) and mac != "00:00:00:00:00:00":
+                    ident = "mac:" + mac
+                    break
+        except OSError:
+            pass
+    return hashlib.sha256(("uab-hw:" + ident).encode()).hexdigest() if ident else ""
+
+
 load = os.getloadavg()
 
 print(json.dumps({
     "machine_id": open("/etc/machine-id").read().strip(),
+    "hw_id": hw_id(),
     "hostname": socket.gethostname(),
     "build_id": conf.get("UAB_BUILD_ID", ""),
     "admin_user": conf.get("UAB_ADMIN_USER", ""),
