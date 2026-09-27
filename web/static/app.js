@@ -704,7 +704,7 @@ async function loadUsers() {
       if (a === "reset") { if (!confirm("Gerar nova senha? A atual deixa de funcionar.")) return; showCred(await api(`/api/admin/users/${id}/reset`, { method: "POST" }), "Nova senha gerada"); }
       if (a === "extend") { await api(`/api/admin/users/${id}/extend`, { method: "POST", body: { duration: "24h" } }); toast("Validade: mais 24 horas a partir de agora."); }
       if (a === "revoke") { if (!confirm("Revogar este acesso agora?")) return; await api(`/api/admin/users/${id}/revoke`, { method: "POST" }); }
-      if (a === "delete") { if (!confirm("Excluir a conta (e as ISOs dela, se houver)? Sócios perdem também o acesso ao Remoto.")) return; await api(`/api/admin/users/${id}`, { method: "DELETE" }); }
+      if (a === "delete") { if (!confirm("Excluir a conta? Os arquivos das ISOs dela são apagados, mas os PCs instalados com pendrives já gravados continuam aparecendo em Máquinas. Sócios perdem também o acesso ao Remoto.")) return; await api(`/api/admin/users/${id}`, { method: "DELETE" }); }
       loadUsers();
     } catch (e) { toast(e.message); }
   });

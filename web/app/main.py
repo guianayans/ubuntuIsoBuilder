@@ -399,9 +399,16 @@ async def delete_user(uid: int, _: core.User = Depends(admin_user)):
             pass
     with core.db() as con:
         con.execute("DELETE FROM partner_perms WHERE user_id=?", (uid,))
-        for r in con.execute("SELECT id FROM builds WHERE user_id=?", (uid,)).fetchall():
-            builder.delete_build_files(r["id"])
-        con.execute("DELETE FROM builds WHERE user_id=?", (uid,))
+        # o registro das ISOs fica (passa para o admin): pendrive já gravado com elas
+        # continua se reportando e o PC aparece em Máquinas mesmo instalado depois.
+        # Só os arquivos das ISOs prontas são apagados do servidor.
+        for r in con.execute("SELECT id, status FROM builds WHERE user_id=?", (uid,)).fetchall():
+            if r["status"] not in ("queued", "running"):
+                builder.delete_build_files(r["id"])
+                con.execute("UPDATE builds SET status=CASE WHEN status='done' THEN 'deleted' ELSE status END, iso_path=NULL, "
+                            "message=CASE WHEN status='done' THEN 'ISO excluída (a conta que gerou foi removida)' ELSE message END "
+                            "WHERE id=?", (r["id"],))
+        con.execute("UPDATE builds SET user_id=? WHERE user_id=?", (core.ADMIN_ID, uid))
         con.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         con.execute("DELETE FROM dl_tokens WHERE created_by=?", (uid,))
         con.execute("DELETE FROM users WHERE id=?", (uid,))
