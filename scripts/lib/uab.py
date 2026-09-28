@@ -201,12 +201,14 @@ def render(args) -> None:
     write(os.path.join(args.out_dir, "vendor-data"), "", 0o644)
 
     if args.payload_conf:
-        pkgs = BASE_PACKAGES + [p for p in cfg.get("EXTRA_PACKAGES", "").split() if p]
+        extra = [p for p in dict.fromkeys(cfg.get("EXTRA_PACKAGES", "").split()) if p and p not in BASE_PACKAGES]
         conf = {
             "UAB_BUILD_ID": args.build_id,
             "UAB_HOSTNAME": cfg["HOSTNAME_"],
             "UAB_ADMIN_USER": cfg["ADMIN_USER"],
-            "UAB_PACKAGES": " ".join(dict.fromkeys(pkgs)),
+            "UAB_PACKAGES": " ".join(BASE_PACKAGES),
+            # extras escolhidos no assistente: etapa própria, que ignora nome inexistente
+            "UAB_EXTRA_PACKAGES": " ".join(extra),
             # Coolify exige Docker (instalado antes, pelo repositório oficial)
             "UAB_DOCKER": "yes" if cfg.get("COOLIFY_ENABLED") == "yes" else cfg.get("DOCKER_ENABLED", "no"),
             "UAB_COOLIFY": "yes" if cfg.get("COOLIFY_ENABLED") == "yes" else "no",
@@ -401,7 +403,8 @@ def check(args) -> int:
                     c.add("Tailscale", keytext not in text, "auth key NÃO aparece no user-data")
             else:
                 c.add("Tailscale", True, "Tailscale desativado na configuração")
-            c.add("Autoinstall", all(PKG_RE.match(p) for p in conf.get("UAB_PACKAGES", "").split()),
+            c.add("Autoinstall", all(PKG_RE.match(p) for p in (conf.get("UAB_PACKAGES", "") + " "
+                                                               + conf.get("UAB_EXTRA_PACKAGES", "")).split()),
                   "lista de pacotes válida")
     return report(c, args.json)
 

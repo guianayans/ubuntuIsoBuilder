@@ -1282,6 +1282,7 @@ def _asset_version(name: str) -> str:
 # uma cópia antiga depois de uma atualização.
 _INDEX_HTML = open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8").read() \
     .replace("/static/app.js", f"/static/app.js?v={_asset_version('app.js')}") \
+    .replace("/static/pkgicons.js", f"/static/pkgicons.js?v={_asset_version('pkgicons.js')}") \
     .replace("/static/style.css", f"/static/style.css?v={_asset_version('style.css')}")
 
 

@@ -665,7 +665,17 @@ No `./setup.sh` e no passo *Programas* do assistente web:
 | Nenhum | só o sistema, SSH, Tailscale e os pacotes básicos |
 | Docker + Compose | Docker Engine + Compose do repositório oficial (fingerprint da chave conferido) |
 | Coolify | Docker + Coolify (instalador oficial `cdn.coollabs.io`), em `http://<ip>:8000` |
-| Coolify + Cockpit completo | o anterior + Cockpit com todos os módulos, em `https://<ip>:9090` |
+| Coolify + Cockpit completo (**padrão no assistente web**) | o anterior + Cockpit com todos os módulos, em `https://<ip>:9090` |
+
+**Pacotes extras (estilo Ninite):** abaixo do campo "Pacotes extras", **Escolher da
+lista** abre um catálogo por categoria (monitoramento, rede, terminal, arquivos,
+discos, segurança, servidores, backup, hardware), com uma frase explicando cada
+pacote. Marcar escreve o nome no campo, desmarcar apaga, e digitar no campo marca a
+caixa. Todos os nomes do catálogo foram conferidos no Ubuntu 24.04 e 26.04. `nginx`
+e `apache2` mostram aviso quando o Coolify está escolhido (portas 80/443). Os extras
+são instalados numa etapa própria (`extra_packages`), depois dos básicos: um nome que
+não existir naquela versão do Ubuntu é **ignorado com aviso** (aparece em
+Provisionamento), sem travar a instalação.
 
 **Cockpit completo:** usa o mesmo método do `host-mirror`. São 9 pacotes
 instalados numa única transação a partir do `-backports`: `cockpit`,

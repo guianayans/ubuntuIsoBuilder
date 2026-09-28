@@ -202,7 +202,7 @@ const W = {
   net_mode: "dhcp", net_match_type: "mac", net_match_value: "", net_address: "", net_gateway: "", net_dns: "1.1.1.1,8.8.8.8", net_search: "",
   storage_type: "single", storage_value: "", storage_min_gb: 20, storage_layout: "lvm", storage_allow_usb: false,
   ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
-  docker: true, apps: "docker", coolify_email: "", coolify_password: "", coolify_password2: "",
+  docker: true, apps: "coolify_cockpit", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
   gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
@@ -296,7 +296,8 @@ function stepHTML() {
       </div>
       ${toggle("panel_access", "Acesso pelo painel (terminal no navegador)", "O servidor aparece em “Máquinas” e o painel pode abrir um terminal SSH nele, com uma chave própria aceita só pela Tailnet. Sem isso, ele aparece na lista mas o acesso é só do seu computador.")}
       <p class="muted small">Sempre instalados: curl, wget, git, ca-certificates, openssh-server, htop, unzip, rsync.</p>
-      ${field("extra_packages", "Pacotes extras (separados por espaço)", 'placeholder="ex.: vim tmux ncdu"')}
+      ${field("extra_packages", "Pacotes extras (separados por espaço)", 'placeholder="ex.: vim tmux ncdu" autocapitalize="off" spellcheck="false"')}
+      ${pkgCatalog()}
       <h3>Extras</h3>
       ${toggle("ddns", "DDNS No-IP", "Mantém um nome (ex.: meuservidor.ddns.net) apontando para o IP público do servidor, atualizado a cada 5 min.")}
       <div id="ddnsBox" class="grid ${W.ddns ? "" : "hidden"}">${field("ddns_hostname", "Hostname no No-IP", 'placeholder="ex.: meuservidor.ddns.net" autocapitalize="off"')}
@@ -340,6 +341,73 @@ function stepHTML() {
       <div id="werr"></div>`;
     }
   }
+}
+
+/* -------------------------------------------------- catálogo de pacotes (estilo Ninite)
+   Nomes conferidos nos repositórios do Ubuntu 24.04 e 26.04. Marcar escreve no campo
+   "Pacotes extras"; digitar no campo marca/desmarca. [pacote, descrição, aviso?] */
+const PKG_CATALOG = [
+  ["Monitoramento", [["btop", "monitor de CPU, memória, disco e rede"], ["glances", "visão geral do sistema"], ["iotop", "uso de disco por processo"],
+    ["iftop", "uso de rede por conexão"], ["nload", "tráfego de rede em tempo real"], ["ncdu", "o que está ocupando o disco"],
+    ["sysstat", "histórico de CPU e disco (sar)"], ["lm-sensors", "temperaturas"], ["smartmontools", "saúde dos discos"], ["nvtop", "uso da GPU"]]],
+  ["Rede", [["net-tools", "ifconfig e netstat"], ["nmap", "varredura de rede"], ["tcpdump", "captura de pacotes"], ["mtr-tiny", "traceroute contínuo"],
+    ["iperf3", "velocidade na rede local"], ["traceroute", "rota até um destino"], ["dnsutils", "consultar e testar DNS"], ["whois", "dono de domínios e IPs"],
+    ["ethtool", "detalhes da placa de rede"], ["speedtest-cli", "velocidade da internet"]]],
+  ["Terminal e edição", [["vim", "editor de texto avançado"], ["micro", "editor simples, com mouse"], ["tmux", "sessões que continuam após desconectar"],
+    ["screen", "sessões no terminal"], ["bash-completion", "completar comandos com Tab"], ["tree", "pastas em árvore"], ["jq", "ler JSON no terminal"]]],
+  ["Arquivos e compactação", [["zip", "criar .zip"], ["p7zip-full", "compactar e extrair .7z"], ["rclone", "sincronizar com nuvens (Drive, S3, OneDrive)"], ["pv", "progresso em cópias grandes"]]],
+  ["Discos e compartilhamento", [["nfs-common", "montar pastas de outro servidor Linux"], ["cifs-utils", "montar pastas compartilhadas (SMB)"], ["samba", "compartilhar pastas com Windows"],
+    ["ntfs-3g", "ler e gravar discos do Windows"], ["exfatprogs", "pendrives e HDs exFAT"], ["nvme-cli", "saúde e ajustes de SSDs NVMe"], ["zfsutils-linux", "sistema de arquivos com snapshots"],
+    ["mdadm", "RAID por software"], ["hdparm", "ajustes e testes de disco"]]],
+  ["Segurança", [["ufw", "firewall simples (instala desligado)"], ["clamav", "antivírus"], ["lynis", "auditoria de segurança"],
+    ["auditd", "registro de auditoria"], ["unattended-upgrades", "instala correções de segurança sozinho"]]],
+  ["Servidores e linguagens", [["nginx", "servidor web", "coolify"], ["apache2", "servidor web", "coolify"], ["mariadb-server", "banco de dados compatível com MySQL"],
+    ["postgresql", "banco de dados"], ["redis-server", "cache e filas em memória"], ["python3-pip", "instalar bibliotecas Python"], ["nodejs", "rodar apps JavaScript"], ["openjdk-21-jre-headless", "rodar programas Java"]]],
+  ["Backup", [["restic", "backup com criptografia"], ["borgbackup", "backup com deduplicação"]]],
+  ["Hardware", [["pciutils", "placas instaladas no PC"], ["usbutils", "aparelhos USB conectados"], ["dmidecode", "placa-mãe e memórias"], ["lshw", "inventário de hardware"]]],
+];
+// nome amigável quando o do pacote não é o que as pessoas conhecem
+const PKG_NAMES = { "p7zip-full": "7-Zip", "mariadb-server": "MariaDB", postgresql: "PostgreSQL", "redis-server": "Redis",
+  "python3-pip": "Python (pip)", nodejs: "Node.js", "openjdk-21-jre-headless": "Java 21", apache2: "Apache", nginx: "NGINX",
+  "zfsutils-linux": "ZFS", clamav: "ClamAV", "speedtest-cli": "Speedtest", "bash-completion": "Bash completion", "lm-sensors": "Sensores",
+  smartmontools: "SMART", "unattended-upgrades": "Atualizações automáticas", "nfs-common": "NFS", "cifs-utils": "Pastas do Windows",
+  samba: "Samba", "ntfs-3g": "NTFS", exfatprogs: "exFAT", "nvme-cli": "NVMe", dnsutils: "dig e nslookup", pciutils: "lspci", usbutils: "lsusb",
+  borgbackup: "Borg", "mtr-tiny": "mtr", rclone: "Rclone", vim: "Vim", tmux: "tmux", jq: "jq", ufw: "UFW", lynis: "Lynis", nvtop: "nvtop" };
+function pkgIcon(p) {
+  const ic = (window.PKG_ICONS || {})[p];
+  const svg = !ic ? "" : ic.t === "b" ? `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ic.d}</svg>`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ic.d}</svg>`;
+  return `<span class="pkgico" style="--c:${ic ? ic.c : "#64748b"}">${svg || esc(p.slice(0, 2))}<i class="pkgchk" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></i></span>`;
+}
+function pkgCatalog() {
+  return `<details class="pkgcat" id="pkgcat"><summary>Escolher da lista <span class="muted small" id="pkgcount"></span></summary>
+    <p class="muted small">Marque o que quiser: o nome vai para o campo acima (dá para digitar outros). Instalados no primeiro boot; um nome que não existir nesta versão do Ubuntu é ignorado, sem travar a instalação.</p>
+    ${PKG_CATALOG.map(([g, items]) => `<fieldset class="pkggrp"><legend>${esc(g)}</legend><div class="pkgitems">${items.map(([p, d, warn]) =>
+      `<label class="pkgitem" title="${esc(p)}: ${esc(d)}"><input type="checkbox" data-pkg="${esc(p)}" ${warn ? `data-warn="${warn}"` : ""}>${pkgIcon(p)}
+        <span class="pkgtxt"><b>${esc(PKG_NAMES[p] || p)}</b>${PKG_NAMES[p] && PKG_NAMES[p].toLowerCase() !== p ? `<code>${esc(p)}</code>` : ""}<small>${esc(d)}</small>${warn ? `<em class="pkgwarn">usa as portas 80/443, que são do Coolify</em>` : ""}</span></label>`).join("")}</div></fieldset>`).join("")}
+  </details>`;
+}
+function syncPkgs() {
+  const f = $('input[name="extra_packages"]'); if (!f) return;
+  const set = new Set(f.value.split(/\s+/).filter(Boolean)), coolify = ($('input[name="apps"]:checked') || {}).value?.startsWith("coolify");
+  let n = 0;
+  $$("#pkgcat [data-pkg]").forEach(c => {
+    c.checked = set.has(c.dataset.pkg); if (c.checked) n++;
+    const it = c.closest(".pkgitem"); it.classList.toggle("on", c.checked); it.classList.toggle("warn", !!(c.dataset.warn && coolify));
+  });
+  const cnt = $("#pkgcount"); if (cnt) cnt.textContent = n ? `(${n} marcado${n > 1 ? "s" : ""})` : "";
+}
+function wirePkgCatalog() {
+  const f = $('input[name="extra_packages"]'); if (!f || !$("#pkgcat")) return;
+  $$("#pkgcat [data-pkg]").forEach(c => c.onchange = () => {
+    const list = f.value.split(/\s+/).filter(Boolean).filter(p => p !== c.dataset.pkg);
+    if (c.checked) list.push(c.dataset.pkg);
+    f.value = list.join(" ");
+    syncPkgs();
+  });
+  f.addEventListener("input", syncPkgs);
+  syncPkgs();
+  if (f.value.trim()) $("#pkgcat").open = true;
 }
 
 function collect() {
@@ -419,7 +487,8 @@ function renderWizard() {
     $("#pwhelp").textContent = (pw ? "Mínimo 12 caracteres. Usada no SSH, no sudo e no console." : "Mínimo 10 caracteres. Usada no sudo e no console físico.") + " Não fica salva: só o hash vai na ISO.";
   });
   $$('input[name="storage_type"]').forEach(r => r.onchange = () => $("#sval").classList.toggle("hidden", r.value === "single"));
-  $$('input[name="apps"]').forEach(r => r.onchange = () => $("#coolifyBox").classList.toggle("hidden", !r.value.startsWith("coolify")));
+  $$('input[name="apps"]').forEach(r => r.onchange = () => { $("#coolifyBox").classList.toggle("hidden", !r.value.startsWith("coolify")); syncPkgs(); });
+  wirePkgCatalog();
   const dl = $('input[name="deliver_on"]'); if (dl) dl.onchange = () => $("#deliverBox").classList.toggle("hidden", !dl.checked);
   const ts = $('input[name="tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
   [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"]].forEach(([n, box]) => {

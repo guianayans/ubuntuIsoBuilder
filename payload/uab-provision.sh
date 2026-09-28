@@ -46,6 +46,7 @@ UAB_COOLIFY="${UAB_COOLIFY:-no}"; UAB_COCKPIT="${UAB_COCKPIT:-no}"
 UAB_DDNS="${UAB_DDNS:-no}"; UAB_CLOUDFLARE="${UAB_CLOUDFLARE:-no}"; UAB_GPU="${UAB_GPU:-no}"
 UAB_VIRT="${UAB_VIRT:-no}"; UAB_VIRT_BRIDGE="${UAB_VIRT_BRIDGE:-no}"; UAB_TWEAKS="${UAB_TWEAKS:-no}"
 UAB_REMOTE_AGENT="${UAB_REMOTE_AGENT:-no}"; UAB_REMOTE_URL="${UAB_REMOTE_URL:-}"
+UAB_EXTRA_PACKAGES="${UAB_EXTRA_PACKAGES:-}"
 . /etc/os-release
 CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
 
@@ -120,6 +121,7 @@ MOTD
 # Etapas que esta instalação vai rodar (o painel mostra "X de Y").
 plan_steps() {
   local p="ssh_keys ssh_harden ssh_port base_packages"
+  [ -n "$UAB_EXTRA_PACKAGES" ] && p="$p extra_packages"
   [ "$UAB_TAILSCALE" = yes ] && p="$p tailscale_install tailscale_login"
   [ "${UAB_WG:-no}" = yes ] && p="$p wireguard_install"
   [ "$UAB_DOCKER" = yes ] && p="$p docker_install"
@@ -518,6 +520,22 @@ base_packages() {
   fi
 }
 
+# Pacotes extras escolhidos no assistente. Separados dos básicos: um nome que não
+# existe nesta versão do Ubuntu é ignorado (com aviso) em vez de travar a instalação.
+extra_packages() {
+  local p ok=() skip=()
+  apt-get -q -o DPkg::Lock::Timeout=900 update || return 1
+  for p in $UAB_EXTRA_PACKAGES; do
+    if [ -n "$(apt-cache policy "$p" 2>/dev/null | awk '/Candidate:/ && $2 != "(none)"')" ]; then ok+=("$p"); else skip+=("$p"); fi
+  done
+  if [ ${#ok[@]} -gt 0 ]; then apt_install "${ok[@]}" || return 1; fi
+  if [ ${#skip[@]} -gt 0 ]; then
+    log "pacotes extras ignorados (não existem nesta versão do Ubuntu): ${skip[*]}"
+    status_set extra_packages_info "ignorados (não existem no Ubuntu $VERSION_ID): ${skip[*]}"
+  fi
+  return 0
+}
+
 tailscale_install() {
   command -v gpg >/dev/null 2>&1 || apt_install gnupg || return 1
   fetch_key "https://pkgs.tailscale.com/stable/ubuntu/$CODENAME.noarmor.gpg" \
@@ -705,6 +723,7 @@ step ssh_harden ssh_harden
 step ssh_port ssh_port
 if network_ready; then
   step base_packages base_packages
+  if [ -n "$UAB_EXTRA_PACKAGES" ]; then step extra_packages extra_packages; fi
   if [ "$UAB_TAILSCALE" = yes ]; then
     step tailscale_install tailscale_install
     [ -f "$STATE/tailscale_install.done" ] && step tailscale_login tailscale_login

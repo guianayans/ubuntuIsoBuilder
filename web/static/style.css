@@ -253,3 +253,27 @@ header.top.compact .menu-btn{display:inline-flex;margin-left:auto}
   .card{padding:16px}
   h1{font-size:22px}
 }
+
+/* ---- catálogo de pacotes extras (estilo Ninite) */
+.pkgcat>summary{font-weight:600}
+.pkggrp{border:0;margin:16px 0 0;padding:0;min-width:0}
+.pkggrp legend{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:0;margin-bottom:8px}
+.pkgitems{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:8px}
+.pkgitem{position:relative;display:flex;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:var(--card);transition:border-color .12s,background .12s,transform .12s}
+.pkgitem:hover{border-color:var(--muted);transform:translateY(-1px)}
+.pkgitem input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:0;pointer-events:none}
+.pkgitem:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.pkgico{position:relative;flex:none;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--c);color:#fff;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);font-weight:700;font-size:13px;text-transform:uppercase}
+.pkgico>svg{width:22px;height:22px}
+.pkgchk{position:absolute;right:-6px;bottom:-6px;width:18px;height:18px;border-radius:50%;background:var(--accent);color:#fff;display:none;place-items:center;box-shadow:0 0 0 2px var(--card)}
+.pkgchk svg{width:11px;height:11px}
+.pkgtxt{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.pkgtxt b{font-size:14px}
+.pkgtxt code{font-size:11px;color:var(--muted);background:none;padding:0}
+.pkgtxt small{color:var(--muted);font-size:12px;margin-top:2px}
+.pkgitem.on{border-color:var(--accent);background:var(--accent-soft)}
+.pkgitem.on .pkgchk{display:grid}
+.pkgitem.on .pkgchk{box-shadow:0 0 0 2px var(--accent-soft)}
+.pkgwarn{display:none;font-style:normal;font-size:11px;color:var(--warn);margin-top:3px}
+.pkgitem.warn .pkgwarn{display:block}
