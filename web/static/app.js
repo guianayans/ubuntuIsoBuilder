@@ -907,7 +907,7 @@ async function loadMachines() {
       <td class="rt-dot">${dot(m.online, mstate(m))}</td>
       <td class="rt-title"><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</td>
       <td class="small" data-label="Conta">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
-      <td data-label="VPN">${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span><br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
+      <td data-label="VPN">${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span>${m.wg && !m.wg.connected && m.online ? (String(m.wg_reason).startsWith("Conectando") ? ` <span class="muted small">conectando…</span>` : ` <span class="err small" title="${esc(m.wg_reason)}">sem conexão</span>`) : ""}<br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
       <td class="small" data-label="Rede local">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
       <td data-label="Provisionamento">${m.provisioned.startsWith("ok") ? `<span class="pill done">concluído</span>` : `<span class="pill running">${esc(m.provisioned || "em andamento")}</span>`}</td>
       <td class="small" data-label="Visto">${fmtAgo(m.last_seen)}</td>
@@ -1189,7 +1189,7 @@ function tabTerminal() {
   const viaTs = p.state === "Running" && m.tailscale_ip;
   const reason = !m.panel_access ? "Esta ISO foi gerada sem “acesso pelo painel”: a chave do painel não está no servidor. Use “Conectar do meu computador”."
     : m.ssh_host || viaWg || viaTs ? ""
-    : m.wg ? "O túnel WireGuard desta máquina está desconectado agora (servidor desligado ou sem internet?)."
+    : m.wg ? (m.wg_reason || "O túnel WireGuard desta máquina está desconectado agora.")
     : !m.tailscale_ip ? "A máquina ainda não informou IP do Tailscale nem se conectou ao hub WireGuard. Aguarde ou defina um endereço em Configurações."
     : (p.message || "O painel não está na Tailnet.");
   $("#ovlBody").innerHTML = `${provBanner(m)}
@@ -1247,6 +1247,8 @@ async function tabVpn() {
       ${kv("Hub", d.hub.online ? `<span class="ok">no ar</span> · <span class="mono small">${esc(d.endpoint)}</span>` : `<span class="err">${esc(d.hub.message || "fora do ar")}</span>`)}
       ${kv("Rede do cliente", w.lan ? `<span class="mono">${esc(w.lan_cidr)}</span> → <span class="mono">${esc(w.lan_map)}</span>` : "desligada")}
     </div>
+    ${!w.connected && m.wg_reason ? `<div class="note warn u-mt12"><b>Por que não conecta:</b> ${esc(m.wg_reason)}</div>` : ""}
+    ${m.wg_note ? `<div class="note u-mt12">${esc(m.wg_note)}</div>` : ""}
     <h3>Conectar um dispositivo seu (Mac, Windows, celular)</h3>
     <p class="small muted">Gera uma configuração só para este servidor. Instale o app oficial do WireGuard, importe o arquivo ou escaneie o QR code e ative. A chave privada é mostrada <b>uma única vez</b>.</p>
     <form id="wgNew" class="row"><input name="name" placeholder="ex.: MacBook do suporte" maxlength="40"><button class="btn primary" type="submit">Gerar acesso</button></form>

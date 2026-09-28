@@ -370,6 +370,14 @@ roteador ou CGNAT do cliente, sem mexer na rede do hotel.
      `10.200.5.50`. O servidor aplica `NETMAP`/`MASQUERADE` em até 10 minutos, no
      próximo relatório. Depois disso, gere o acesso do dispositivo de novo para
      incluir essa rota.
+     Se a rede mudar de placa (ex.: a ponte `br0` da Virtualização pega o IP da
+     `enp3s0`), o painel e o servidor passam a usar a placa nova sozinhos; se a rede
+     sumir, só essa opção é desligada. Problema no acesso à rede local nunca derruba
+     o túnel.
+   - **Por que não conecta:** com o túnel desconectado, a aba mostra o motivo:
+     máquina desligada, hub fora do ar, configuração recusada pelo servidor, ou
+     rede do cliente bloqueando UDP (quando as outras máquinas conectam e só esta
+     não) / porta ou DDNS do seu lado (quando nenhuma conecta).
 4. **Terminal no navegador:** o painel usa o túnel automaticamente, pelo hub (proxy
    SOCKS5 com senha, só para destinos da VPN). Não precisa de Tailscale.
 

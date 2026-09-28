@@ -87,18 +87,31 @@ def main():
         if n.overlaps(net) or n.overlaps(lanmap_net):
             fail(f"a rede local {n} ({ifn}) conflita com a VPN {net}/{lanmap_net}; túnel não aplicado")
 
+    # Acesso à rede local: problema nele NUNCA derruba o túnel (só essa opção fica de fora).
+    # Se a rede mudou de placa (ex.: a ponte br0 da Virtualização pegou o IP da enp3s0),
+    # usa a placa que tem a rede agora.
     lan = cfg.get("lan") if isinstance(cfg.get("lan"), dict) else None
+    lan_note = ""
     post_up, post_down = [], []
     if lan:
         try:
             lcidr = ipaddress.ip_network(lan["cidr"])
             lmap = ipaddress.ip_network(lan["map"])
             lif = str(lan["iface"])
-        except (KeyError, ValueError):
-            fail("configuração de acesso à rede local inválida")
-        if (lcidr.prefixlen != 24 or lmap.prefixlen != 24 or not lmap.subnet_of(lanmap_net)
-                or (lif, lcidr) not in local_nets() or not re.match(r"^[A-Za-z0-9._-]{1,15}$", lif)):
-            fail(f"a rede local {lcidr} não existe na interface {lif} deste servidor")
+            assert lcidr.prefixlen == 24 and lmap.prefixlen == 24 and lmap.subnet_of(lanmap_net)
+        except (KeyError, ValueError, AssertionError):
+            lan, lan_note = None, "acesso à rede local ignorado: configuração inválida"
+    if lan:
+        holders = [ifn for ifn, n in local_nets() if n == lcidr and re.match(r"^[A-Za-z0-9._-]{1,15}$", ifn)]
+        if lif not in holders:
+            if holders:
+                lan_note = f"rede local {lcidr} agora está na interface {holders[0]} (era {lif})"
+                lif = holders[0]
+            else:
+                lan, lan_note = None, f"acesso à rede local desligado: a rede {lcidr} não existe mais neste servidor"
+        if lan_note:
+            print("uab-wg:", lan_note)
+    if lan:
         rules = [
             f"iptables -t nat -A PREROUTING -i %i -d {lmap} -j NETMAP --to {lcidr}",
             f"iptables -t nat -A POSTROUTING -s {net} -d {lcidr} -o {lif} -j MASQUERADE",
@@ -141,7 +154,7 @@ def main():
     if not hs or time.time() - hs > 180:
         sh("wg", "set", IFACE, "peer", cfg["hub_pubkey"], "endpoint", cfg["endpoint"])
     save_status(state="ativo" if hs and time.time() - hs < 180 else "conectando", address=str(addr),
-                handshake=hs, lan=str(lan["map"]) if lan else "", message="")
+                handshake=hs, lan=str(lan["map"]) if lan else "", message=lan_note)
 
 
 if __name__ == "__main__":

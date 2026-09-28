@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import struct
+import time
 import zipfile
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -854,6 +855,8 @@ async def agent_report(request: Request):
         return resp
     wg_pub = str((data.get("wg") or {}).get("pubkey") or "") if isinstance(data.get("wg"), dict) else ""
     if wg_pub and json.loads(b["summary"] or "{}").get("WG_ENABLED") == "yes":
+        if wg.enabled():
+            _fix_lan_iface(key, rep_)
         resp["wg"] = wg.register_server(key, wg_pub) if wg.enabled() else {"pending": "hub não configurado no painel"}
     return resp
 
@@ -920,6 +923,34 @@ def _archive_replaced(con, key: str, build_id: str, hw: str, host: str) -> list[
     return [o["id"] for o in olds]
 
 
+def _fix_lan_iface(key: str, rep: dict) -> None:
+    """"Acesso à rede local" apontando para uma placa que não tem mais a rede (ex.: a
+    ponte br0 da Virtualização pegou o IP da enp3s0): corrige para a placa certa, ou
+    desliga a opção se a rede sumiu. Servidores antigos recusariam o túnel inteiro."""
+    import ipaddress
+    w = wg.machine_wg(key)
+    if not w or not w["lan"] or not w["lan_cidr"]:
+        return
+    try:
+        net = ipaddress.ip_network(w["lan_cidr"])
+        holders = []
+        for item in rep.get("local_ips") or []:
+            ifn, _, addr = str(item).partition(" ")
+            if ipaddress.ip_interface(addr).network == net and re.match(r"^[A-Za-z0-9._-]{1,15}$", ifn):
+                holders.append(ifn)
+    except ValueError:
+        return
+    if w["lan_if"] in holders:
+        return
+    with core.db() as con:
+        if holders:
+            con.execute("UPDATE wg_machines SET lan_if=?, updated_at=? WHERE machine_key=?", (holders[0], core.now(), key))
+        else:
+            con.execute("UPDATE wg_machines SET lan=0, lan_cidr='', lan_if='', updated_at=? WHERE machine_key=?",
+                        (core.now(), key))
+    wg.write_desired()
+
+
 def _lan_still_there(report: str, cidr: str, iface: str) -> bool:
     import ipaddress
     try:
@@ -933,6 +964,41 @@ def _lan_still_there(report: str, cidr: str, iface: str) -> bool:
     return False
 
 
+def _vpn_reason(m: dict, hub: dict) -> tuple[str, str]:
+    """Por que a VPN desta máquina não conecta (texto para o painel) e avisos do túnel.
+    Compara com as outras máquinas: se elas conectam e esta não, o problema está na
+    rede do cliente (UDP bloqueado); se nenhuma conecta, está do lado do hub/roteador."""
+    w, rep = m["wg"], (m.get("report") or {}).get("wg") or {}
+    rep = rep if isinstance(rep, dict) else {}
+    note = str(rep.get("message") or "") if rep.get("state") in ("ativo", "conectando") else ""
+    if w.get("connected"):
+        return "", note
+    port = wg.HUB_ENDPOINT.rsplit(":", 1)[-1]
+    if m.get("archived_at"):
+        return "Máquina arquivada: o túnel fica pausado até restaurar.", ""
+    if not hub.get("online"):
+        return ("O hub WireGuard do seu servidor está fora do ar (serviço wg-hub no Coolify): "
+                "todas as VPNs ficam desconectadas até ele voltar."), ""
+    if not m.get("online"):
+        return "A máquina está desligada ou sem internet: o túnel volta sozinho quando ela ligar.", ""
+    if rep.get("state") == "erro":
+        return f"O servidor recusou a configuração do túnel: {rep.get('message') or 'erro desconhecido'}.", ""
+    if rep.get("state") == "aguardando":
+        return f"O túnel ainda não foi configurado no servidor: {rep.get('message') or 'aguardando o painel'}.", ""
+    if time.time() - (m.get("first_seen") or 0) < 300:
+        return "Conectando: a máquina acabou de aparecer; o túnel sobe em alguns minutos.", ""
+    mine = w.get("last_handshake") or 0
+    others = any(time.time() - (p.get("last_handshake") or 0) < wg.HANDSHAKE_OK
+                 for p in (hub.get("peers") or {}).values() if (p.get("last_handshake") or 0) != mine)
+    if others:
+        return (f"A máquina está online (o relatório chega por HTTPS), mas o túnel não tem resposta do hub. "
+                f"Como outras máquinas conectam normalmente, o mais provável é a rede do cliente bloquear UDP "
+                f"de saída (porta {port}); acontece em redes de empresa e de hotel. Peça a liberação ou use "
+                f"o Tailscale nessas ISOs (ele contorna o bloqueio)."), note
+    return (f"Nenhuma máquina consegue conectar ao hub agora: confira se a porta UDP {port} está liberada "
+            f"no seu roteador e se {wg.HUB_ENDPOINT.rsplit(':', 1)[0]} (DDNS) aponta para o IP atual da sua casa."), note
+
+
 def _machines(where: str = "", args: tuple = ()) -> list[dict]:
     with core.db() as con:
         rows = con.execute(f"SELECT * FROM machines {where} ORDER BY last_seen DESC", args).fetchall()
@@ -944,6 +1010,7 @@ def _machines(where: str = "", args: tuple = ()) -> list[dict]:
         dls: dict[str, list] = {}
         for r in con.execute("SELECT build_id, email, kind, at FROM downloads ORDER BY at"):
             dls.setdefault(r["build_id"], []).append({"email": r["email"], "kind": r["kind"], "at": r["at"]})
+    hub = wg.hub_status() if wg.enabled() else {}
     out = []
     for r in rows:
         m = panel.machine_row(r, builds)
@@ -961,6 +1028,7 @@ def _machines(where: str = "", args: tuple = ()) -> list[dict]:
                      "cockpit": summ.get("COCKPIT_ENABLED") == "yes"}
         m["wg"] = wg.machine_info(r["id"]) if wg.enabled() else None
         m["archived_at"] = r["archived_at"]
+        m["wg_reason"], m["wg_note"] = _vpn_reason(m, hub) if m["wg"] else ("", "")
         out.append(m)
     return out
 

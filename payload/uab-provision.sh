@@ -732,21 +732,25 @@ fi
 status_set current ""
 update_issue
 sync  # tudo o que esta rodada instalou vai para o disco (resiste a queda de energia)
-# avisa o painel (se a ISO foi gerada por ele); nunca bloqueia o provisionamento
-[ -x /usr/local/sbin/uab-report ] && timeout 60 /usr/local/sbin/uab-report || true
+# avisa o painel (se a ISO foi gerada por ele) DEPOIS de gravar o resultado final
+# desta rodada; nunca bloqueia o provisionamento
+report_now() { [ -x /usr/local/sbin/uab-report ] && timeout 60 /usr/local/sbin/uab-report || true; }
 
 # Driver NVIDIA recém-instalado só carrega reiniciando: reinicia UMA vez, sozinho,
 # quando só isso falta (o provisionador continua no próximo boot).
 if [ "$(echo $FAILED)" = gpu_check ] && [ ! -f "$STATE/gpu-reboot.done" ]; then
   touch "$STATE/gpu-reboot.done"; status_set provisioned "reiniciando para carregar o driver da GPU"
+  report_now
   log "=== reiniciando para carregar o driver NVIDIA ==="
   systemctl --no-block reboot; exit 0
 fi
 if [ -n "$FAILED" ]; then
   status_set provisioned "pendente:$FAILED"
+  report_now
   log "=== etapas pendentes:$FAILED — nova tentativa em 60 s ==="
   exit 1
 fi
 status_set provisioned "ok $(date '+%F %T')"
 log "=== provisionamento concluído ==="
+report_now
 exit 0
