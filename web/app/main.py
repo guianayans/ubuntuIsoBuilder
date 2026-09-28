@@ -388,6 +388,32 @@ async def relink_user(uid: int, request: Request, _: core.User = Depends(admin_u
     return {"ok": True}
 
 
+@app.post("/api/admin/users/{uid}/partner")
+def make_partner(uid: int, _: core.User = Depends(admin_user)):
+    """Transforma uma conta temporária (download ou gerar ISOs) em sócio: mesmo login e
+    senha, sem validade, sem ISOs. Vale também para conta expirada/revogada (reativa).
+    As ISOs que a conta gerou passam para o admin (os PCs delas continuam aparecendo).
+    Devolve as máquinas instaladas com as ISOs dela, para sugerir "Ver" nas permissões."""
+    with core.db() as con:
+        r = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "conta não encontrada")
+        if r["mode"] == "partner":
+            raise core.Invalid("Esta conta já é de sócio.")
+        builds = {x[0] for x in con.execute("SELECT id FROM builds WHERE user_id=?", (uid,))}
+        builds |= {x[0] for x in con.execute("SELECT DISTINCT build_id FROM downloads WHERE email=?", (r["email"],))}
+        if r["build_id"]:
+            builds.add(r["build_id"])
+        con.execute("UPDATE builds SET user_id=? WHERE user_id=?", (core.ADMIN_ID, uid))
+        con.execute("DELETE FROM dl_tokens WHERE created_by=?", (uid,))  # links de download do gravador
+        con.execute("UPDATE users SET mode='partner', expires_at=?, revoked=0, build_id=NULL, max_builds=0 WHERE id=?",
+                    (core.PARTNER_UNTIL, uid))
+        suggest = [x[0] for x in con.execute(
+            f"SELECT id FROM machines WHERE archived_at IS NULL AND build_id IN ({','.join('?' * len(builds))})",
+            tuple(builds))] if builds else []
+    return {"ok": True, "email": r["email"], "suggest": suggest}
+
+
 @app.delete("/api/admin/users/{uid}")
 async def delete_user(uid: int, _: core.User = Depends(admin_user)):
     with core.db() as con:
@@ -438,7 +464,9 @@ async def _sync_partner(uid: int) -> str:
         return ""
     r = _partner(uid)
     perms = core.partner_perms(uid)
-    mp = {ref: p for (k, ref), p in perms.items() if k == "machine"}
+    with core.db() as con:
+        archived = {r[0] for r in con.execute("SELECT id FROM machines WHERE archived_at IS NOT NULL")}
+    mp = {ref: (0 if ref in archived else p) for (k, ref), p in perms.items() if k == "machine"}
     np_ = {ref: p for (k, ref), p in perms.items() if k == "node"}
     try:
         await remoto.sync_partner(uid, r["label"] or r["email"], mp, np_, _machine_hosts())
@@ -799,6 +827,9 @@ async def agent_report(request: Request):
     if not re.match(r"^[0-9a-f]{32}$", mid) or not core.HOSTNAME_RE.match(host):
         raise HTTPException(400, "machine_id/hostname inválidos")
     key = core.token_hash(f"{b['id']}:{mid}")[:16]
+    with core.db() as con:
+        if con.execute("SELECT 1 FROM forgotten_machines WHERE id=?", (key,)).fetchone():
+            raise HTTPException(410, "máquina esquecida no painel")
     hw = str(rep_.get("hw_id") or "")
     hw = hw if re.fullmatch(r"[0-9a-f]{64}", hw) else ""
     now_ = core.now()
@@ -810,9 +841,17 @@ async def agent_report(request: Request):
             "hw_id=excluded.hw_id, off_at=NULL, off_reason=''",
             (key, b["id"], mid, host, now_, now_, json.dumps(rep_), client_ip(request), hw))
         moved = _adopt_reinstalled(con, key, b["id"], hw) if hw else False
-    if moved:
+        replaced = _archive_replaced(con, key, b["id"], hw, host) if hw and not moved else []
+        archived = bool(con.execute("SELECT archived_at FROM machines WHERE id=?", (key,)).fetchone()["archived_at"])
+    if moved or replaced:
         wg.write_desired()
+    for old_id in replaced:
+        await _resync_partners_of(old_id)
     resp = {"ok": True, "interval": 600}
+    if archived:  # arquivada: relatório aceito, mas o túnel fica pausado
+        if json.loads(b["summary"] or "{}").get("WG_ENABLED") == "yes":
+            resp["wg"] = {"pending": "máquina arquivada no painel: túnel pausado"}
+        return resp
     wg_pub = str((data.get("wg") or {}).get("pubkey") or "") if isinstance(data.get("wg"), dict) else ""
     if wg_pub and json.loads(b["summary"] or "{}").get("WG_ENABLED") == "yes":
         resp["wg"] = wg.register_server(key, wg_pub) if wg.enabled() else {"pending": "hub não configurado no painel"}
@@ -838,8 +877,8 @@ def _adopt_reinstalled(con, key: str, build_id: str, hw: str) -> bool:
         (build_id, hw, key, cur["first_seen"], core.now() - REINSTALL_QUIET)).fetchone()
     if not old:
         return False
-    con.execute("UPDATE machines SET label=?, notes=? WHERE id=?",
-                (cur["label"] or old["label"], cur["notes"] or old["notes"], key))
+    con.execute("UPDATE machines SET label=?, notes=?, archived_at=COALESCE(archived_at, ?) WHERE id=?",
+                (cur["label"] or old["label"], cur["notes"] or old["notes"], old["archived_at"], key))
     if not cur["ssh_host"] and cur["ssh_port"] == 22:
         con.execute("UPDATE machines SET ssh_host=?, ssh_port=? WHERE id=?", (old["ssh_host"], old["ssh_port"], key))
     # permissões de sócio: as da antiga passam para a nova (a nova vence se já tiver)
@@ -861,6 +900,24 @@ def _adopt_reinstalled(con, key: str, build_id: str, hw: str) -> bool:
             con.execute("UPDATE wg_machines SET lan=0, lan_cidr='', lan_if='' WHERE machine_key=?", (key,))
     con.execute("DELETE FROM machines WHERE id=?", (old["id"],))
     return True
+
+
+def _archive_replaced(con, key: str, build_id: str, hw: str, host: str) -> list[str]:
+    """Mesmo PC reinstalado com OUTRA ISO: a entrada antiga (parada) é ARQUIVADA sozinha,
+    sem juntar dados (outra ISO pode ter outro nome e outra finalidade). Arquivar é
+    reversível. Só nas primeiras 2 h da entrada nova e contra entradas mais antigas."""
+    cur = con.execute("SELECT first_seen FROM machines WHERE id=?", (key,)).fetchone()
+    if not cur or cur["first_seen"] < core.now() - REINSTALL_WINDOW:
+        return []
+    olds = con.execute(
+        "SELECT id, notes FROM machines WHERE hw_id=? AND build_id!=? AND id!=? AND archived_at IS NULL "
+        "AND first_seen<=? AND (last_seen<? OR off_at IS NOT NULL)",
+        (hw, build_id, key, cur["first_seen"], core.now() - REINSTALL_QUIET)).fetchall()
+    note = f"Arquivada sozinha: o mesmo PC foi reinstalado com outra ISO ({host})."
+    for o in olds:
+        con.execute("UPDATE machines SET archived_at=?, notes=? WHERE id=?",
+                    (core.now(), ((o["notes"] + "\n") if o["notes"] else "") + note, o["id"]))
+    return [o["id"] for o in olds]
 
 
 def _lan_still_there(report: str, cidr: str, iface: str) -> bool:
@@ -903,6 +960,7 @@ def _machines(where: str = "", args: tuple = ()) -> list[dict]:
         m["apps"] = {"docker": summ.get("DOCKER_ENABLED") == "yes", "coolify": summ.get("COOLIFY_ENABLED") == "yes",
                      "cockpit": summ.get("COCKPIT_ENABLED") == "yes"}
         m["wg"] = wg.machine_info(r["id"]) if wg.enabled() else None
+        m["archived_at"] = r["archived_at"]
         out.append(m)
     return out
 
@@ -917,15 +975,15 @@ def _get_machine(mid: str):
 
 def _for_user(ms: list[dict], u: core.User) -> list[dict]:
     if u.is_admin:
-        for m in ms:
-            m["perms"] = core.P_ALL
+        for m in ms:  # arquivada: só ver e configurar (terminal, VPN e tela pausados)
+            m["perms"] = core.P_VIEW | core.P_CONFIG if m.get("archived_at") else core.P_ALL
         return ms
     if not u.is_partner:
         raise HTTPException(403, "sem acesso")
     pp = core.partner_perms(u.id)
     out = []
     for m in ms:
-        p = pp.get(("machine", m["id"]), 0)
+        p = 0 if m.get("archived_at") else pp.get(("machine", m["id"]), 0)
         if p & core.P_VIEW:
             for k in ("downloads", "delivered_to", "owner_email"):  # dados de contas: só o admin
                 m.pop(k, None)
@@ -968,11 +1026,52 @@ async def update_machine(mid: str, request: Request, u: core.User = Depends(curr
     return {"ok": True}
 
 
-@app.delete("/api/machines/{mid}")
-def delete_machine(mid: str, _: core.User = Depends(admin_user)):
+async def _resync_partners_of(mid: str) -> None:
+    """Sócios com permissão nesta máquina: reaplica no Remoto (arquivar/restaurar)."""
     with core.db() as con:
+        uids = [r[0] for r in con.execute(
+            "SELECT DISTINCT user_id FROM partner_perms WHERE kind='machine' AND ref=?", (mid,))]
+    for uid in uids:
+        await _sync_partner(uid)
+
+
+@app.post("/api/machines/{mid}/archive")
+async def archive_machine(mid: str, _: core.User = Depends(admin_user)):
+    """Arquivar: sai da lista; se ligar, o relatório é aceito mas ela continua arquivada.
+    Terminal, VPN (túnel pausado, sem apagar) e sócios ficam bloqueados até restaurar."""
+    _get_machine(mid)
+    with core.db() as con:
+        con.execute("UPDATE machines SET archived_at=COALESCE(archived_at, ?) WHERE id=?", (core.now(), mid))
+    wg.write_desired()
+    await _resync_partners_of(mid)
+    return {"ok": True}
+
+
+@app.post("/api/machines/{mid}/restore")
+async def restore_machine(mid: str, _: core.User = Depends(admin_user)):
+    _get_machine(mid)
+    with core.db() as con:
+        con.execute("UPDATE machines SET archived_at=NULL WHERE id=?", (mid,))
+    wg.write_desired()  # túnel volta com o mesmo IP e os mesmos acessos
+    await _resync_partners_of(mid)
+    return {"ok": True}
+
+
+@app.delete("/api/machines/{mid}")
+async def forget_machine(mid: str, _: core.User = Depends(admin_user)):
+    """Esquecer de vez: apaga dados e túnel e recusa os relatórios desta instalação.
+    (O mesmo PC reinstalado de propósito ganha outra identidade e aparece normalmente.)"""
+    m = _get_machine(mid)
+    with core.db() as con:
+        con.execute("INSERT OR REPLACE INTO forgotten_machines (id, build_id, hostname, forgotten_at) VALUES (?,?,?,?)",
+                    (mid, m["build_id"], m["hostname"], core.now()))
+        uids = [r[0] for r in con.execute(
+            "SELECT DISTINCT user_id FROM partner_perms WHERE kind='machine' AND ref=?", (mid,))]
+        con.execute("DELETE FROM partner_perms WHERE kind='machine' AND ref=?", (mid,))
         con.execute("DELETE FROM machines WHERE id=?", (mid,))
     wg.forget_machine(mid)  # revoga o túnel e todos os acessos de dispositivos
+    for uid in uids:
+        await _sync_partner(uid)
     return {"ok": True}
 
 

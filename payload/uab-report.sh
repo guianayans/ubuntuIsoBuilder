@@ -151,6 +151,8 @@ print(json.dumps({
     "local_ips": local,
     "gateway": sh("sh", "-c", "ip route show default | awk '{print $3; exit}'"),
     "provisioned": steps.pop("provisioned", ""),
+    "provision_plan": steps.pop("plan", "").split(),      # etapas previstas (painel: "X de Y")
+    "provision_current": steps.pop("current", ""),        # etapa rodando agora
     "steps": steps,
     "services": {"ssh": active("ssh.socket") or active("ssh.service"), "tailscaled": active("tailscaled"),
                  "docker": active("docker"), "fail2ban": active("fail2ban"),

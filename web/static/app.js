@@ -685,13 +685,23 @@ async function loadUsers() {
       <td class="rt-actions"><div class="row">${u.mode === "partner"
         ? `<button class="btn sm primary" data-a="perms" data-id="${u.id}" data-email="${esc(u.email)}">Permissões</button>`
         : u.mode === "download" ? `<button class="btn sm ${u.build_ok ? "" : "primary"}" data-a="relink" data-id="${u.id}">${u.build_ok ? "Trocar ISO" : "Vincular ISO"}</button>` : ""}
-      ${kebab(`<button data-a="reset" data-id="${u.id}">Nova senha</button>
+      ${kebab(`${u.mode === "partner" ? "" : `<button data-a="topartner" data-id="${u.id}" data-email="${esc(u.email)}">Tornar sócio</button>`}
+        <button data-a="reset" data-id="${u.id}">Nova senha</button>
         ${u.mode === "partner" ? "" : `<button data-a="extend" data-id="${u.id}">Mais 24 horas de validade</button>`}
         ${u.state === "ativa" ? `<button class="danger" data-a="revoke" data-id="${u.id}">Revogar acesso</button>` : ""}
         <button class="danger" data-a="delete" data-id="${u.id}">Excluir conta</button>`)}</div></td></tr>`).join("")}</table></div>`;
   $$("#ul [data-a]").forEach(btn => btn.onclick = async () => {
     const id = btn.dataset.id, a = btn.dataset.a;
     if (a === "perms") return openPerms(id, btn.dataset.email);
+    if (a === "topartner") {
+      if (!confirm(`Tornar ${btn.dataset.email} sócio?\n\nA conta passa a ser permanente (sem validade), com o mesmo login e senha, e não baixa nem gera mais ISOs. Em seguida você escolhe as máquinas que ela pode acessar.`)) return;
+      try {
+        const r = await api(`/api/admin/users/${id}/partner`, { method: "POST" });
+        toast("Agora é sócio. Escolha as permissões.");
+        await loadUsers();
+        return openPerms(id, r.email, r.suggest);
+      } catch (e) { return toast(e.message); }
+    }
     const box = $("#rl-" + id);
     if (a === "relink" || a === "relink-cancel") { box.classList.toggle("hidden", a === "relink-cancel"); $(`#ul [data-a="relink"][data-id="${id}"]`).classList.toggle("hidden", a === "relink"); return; }
     try {
@@ -729,7 +739,7 @@ addEventListener("resize", () => closeKebabs(null));
 
 /* -------------------------------------------------- sócios: permissões por máquina */
 const PCOLS = [["view", "Ver"], ["terminal", "Terminal"], ["desktop", "Tela"], ["files", "Arquivos"], ["vpn", "VPN"], ["config", "Configurações"]];
-async function openPerms(uid, email) {
+async function openPerms(uid, email, suggest = []) {
   closeOverlay();
   OVL = { perms: uid };
   const el = document.createElement("div");
@@ -745,6 +755,9 @@ async function openPerms(uid, email) {
   try { d = await api(`/api/admin/users/${uid}/perms`); } catch (e) { $("#pBody").innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
   const B = d.bits, ALL = Object.values(B).reduce((a, b) => a | b, 0), NODE_ALL = B.view | B.terminal | B.desktop | B.files;
   const cur = {}; d.items.forEach(i => { cur[i.kind + ":" + i.ref] = i.perms; });
+  // conta convertida em sócio: as máquinas da ISO que ela recebeu já vêm com "Ver" (nada vale até salvar)
+  const sug = suggest.filter(id => d.machines.some(m => m.id === id) && !cur["machine:" + id]);
+  sug.forEach(id => { cur["machine:" + id] = B.view; });
   const row = (kind, ref, name, sub, online) => {
     const key = kind + ":" + ref, p = cur[key] || 0, all = kind === "machine" ? ALL : NODE_ALL;
     const cols = PCOLS.map(([k, t]) => (kind === "node" && (k === "vpn" || k === "config"))
@@ -755,6 +768,7 @@ async function openPerms(uid, email) {
   };
   const head = `<tr><th>Máquina</th><th>Tudo</th>${PCOLS.map(([, t]) => `<th>${t}</th>`).join("")}</tr>`;
   $("#pBody").innerHTML = `${d.note ? `<div class="note warn">${esc(d.note)}</div>` : ""}
+    ${sug.length ? `<div class="note">${sug.length === 1 ? "A máquina instalada com a ISO que esta pessoa recebeu já veio" : `As ${sug.length} máquinas instaladas com a ISO que esta pessoa recebeu já vieram`} com <b>Ver</b> marcado. Ajuste e clique em <b>Salvar permissões</b>: nada é liberado antes disso.</div>` : ""}
     <h3>Máquinas do painel</h3>
     ${d.machines.length ? `<div class="table-wrap"><table class="rtable ptable">${head}${d.machines.map(m => row("machine", m.id, m.label || m.hostname, m.hostname, m.online)).join("")}</table></div>` : `<p class="muted">Nenhuma máquina instalada ainda.</p>`}
     ${d.nodes.length ? `<h3>Só no Remoto</h3><p class="muted small">Computadores adicionados por convite (não vieram de uma ISO).</p>
@@ -883,12 +897,13 @@ async function loadMachines() {
   else $("#pbanner").innerHTML = d.hub && d.hub.online
     ? `<div class="note ok">Terminal no navegador pelo <b>WireGuard do seu servidor</b>${d.panel.state === "Running" ? " e pelo Tailscale" : ""}. Máquinas com o túnel conectado abrem direto.</div>`
     : panelBanner(d.panel);
+  const active = d.machines.filter(m => !m.archived_at), arch = d.machines.filter(m => m.archived_at);
   if (!d.machines.length) {
     $("#ml").innerHTML = `<p class="muted">Nenhuma máquina se reportou ainda. As ISOs geradas a partir de agora fazem o servidor aparecer aqui alguns minutos depois do primeiro boot.</p>`;
     return;
   }
-  $("#ml").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
-    ${d.machines.map(m => `<tr class="clickable" data-m="${m.id}">
+  $("#ml").innerHTML = (active.length ? `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
+    ${active.map(m => `<tr class="clickable" data-m="${m.id}">
       <td class="rt-dot">${dot(m.online, mstate(m))}</td>
       <td class="rt-title"><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</td>
       <td class="small" data-label="Conta">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
@@ -896,8 +911,39 @@ async function loadMachines() {
       <td class="small" data-label="Rede local">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
       <td data-label="Provisionamento">${m.provisioned.startsWith("ok") ? `<span class="pill done">concluído</span>` : `<span class="pill running">${esc(m.provisioned || "em andamento")}</span>`}</td>
       <td class="small" data-label="Visto">${fmtAgo(m.last_seen)}</td>
-      <td class="rt-actions"><button class="btn sm primary" data-open="${m.id}">Abrir</button></td></tr>`).join("")}</table></div>`;
-  $$("#ml [data-m]").forEach(tr => tr.onclick = () => openMachine(tr.dataset.m));
+      <td class="rt-actions"><button class="btn sm primary" data-open="${m.id}">Abrir</button></td></tr>`).join("")}</table></div>`
+    : `<p class="muted">Nenhuma máquina ativa. As arquivadas estão logo abaixo.</p>`)
+    + (arch.length ? `<details class="archived" id="archBox" ${ARCH_OPEN ? "open" : ""}><summary>Arquivadas (${arch.length})</summary>
+      <p class="muted small">Fora da lista principal. Se ligarem, os relatórios continuam chegando, mas terminal, VPN (túnel pausado) e acesso de sócios ficam bloqueados até restaurar.</p>
+      <div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Arquivada</th><th>Visto</th><th></th></tr>
+      ${arch.map(m => `<tr class="clickable" data-m="${m.id}"><td class="rt-dot">${dot(m.online, mstate(m))}</td>
+        <td class="rt-title"><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span></td>
+        <td class="small nowrap" data-label="Arquivada">${fmtDate(m.archived_at)}</td>
+        <td class="small" data-label="Visto">${m.online ? `<span class="ok">ligada agora</span>` : fmtAgo(m.last_seen)}</td>
+        <td class="rt-actions"><div class="row"><button class="btn sm" data-restore="${m.id}">Restaurar</button>
+          ${kebab(`<button class="danger" data-forget="${m.id}">Esquecer de vez</button>`)}</div></td></tr>`).join("")}</table></div></details>` : "");
+  $$("#ml [data-m]").forEach(tr => tr.onclick = e => { if (!e.target.closest(".rt-actions")) openMachine(tr.dataset.m); });
+  $$("#ml [data-open]").forEach(b => b.onclick = () => openMachine(b.dataset.open));
+  const ab = $("#archBox"); if (ab) ab.ontoggle = () => { ARCH_OPEN = ab.open; };
+  $$("#ml [data-restore]").forEach(b => b.onclick = () => machineAction(b.dataset.restore, "restore"));
+  $$("#ml [data-forget]").forEach(b => b.onclick = () => machineAction(b.dataset.forget, "forget"));
+}
+let ARCH_OPEN = false;
+
+// Arquivar / restaurar / esquecer de vez (lista e janela da máquina)
+async function machineAction(id, action) {
+  const msg = {
+    archive: "Arquivar esta máquina?\n\nEla sai da lista principal. Se continuar ligada, os relatórios chegam normalmente, mas terminal, VPN (túnel pausado) e acesso de sócios ficam bloqueados até você restaurar. Nada é apagado.",
+    forget: "ESQUECER DE VEZ esta máquina?\n\nApaga os dados, o túnel VPN e os acessos de dispositivos, e o painel passa a RECUSAR os relatórios desta instalação: ela não aparece mais, nem se ligar.\n\nSe o mesmo PC for reinstalado com o pendrive, ele aparece de novo como máquina nova.",
+  }[action];
+  if (msg && !confirm(msg)) return;
+  try {
+    if (action === "forget") await api("/api/machines/" + id, { method: "DELETE" });
+    else await api(`/api/machines/${id}/${action}`, { method: "POST" });
+    toast({ archive: "Máquina arquivada.", restore: "Máquina restaurada: terminal, VPN e sócios voltaram.", forget: "Máquina esquecida." }[action]);
+    if ($("#ovl")) closeOverlay();
+    loadMachines();
+  } catch (e) { toast(e.message); }
 }
 
 /* ---------- overlay */
@@ -1059,7 +1105,7 @@ async function refreshMachine() {
   const d = await api("/api/machines/" + OVL.id);
   OVL.m = d.machine; OVL.panel = d.panel;
   const m = OVL.m;
-  $("#ovlTitle").innerHTML = `${dot(m.online, mstate(m))} <b>${esc(m.label || m.hostname)}</b> <span class="muted small">${mstate(m)} · ${m.off_at ? "avisou " + fmtAgo(m.off_at) : "visto " + fmtAgo(m.last_seen)}</span>`;
+  $("#ovlTitle").innerHTML = `${dot(m.online, mstate(m))} <b>${esc(m.label || m.hostname)}</b> <span class="muted small">${mstate(m)} · ${m.off_at ? "avisou " + fmtAgo(m.off_at) : "visto " + fmtAgo(m.last_seen)}</span>${m.archived_at ? ` <span class="pill">arquivada</span>` : ""}`;
 }
 
 function showTab(t) {
@@ -1071,11 +1117,24 @@ function showTab(t) {
 
 const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
 
+// Aviso enquanto o provisionamento não terminou: "não reinicie" (rodando) ou o que falta.
+function provBanner(m) {
+  const pv = m.provisioned || "", st = m.steps || {};
+  if (pv.startsWith("ok") || !m.online) return "";
+  const plan = m.provision_plan || [], done = plan.filter(k => String(st[k] || "").startsWith("ok")).length;
+  const count = plan.length ? ` (${done} de ${plan.length} etapas)` : "";
+  const failed = Object.entries(st).filter(([, v]) => String(v).startsWith("falhou"));
+  if (m.provision_current || (m.services || {})["uab-provision"] && !failed.length)
+    return `<div class="note warn"><b>Instalando os programas${count}: evite reiniciar.</b>${m.provision_current ? ` Agora: <span class="mono">${esc(m.provision_current)}</span>.` : ""}
+      Dá para usar a máquina normalmente; se reiniciar, a instalação continua sozinha no próximo boot.</div>`;
+  return `<div class="note warn"><b>Instalação pendente${count}.</b> ${failed.length ? `Falhou: ${failed.map(([k]) => `<span class="mono">${esc(k)}</span>`).join(", ")}. ` : ""}A máquina tenta de novo sozinha a cada minuto (e a cada boot); o motivo aparece em Provisionamento, no Resumo.</div>`;
+}
+
 function tabResumo() {
   const m = OVL.m, r = m.resources || {}, sv = m.services || {};
   const gb = n => n ? (n / 1e9).toFixed(1) + " GB" : "—";
   const svc = (n, on) => `<span class="pill ${on ? "done" : "error"}">${n} ${on ? "ativo" : "inativo"}</span>`;
-  $("#ovlBody").innerHTML = `
+  $("#ovlBody").innerHTML = `${provBanner(m)}
     ${appLinks(m)}
     <div class="grid2">
       ${kv("Conta", esc(m.account || "—"))}${kv("ISO gerada por", esc(m.owner_email || "—"))}
@@ -1090,7 +1149,7 @@ function tabResumo() {
     <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}${"ddclient" in sv ? svc("DDNS", sv.ddclient) : ""}${"cloudflared" in sv ? svc("Cloudflare Tunnel", sv.cloudflared) : ""}${"libvirtd" in sv ? svc("Virtualização", sv.libvirtd) : ""}${"nvidia" in sv ? svc("GPU NVIDIA", sv.nvidia) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}
       ${m.report.docker_containers != null ? `<span class="pill">${m.report.docker_containers} container(s)</span>` : ""}</div>
     <h3>Provisionamento</h3>
-    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${String(v).startsWith("ok") || /^100\./.test(v) ? `<span class="ok">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
+    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${String(v).startsWith("ok") || /^100\./.test(v) ? `<span class="ok">${esc(v)}</span>` : String(v).startsWith("falhou") ? `<span class="err">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
       <tr><td><b>geral</b></td><td>${esc(m.provisioned || "—")}</td></tr></table></div>
     ${m.downloads.length ? `<h3>Quem baixou</h3><div class="table-wrap"><table>${m.downloads.slice().reverse().map(x => `<tr><td>${esc(x.email)}</td><td class="small">${esc(x.kind === "iso" ? "ISO" : "gravador " + x.kind.replace("gravador-", ""))}</td><td class="small">${fmtDate(x.at)}</td></tr>`).join("")}</table></div>` : ""}
     <div class="row u-mt16"><button class="btn primary" id="goTerm">Abrir terminal</button><button class="btn" id="goConn">Conectar do meu computador</button></div>`;
@@ -1133,7 +1192,7 @@ function tabTerminal() {
     : m.wg ? "O túnel WireGuard desta máquina está desconectado agora (servidor desligado ou sem internet?)."
     : !m.tailscale_ip ? "A máquina ainda não informou IP do Tailscale nem se conectou ao hub WireGuard. Aguarde ou defina um endereço em Configurações."
     : (p.message || "O painel não está na Tailnet.");
-  $("#ovlBody").innerHTML = `
+  $("#ovlBody").innerHTML = `${provBanner(m)}
     <div class="spread"><p class="muted small">Entra como <b class="mono">${esc(m.admin_user)}</b> em <b class="mono">${esc(sshTarget(m))}</b> usando a chave do painel (sem digitar IP, usuário ou senha). Para comandos de administrador: <code>sudo</code> (pede a senha do servidor).</p>
       <div class="row"><button class="btn primary sm" id="tConn" ${reason && !m.ssh_host ? "disabled" : ""}>Conectar</button><button class="btn sm" id="tDisc" disabled>Desconectar</button></div></div>
     ${reason ? `<div class="note warn">${esc(reason)}</div>` : ""}
@@ -1283,14 +1342,19 @@ function tabConfig() {
     <div class="grid2">${kv("ID da máquina", `<span class="mono small">${esc(m.id)}</span>`)}${kv("ISO de origem", m.build_hostname ? `<a href="#/iso/${esc(m.build_id)}">${esc(m.build_hostname)}</a>` : esc(m.build_id))}
       ${kv("Acesso pelo painel", m.panel_access ? "sim (chave do painel na ISO)" : "não")}${kv("Último IP de origem", `<span class="mono">${esc(m.source_ip)}</span>`)}</div>
     <details><summary>Relatório completo (JSON)</summary><pre class="log">${esc(JSON.stringify(m.report, null, 2))}</pre></details>
-    ${ME.role === "admin" ? `<div class="note warn u-mt16">Remover da lista não mexe no servidor. Se ele continuar ligado, reaparece no próximo relatório (a cada 10 min).</div>
-    <button class="btn danger" id="mdel">Remover da lista</button>` : ""}`;
+    ${ME.role !== "admin" ? "" : m.archived_at
+      ? `<h3>Máquina arquivada</h3><p class="muted small">Arquivada em ${fmtDate(m.archived_at)}. Terminal, VPN e acesso de sócios estão pausados.</p>
+        <div class="row"><button class="btn primary" id="mrestore">Restaurar</button><button class="btn danger" id="mforget">Esquecer de vez</button></div>`
+      : `<h3>Tirar da lista</h3><p class="muted small">Arquivar não mexe no servidor e não apaga nada: dá para restaurar quando quiser, com o mesmo IP da VPN e os mesmos acessos.</p>
+        <button class="btn danger" id="marchive">Arquivar máquina</button>`}`;
   $("#mf").onsubmit = async ev => {
     ev.preventDefault();
     try { await api("/api/machines/" + OVL.id, { method: "POST", body: Object.fromEntries(new FormData(ev.target)) }); await refreshMachine(); toast("Salvo."); $("#merr").innerHTML = ""; }
     catch (e) { $("#merr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; }
   };
-  if ($("#mdel")) $("#mdel").onclick = async () => { if (!confirm("Remover esta máquina da lista?")) return; await api("/api/machines/" + OVL.id, { method: "DELETE" }); closeOverlay(); loadMachines(); };
+  if ($("#marchive")) $("#marchive").onclick = () => machineAction(OVL.id, "archive");
+  if ($("#mrestore")) $("#mrestore").onclick = () => machineAction(OVL.id, "restore");
+  if ($("#mforget")) $("#mforget").onclick = () => machineAction(OVL.id, "forget");
 }
 
 route();

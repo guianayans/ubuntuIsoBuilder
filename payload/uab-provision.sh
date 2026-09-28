@@ -57,15 +57,82 @@ status_set() {  # grava chave=valor em $STATE/status
   printf '%s=%s\n' "$k" "$v" >>"$f.tmp"
   mv -f "$f.tmp" "$f"
 }
+# Motivo curto da falha de uma etapa: a última linha útil que ela escreveu no log
+# (o painel mostra ao lado de "falhou"). Casos comuns ganham uma frase clara.
+fail_reason() {
+  local from="$1" out
+  sleep 0.5  # a saída passa por um tee: deixa chegar ao log
+  out="$(tail -n +"$from" "$LOG" 2>/dev/null | grep -v '^\s*$' | grep -v ' uab-provision: >>> ' \
+         | sed -E 's/^[0-9-]+ [0-9:]+ uab-provision: //' | tail -n 40)"
+  if grep -qi "dpkg was interrupted" <<<"$out"; then echo "instalação de pacotes interrompida (reinício no meio); corrigindo sozinho"
+  elif grep -qiE "Could not resolve|Temporary failure resolving|Failed to fetch|Network is unreachable" <<<"$out"; then echo "sem internet ou repositório fora do ar"
+  elif grep -qiE "Unable to acquire the dpkg|Could not get lock" <<<"$out"; then echo "outra instalação de pacotes em andamento; tento de novo"
+  else tail -n 1 <<<"$out" | tr -d '\r' | cut -c1-160
+  fi
+}
 step() {
   local name="$1"; shift
   if [ -f "$STATE/$name.done" ]; then return 0; fi
+  local from; from=$(( $(wc -l <"$LOG") + 1 ))
+  status_set current "$name"
   log ">>> $name"
   if "$@"; then
     touch "$STATE/$name.done"; status_set "$name" ok; log "<<< $name: OK"
   else
-    FAILED="$FAILED $name"; status_set "$name" "falhou $(date '+%F %T')"; log "<<< $name: FALHOU (nova tentativa automática)"
+    FAILED="$FAILED $name"; status_set "$name" "falhou $(date '+%F %T'): $(fail_reason "$from")"
+    log "<<< $name: FALHOU (nova tentativa automática)"
   fi
+}
+
+# Reinício no meio de uma instalação deixa o dpkg "interrompido" e, a partir daí,
+# TODA instalação de pacote recusa rodar. Conserta antes das etapas (idempotente).
+apt_repair() {
+  [ -n "$(ls -A /var/lib/dpkg/updates 2>/dev/null)" ] || [ -n "$(dpkg --audit 2>/dev/null)" ] || return 0
+  log "dpkg ficou interrompido (reinício no meio de uma instalação?): corrigindo com dpkg --configure -a"
+  local i
+  for i in $(seq 1 30); do  # espera se outra instalação (ex.: atualização automática) estiver rodando
+    dpkg --force-confdef --force-confold --configure -a && break
+    sleep 10
+  done
+  apt-get "${APT_OPTS[@]}" -f install || true
+}
+
+# Aviso ao entrar por SSH enquanto a instalação não termina (não reiniciar no meio).
+install_motd() {
+  [ -d /etc/update-motd.d ] || return 0
+  cat >/etc/update-motd.d/99-uab-provision <<'MOTD'
+#!/bin/sh
+# ISO Builder: avisa enquanto o provisionamento não terminou.
+s=/var/lib/uab/status
+[ -r "$s" ] || exit 0
+p=$(sed -n 's/^provisioned=//p' "$s")
+case "$p" in ok*) exit 0 ;; esac
+c=$(sed -n 's/^current=//p' "$s")
+echo
+echo "  *** ISO Builder: a instalação dos programas ainda NÃO terminou${p:+ ($p)}."
+[ -n "$c" ] && echo "  *** Etapa atual: $c"
+echo "  *** Evite reiniciar até terminar. Acompanhe: sudo tail -f /var/log/uab-provision.log"
+echo
+MOTD
+  chmod 755 /etc/update-motd.d/99-uab-provision
+}
+
+# Etapas que esta instalação vai rodar (o painel mostra "X de Y").
+plan_steps() {
+  local p="ssh_keys ssh_harden ssh_port base_packages"
+  [ "$UAB_TAILSCALE" = yes ] && p="$p tailscale_install tailscale_login"
+  [ "${UAB_WG:-no}" = yes ] && p="$p wireguard_install"
+  [ "$UAB_DOCKER" = yes ] && p="$p docker_install"
+  [ "$UAB_COCKPIT" = yes ] && p="$p cockpit_install"
+  [ "$UAB_COOLIFY" = yes ] && p="$p coolify_install"
+  [ "$UAB_VIRT" = yes ] && p="$p virt_install" && [ "$UAB_VIRT_BRIDGE" = yes ] && p="$p virt_bridge"
+  [ "$UAB_TWEAKS" = yes ] && p="$p server_tweaks"
+  [ "$UAB_GPU" = yes ] && p="$p gpu_driver gpu_toolkit"
+  [ "$UAB_DDNS" = yes ] && p="$p ddns_setup"
+  [ "$UAB_REMOTE_AGENT" = yes ] && [ -n "$UAB_REMOTE_URL" ] && p="$p remote_agent"
+  [ "$UAB_CLOUDFLARE" = yes ] && p="$p cloudflare_setup"
+  [ "$UAB_GPU" = yes ] && p="$p gpu_check"
+  echo "$p"
 }
 
 apt_install() { apt-get "${APT_OPTS[@]}" install "$@"; }
@@ -630,6 +697,9 @@ if grep -q '^provisioned=ok' "$STATE/status" 2>/dev/null; then
   exit 0
 fi
 log "=== início (build $UAB_BUILD_ID, $PRETTY_NAME) ==="
+install_motd
+status_set plan "$(plan_steps)"
+apt_repair
 step ssh_keys ssh_keys
 step ssh_harden ssh_harden
 step ssh_port ssh_port
@@ -659,6 +729,7 @@ if network_ready; then
 else
   FAILED="$FAILED network"
 fi
+status_set current ""
 update_issue
 sync  # tudo o que esta rodada instalou vai para o disco (resiste a queda de energia)
 # avisa o painel (se a ISO foi gerada por ele); nunca bloqueia o provisionamento

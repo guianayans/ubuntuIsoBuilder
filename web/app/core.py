@@ -139,6 +139,11 @@ def init_db() -> None:
             con.execute("ALTER TABLE machines ADD COLUMN off_reason TEXT NOT NULL DEFAULT ''")
         if "hw_id" not in mcols:  # hash da identidade do hardware (reconhece o PC reinstalado)
             con.execute("ALTER TABLE machines ADD COLUMN hw_id TEXT NOT NULL DEFAULT ''")
+        if "archived_at" not in mcols:  # arquivada: fora da lista, relatórios aceitos, túnel pausado
+            con.execute("ALTER TABLE machines ADD COLUMN archived_at INTEGER")
+        # "esquecer de vez": os relatórios desta instalação passam a ser recusados
+        con.execute("""CREATE TABLE IF NOT EXISTS forgotten_machines (
+            id TEXT PRIMARY KEY, build_id TEXT NOT NULL, hostname TEXT NOT NULL, forgotten_at INTEGER NOT NULL)""")
 
 
 # --------------------------------------------------------------------- senhas
@@ -604,9 +609,16 @@ def set_partner_perms(user_id: int, items: list[dict]) -> None:
         con.executemany("INSERT INTO partner_perms (user_id, kind, ref, perms) VALUES (?,?,?,?)", rows)
 
 
+def machine_archived(machine_id: str) -> bool:
+    with db() as con:
+        r = con.execute("SELECT archived_at FROM machines WHERE id=?", (machine_id,)).fetchone()
+    return bool(r and r["archived_at"])
+
+
 def machine_perms(u: "User", machine_id: str) -> int:
     if u.is_admin:
-        return P_ALL
-    if not u.is_partner:
+        # arquivada: o admin só vê e configura (terminal, VPN e tela ficam pausados)
+        return P_VIEW | P_CONFIG if machine_archived(machine_id) else P_ALL
+    if not u.is_partner or machine_archived(machine_id):
         return 0
     return partner_perms(u.id).get(("machine", machine_id), 0)

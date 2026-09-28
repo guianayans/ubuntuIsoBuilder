@@ -98,7 +98,9 @@ def write_desired() -> None:
     """Grava o estado desejado para o hub (sem nenhuma chave privada)."""
     user, pw = socks_credentials()
     with core.db() as con:
-        ms = con.execute("SELECT * FROM wg_machines ORDER BY slot").fetchall()
+        # máquinas arquivadas ficam fora do hub (túnel pausado; volta igual ao restaurar)
+        ms = con.execute("SELECT * FROM wg_machines WHERE machine_key NOT IN "
+                         "(SELECT id FROM machines WHERE archived_at IS NOT NULL) ORDER BY slot").fetchall()
         cs = con.execute("SELECT * FROM wg_clients").fetchall()
     by = {}
     for c in cs:

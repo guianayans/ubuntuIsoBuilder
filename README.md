@@ -286,6 +286,18 @@ ligar de novo na aba da VPN. Outra ISO, ou o mesmo pendrive em outro PC, continu
 separadas. Pendrives gravados antes dessa versão não mandam o hash; neles a
 entrada antiga fica vermelha até ser removida.
 
+**Arquivar e esquecer.** "Arquivar" tira a máquina da lista sem apagar nada: ela
+vai para **Arquivadas** (no fim da página). Se continuar ligada, os relatórios
+chegam normalmente, mas ela continua arquivada, com terminal, VPN (túnel pausado no
+hub, sem perder IP nem acessos de dispositivos) e acesso de sócios bloqueados.
+**Restaurar** devolve tudo como era. **Esquecer de vez** apaga os dados, o túnel e
+os acessos, e o painel passa a recusar os relatórios daquela instalação (HTTP 410).
+Se o mesmo PC for reinstalado de propósito com o pendrive, ele ganha outra
+identidade e aparece de novo como máquina nova; se a antiga estava só arquivada, a
+reinstalada também entra arquivada. Se o mesmo PC for reinstalado com **outra ISO**,
+a entrada antiga (parada) é **arquivada sozinha**, com uma anotação explicando, sem
+juntar os dados (vale para ISOs geradas com o hash do hardware).
+
 A lista mostra quem está **online** (relatório nos últimos 25 min). Clicar numa
 máquina abre um **overlay** com:
 
@@ -294,7 +306,7 @@ máquina abre um **overlay** com:
 | Resumo | todas as informações acima, atualizadas a cada 15 s |
 | Terminal | **terminal SSH no navegador**, um clique: o painel entra pela Tailnet com a chave dele, sem digitar IP, usuário ou senha. `sudo` pede a senha do servidor |
 | Conectar do meu computador | botão para instalar o Tailscale no seu sistema; **"Abrir SSH no Terminal"** (`ssh://usuario@ip`) e o comando `ssh` pronto para copiar, com o IP já buscado |
-| Configurações | apelido, notas, endereço/porta SSH manual, relatório completo, remover da lista |
+| Configurações | apelido, notas, endereço/porta SSH manual, relatório completo, arquivar |
 
 **Como o terminal no navegador funciona:**
 - O container do painel roda o Tailscale em modo *userspace* (sem root, sem
@@ -511,6 +523,12 @@ Verificar a ISO antes de gravar: `shasum -a 256 -c <hostname>-autoinstall.iso.sh
    instala os pacotes, o Tailscale e o Docker (≈5–10 min, conforme a internet).
    Se algo falhar (ex.: sem internet), ele tenta de novo a cada 60 s,
    indefinidamente.
+   **Reiniciar no meio é seguro:** se o reinício pegar uma instalação de pacotes
+   pela metade (o `dpkg` fica "interrompido" e recusaria qualquer instalação), o
+   provisionador roda `dpkg --configure -a` sozinho e continua. Enquanto não
+   termina, o painel mostra "Instalando (X de Y etapas): evite reiniciar" no Resumo
+   e no Terminal, e o login por SSH mostra o mesmo aviso. Etapa que falha aparece
+   com o motivo (ex.: "sem internet ou repositório fora do ar").
 
 **Pendrive esquecido conectado?** Sem problema: o GRUB da ISO procura o
 marcador `/boot/.uab-installed-<build>` gravado pela instalação e, se achar,
@@ -754,6 +772,13 @@ ele só vê as máquinas que você liberar em **Permissões**, com estes itens p
 no Remoto (adicionados por convite) também aparecem para liberar. No Remoto, o painel cria a
 conta `socio-<id>` no MeshCentral e aplica as mesmas permissões por aparelho — o próprio
 MeshCentral bloqueia o que não foi liberado. Excluir o sócio remove também essa conta.
+
+**Transformar uma conta temporária em sócio.** Em **Acessos**, no menu **⋯** de uma conta
+"só download" ou "pode gerar ISOs" (mesmo vencida ou revogada), **Tornar sócio** mantém o
+login e a senha, tira a validade e reativa a conta. Como sócio, ela não baixa nem gera
+ISOs; as ISOs que ela gerou passam para o admin, e os PCs delas continuam aparecendo. Em
+seguida abre o editor de **Permissões** com **Ver** já marcado nas máquinas instaladas
+com as ISOs que a pessoa recebeu. Nada é liberado até você clicar em Salvar.
 
 ## Porta do SSH
 

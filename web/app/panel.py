@@ -172,6 +172,7 @@ def machine_row(r, builds: dict | None = None) -> dict:
         "tailscale_dns": ts.get("dns", ""), "tailscale_state": ts.get("state", ""),
         "local_ips": rep.get("local_ips", []), "os": rep.get("os", ""), "kernel": rep.get("kernel", ""),
         "uptime": rep.get("uptime_seconds"), "provisioned": rep.get("provisioned", ""),
+        "provision_plan": rep.get("provision_plan") or [], "provision_current": rep.get("provision_current", ""),
         "steps": rep.get("steps", {}), "services": rep.get("services", {}), "resources": rep.get("resources", {}),
         "panel_access": bool(b.get("panel_access")), "build_hostname": b.get("hostname", ""),
         "wg_ip": (rep.get("wg") or {}).get("address", "").split("/")[0] if isinstance(rep.get("wg"), dict) else "",
