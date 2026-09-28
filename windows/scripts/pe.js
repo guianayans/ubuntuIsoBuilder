@@ -183,10 +183,23 @@ log("ESCOLHIDO: disco " + best.index + " (" + best.model + ", " + best.gb + " GB
 
 // ------------------------------------------------------------------ 4. particionamento
 run("wpeutil UpdateBootInfo");
-var fw = 0;
-try { fw = sh.RegRead("HKLM\\SYSTEM\\CurrentControlSet\\Control\\PEFirmwareType"); } catch (e) { }
-var uefi = fw !== 1;  // 2 = UEFI; se não souber, UEFI (exigência do Windows 11)
-log("firmware: " + (uefi ? "UEFI" : "BIOS") + " (PEFirmwareType=" + fw + ")");
+// Firmware: PEFirmwareType (1 = BIOS, 2 = UEFI). Se a leitura falhar, decide pelo
+// bcdedit (o carregador do WinPE em uso termina em .efi no UEFI e .exe no BIOS). Se nem
+// assim souber: MBR (se o disco tiver menos de 2 TB) com a partição de sistema em FAT32
+// ativa e "bcdboot /f ALL", que inicia tanto em BIOS quanto em UEFI.
+var fw = 0, fwHow = "";
+try { fw = sh.RegRead("HKLM\\SYSTEM\\CurrentControlSet\\Control\\PEFirmwareType"); } catch (e) { fw = 0; }
+var mode = fw === 2 ? "uefi" : fw === 1 ? "bios" : "";
+if (mode) fwHow = "PEFirmwareType=" + fw;
+else {
+    var be = run("bcdedit /enum {current}").out;
+    if (/\.efi\s*$/im.test(be)) mode = "uefi";
+    else if (/\.exe\s*$/im.test(be)) mode = "bios";
+    fwHow = "PEFirmwareType ilegível (" + fw + "); bcdedit: " + (mode || "sem resposta");
+}
+var both = !mode;  // desconhecido: serve aos dois
+var uefi = mode === "uefi" || (both && best.size >= 2 * 1099511627776);  // >= 2 TB não cabe em MBR
+log("firmware: " + (mode ? mode.toUpperCase() : "DESCONHECIDO -> " + (uefi ? "GPT" : "MBR") + " + bcdboot /f ALL") + " (" + fwHow + ")");
 
 var used = lettersInUse(), free = [], pref = "WSTUVRQPONMLKJIHG";
 for (var i = 0; i < pref.length; i++) if (!used[pref.charAt(i)]) free.push(pref.charAt(i));
@@ -198,7 +211,8 @@ if (uefi) {
     dp.push("convert gpt", "create partition efi size=300", "format quick fs=fat32 label=\"System\"",
         "assign letter=" + S, "create partition msr size=16");
 } else {
-    dp.push("convert mbr", "create partition primary size=500", "format quick fs=ntfs label=\"System\"",
+    // desconhecido: FAT32 na partição de sistema (o UEFI só lê FAT; o BIOS inicia de FAT32 ativa)
+    dp.push("convert mbr", "create partition primary size=500", "format quick fs=" + (both ? "fat32" : "ntfs") + " label=\"System\"",
         "active", "assign letter=" + S);
 }
 dp.push("create partition primary", "format quick fs=ntfs label=\"Windows\"", "assign letter=" + W, "exit");
@@ -215,7 +229,7 @@ if (r.code !== 0) {
     fail("O dism não conseguiu aplicar a edição \"" + UAB.image + "\" (código " + r.code + ").\r\n\r\nEdições nesta mídia:\r\n" + info.out, true);
 }
 var bcd = fso.FileExists(W + ":\\Windows\\System32\\bcdboot.exe") ? W + ":\\Windows\\System32\\bcdboot.exe" : "bcdboot.exe";
-r = run(bcd + " " + W + ":\\Windows /s " + S + ": /f " + (uefi ? "UEFI" : "BIOS"));
+r = run(bcd + " " + W + ":\\Windows /s " + S + ": /f " + (both ? "ALL" : uefi ? "UEFI" : "BIOS"));
 if (r.code !== 0) fail("O bcdboot falhou ao criar a inicialização (código " + r.code + ").\r\n\r\n" + r.out, true);
 
 // ------------------------------------------------------------------ 6. respostas + marca

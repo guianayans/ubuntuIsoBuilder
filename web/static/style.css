@@ -291,6 +291,8 @@ header.top.compact .menu-btn{display:inline-flex;margin-left:auto}
 
 /* ---- assistente: qual sistema (1º passo) */
 .syspick{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-bottom:6px}
+.syspick:not(.sysfam){grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+.sysfam .syscard{padding:20px}
 .syscard{position:relative;display:flex;gap:14px;align-items:center;padding:16px;border:1px solid var(--line);border-radius:14px;cursor:pointer;background:var(--card);transition:border-color .12s,background .12s,transform .12s}
 .syscard:hover{border-color:var(--muted);transform:translateY(-1px)}
 .syscard input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:0;pointer-events:none}

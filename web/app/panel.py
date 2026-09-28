@@ -129,12 +129,16 @@ def ssh_target(m) -> tuple[str, int, bool]:
     port = report_ssh_port(rep)
     if wi and wi["connected"]:
         return wi["server_ip"], port, False
-    ts_ips = [ip for ip in (rep.get("tailscale") or {}).get("ips", []) if "." in ip]
+    ts = rep.get("tailscale") if isinstance(rep.get("tailscale"), dict) else {}
+    ts_ips = [ip for ip in ts.get("ips") or [] if isinstance(ip, str) and "." in ip]
     if ts_ips:
         return ts_ips[0], port, True
     if platform_of(rep) == "windows":
-        raise LookupError("Máquina Windows sem túnel: defina em Configurações um endereço que o painel alcance "
-                          "(ou use a aba Tela, pelo Remoto).")
+        if wi:
+            raise LookupError("O túnel WireGuard deste PC está desconectado agora (veja a aba VPN). Enquanto isso, "
+                              "defina em Configurações um endereço que o painel alcance ou use a aba Tela (Remoto).")
+        raise LookupError("PC Windows sem túnel (WireGuard/Tailscale): defina em Configurações um endereço que o "
+                          "painel alcance (ou use a aba Tela, pelo Remoto).")
     raise LookupError("A máquina ainda não informou um IP do Tailscale. Defina um endereço em Configurações.")
 
 
@@ -165,7 +169,7 @@ async def open_ssh(m, username: str):
 
 def machine_row(r, builds: dict | None = None) -> dict:
     rep = json.loads(r["report"] or "{}")
-    ts = rep.get("tailscale") or {}
+    ts = rep.get("tailscale") if isinstance(rep.get("tailscale"), dict) else {}
     off = r["off_at"] is not None  # a máquina avisou que estava desligando/reiniciando
     online = not off and core.now() - r["last_seen"] < ONLINE_SECONDS
     b = (builds or {}).get(r["build_id"]) or {}
@@ -176,7 +180,7 @@ def machine_row(r, builds: dict | None = None) -> dict:
         "ssh_host": r["ssh_host"], "ssh_port": r["ssh_port"], "source_ip": r["source_ip"],
         "admin_user": rep.get("admin_user", ""), "ssh_auth": rep.get("ssh_auth", ""),
         "ssh_port_real": report_ssh_port(rep),
-        "tailscale_ip": next((ip for ip in ts.get("ips", []) if "." in ip), ""),
+        "tailscale_ip": next((ip for ip in ts.get("ips") or [] if isinstance(ip, str) and "." in ip), ""),
         "tailscale_dns": ts.get("dns", ""), "tailscale_state": ts.get("state", ""),
         "local_ips": rep.get("local_ips", []), "os": rep.get("os", ""), "kernel": rep.get("kernel", ""),
         "uptime": rep.get("uptime_seconds"), "provisioned": rep.get("provisioned", ""),

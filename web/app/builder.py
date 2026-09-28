@@ -313,8 +313,8 @@ def make_windows(build_id: str, data: dict) -> None:
            "panel_pubkey": "", "remote_agent_url": "", "remote_meshid": ""}
     if cfg.get("PANEL_ACCESS") == "yes":
         from . import panel
-        # sem from=: nesta fase o Windows não tem Tailscale/WireGuard, e o painel entra
-        # pelo endereço definido em Máquinas → Configurações
+        # sem from=: além do túnel (WireGuard/Tailscale), o painel pode entrar pelo endereço
+        # definido em Máquinas → Configurações (o OpenSSH do Windows só aceita chave)
         ctx["panel_pubkey"] = panel.ensure_panel_key()
     if cfg.get("REMOTE_AGENT") == "yes":
         from . import remoto
@@ -407,7 +407,8 @@ def start() -> None:
 def summary_of(cfg: dict, extra: dict | None = None) -> str:
     if cfg.get("OS") == "windows":
         keep = ["OS", "WIN_VERSION", "WIN_EDITION", "WIN_LANG", "HOSTNAME_", "ADMIN_USER", "TIMEZONE_WIN",
-                "INPUT_LOCALE", "UI_LANG", "PANEL_ACCESS", "REMOTE_AGENT", "WIN_APPS", "DISK_MODE"]
+                "INPUT_LOCALE", "UI_LANG", "PANEL_ACCESS", "REMOTE_AGENT", "WIN_APPS", "DISK_MODE",
+                "WG_ENABLED", "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME"]
         return json.dumps({**{k: cfg.get(k, "") for k in keep}, **(extra or {})})
     keep = ["UBUNTU_SERIES", "HOSTNAME_", "ADMIN_USER", "TIMEZONE", "LOCALE", "KEYBOARD_LAYOUT", "NET_MODE",
             "NET_ADDRESS", "STORAGE_MATCH_TYPE", "STORAGE_MATCH_VALUE", "STORAGE_LAYOUT",

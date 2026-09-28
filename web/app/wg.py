@@ -190,7 +190,7 @@ def create_client(machine_key: str, name: str, created_by: str) -> dict:
     allowed = [f"{server_ip(m['slot'])}/32"] + ([str(lmap)] if m["lan"] else [])
     conf = "\n".join([
         "[Interface]",
-        f"# {name} -> servidor {server_ip(m['slot'])} (ISO Builder)",
+        f"# {name} -> máquina {server_ip(m['slot'])} (ISO Builder)",
         f"PrivateKey = {priv}",
         f"Address = {ip}/32",
         "",

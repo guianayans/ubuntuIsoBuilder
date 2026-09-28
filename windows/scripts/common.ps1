@@ -156,23 +156,46 @@ function Add-UabWingetDeps {
     if ($add) { $env:PATH = (($add -join ';') + ';' + $env:PATH) }
 }
 
-function Invoke-UabWinget {
-    <# Roda o winget e devolve @{ code = <exit code>; out = <saída> }. #>
-    param([string]$Exe, [string[]]$Arguments, [int]$TimeoutMinutes = 45)
-    $o = Join-Path $env:TEMP "uab-winget-$([guid]::NewGuid()).txt"
+function Invoke-UabExe {
+    <# Roda um programa de console escondido, com limite de tempo, e devolve
+       @{ code = <exit code, -1 se estourou o tempo>; out = <stdout + stderr> }. #>
+    param([string]$Exe, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
+    $o = Join-Path $env:TEMP "uab-exe-$([guid]::NewGuid()).txt"
     $e = "$o.err"
     $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -PassThru `
         -RedirectStandardOutput $o -RedirectStandardError $e -WorkingDirectory (Split-Path $Exe)
     $null = $p.Handle  # sem isto o ExitCode volta vazio (Start-Process -PassThru com redirecionamento)
-    if (-not $p.WaitForExit($TimeoutMinutes * 60 * 1000)) {
+    if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
         try { $p.Kill() } catch { }
         $code = -1
     } else { $p.WaitForExit(); $code = $p.ExitCode }
     $out = ''
     foreach ($f in @($o, $e)) {
-        if (Test-Path $f) { $out += (Get-Content -LiteralPath $f -Raw -ErrorAction SilentlyContinue); Remove-Item -Force $f -ErrorAction SilentlyContinue }
+        if (Test-Path $f) { $out += [string](Get-Content -LiteralPath $f -Raw -Encoding UTF8 -ErrorAction SilentlyContinue); Remove-Item -Force $f -ErrorAction SilentlyContinue }
     }
+    return @{ code = $code; out = $out }
+}
+
+function Invoke-UabWinget {
+    <# Roda o winget e devolve @{ code = <exit code>; out = <saída> }. #>
+    param([string]$Exe, [string[]]$Arguments, [int]$TimeoutMinutes = 45)
+    $r = Invoke-UabExe $Exe $Arguments ($TimeoutMinutes * 60)
+    $code = $r.code; $out = $r.out
     # tira as animações de progresso (barras e "\|/-") da saída
     $out = ($out -split "`r?`n" | ForEach-Object { ($_ -split "`r")[-1] } | Where-Object { $_ -match '\w' -and $_ -notmatch '^\s*[-\\|/]\s*$' -and $_ -notmatch '[█▒]' }) -join "`n"
     return @{ code = $code; out = $out }
+}
+
+# ---------------------------------------------------------------- plano da pós-instalação
+function Get-UabPlan($conf) {
+    <# Etapas previstas (mesma ordem em specialize.ps1 e provision.ps1). #>
+    $plan = @()
+    if ($conf.panel_access) { $plan += 'openssh' }
+    if ($conf.wireguard) { $plan += 'wireguard' }
+    if ($conf.tailscale) { $plan += 'tailscale_install'; $plan += 'tailscale_login' }
+    if ($conf.remote_agent -and $conf.remote_url) { $plan += 'remote_agent' }
+    if (@($conf.apps).Count -gt 0) { $plan += 'apps' }
+    if ($conf.activate) { $plan += 'activation' }  # só com a chave informada no painel
+    $plan += 'report'
+    return , $plan
 }

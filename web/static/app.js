@@ -209,7 +209,8 @@ const W = {
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "",
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
-  win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: ""
+  win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: "",
+  win_tailscale: false  // no Windows o Tailscale começa desligado (precisa de auth key)
 };
 let step = 0;
 let GUEST_DOMAIN = "gvtserver.online";
@@ -224,7 +225,11 @@ const flow = () => FLOWS[W.os] || FLOWS.ubuntu;
 const stepKey = () => flow()[step][0];
 const isWin = () => W.os === "windows";
 let FEATURES = { wireguard: false, remote_url: "", remote_embed: false };
-// sistemas oferecidos no 1º passo: [valor, logo, nome, descrição]
+// 1º passo em dois níveis: família (Linux / Windows) e, dentro dela, a versão.
+// famílias: [chave, logo, nome, descrição]; sistemas: [valor, logo, nome, descrição]
+const FAMILIES = [["linux", "Linux", "Linux", "Servidores Ubuntu: Docker, Coolify, Cockpit, VPN e acesso pelo painel"],
+  ["windows", "Windows", "Windows", "PCs de trabalho: Windows oficial da Microsoft, com programas e acesso remoto"]];
+const famOf = v => String(v).startsWith("windows") ? "windows" : "linux";
 const SYSTEMS = [["ubuntu:24.04", "Ubuntu", "Ubuntu Server 24.04 LTS", "Mais madura — recomendada para servidores"],
   ["ubuntu:26.04", "Ubuntu", "Ubuntu Server 26.04 LTS", "Mais nova"],
   ["windows:11", "Windows", "Windows 11 Pro", "Para PCs: o gravador baixa o Windows oficial da Microsoft e aplica a configuração"]];
@@ -257,7 +262,13 @@ function stepHTML() {
   switch (stepKey()) {
     case "os": return `<h2>Qual sistema?</h2>
       <p class="muted">Define as próximas perguntas e o que o gravador coloca no pendrive.</p>
-      <div class="syspick">${SYSTEMS.map(([v, logo, name, desc]) => {
+      <div class="syspick sysfam">${FAMILIES.map(([f, logo, name, desc]) => {
+        const off = f === "windows" && !FEATURES.windows;
+        return `<label class="syscard ${off ? "off" : ""}"><input type="radio" name="fam" value="${f}" ${famOf(W.sys) === f ? "checked" : ""} ${off ? "disabled" : ""}>
+          ${osLogo(logo, "lg")}<span class="systxt"><b>${esc(name)}</b><small>${off ? "Gerador do Windows indisponível neste painel" : esc(desc)}</small></span></label>`;
+      }).join("")}</div>
+      <h3>Versão</h3>
+      <div class="syspick">${SYSTEMS.filter(([v]) => famOf(v) === famOf(W.sys)).map(([v, logo, name, desc]) => {
         const off = v.startsWith("windows") && !FEATURES.windows;
         return `<label class="syscard ${off ? "off" : ""}"><input type="radio" name="sys" value="${v}" ${W.sys === v ? "checked" : ""} ${off ? "disabled" : ""}>
           ${osLogo(logo, "lg")}<span class="systxt"><b>${esc(name)}</b><small>${off ? "Gerador do Windows indisponível neste painel" : esc(desc)}</small></span></label>`;
@@ -402,10 +413,18 @@ function stepHTML() {
         <li><b>PCs antigos:</b> as exigências de TPM 2.0, Secure Boot e memória do Windows 11 são contornadas. O computador precisa inicializar em modo UEFI.</li>
       </ul>`;
     case "wacc": return `<h2>Acesso</h2>
-      <p class="muted">O computador aparece em “Máquinas” (com o logo do Windows) alguns minutos depois de instalado, e se reporta a cada 10 minutos.</p>
-      ${toggle("panel_access", "Terminal pelo painel (OpenSSH)", "Instala o OpenSSH Server do Windows (shell PowerShell) com a chave do painel: o terminal abre no navegador, sem senha. Nesta versão o Windows não tem túnel próprio: o painel precisa alcançar o endereço da máquina (definido em Máquinas → Configurações); se não alcançar, use o Remoto.")}
+      <p class="muted">O computador aparece em “Máquinas” (com o logo do Windows) alguns minutos depois de instalado, e se reporta a cada 10 minutos. Para alcançá-lo de longe, deixe ao menos uma forma de acesso ligada (Remoto, WireGuard ou Tailscale); duas = uma é reserva da outra.</p>
+      ${toggle("panel_access", "Terminal pelo painel (OpenSSH)", "Instala o OpenSSH Server do Windows (shell PowerShell) com a chave do painel: o terminal abre no navegador, sem senha. O painel entra pelo túnel (WireGuard ou Tailscale, abaixo) ou por um endereço definido em Máquinas → Configurações.")}
       ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto (MeshCentral)", "Instala o agente do Remoto: tela, terminal e arquivos pelo navegador, de qualquer lugar, sem abrir portas no roteador. Recomendado.")
-        : `<div class="note">Remoto (MeshCentral): indisponível neste painel agora; o computador aparece só em Máquinas.</div>`}`;
+        : `<div class="note">Remoto (MeshCentral): indisponível neste painel agora; o computador aparece só em Máquinas.</div>`}
+      ${FEATURES.wireguard ? toggle("wireguard", "WireGuard pelo seu servidor", "O PC conecta para fora até o seu servidor (funciona atrás de qualquer roteador/CGNAT do cliente), com um serviço do Windows que sobe no boot, antes de qualquer login. O terminal do painel passa pelo túnel e, em Máquinas, você gera o QR code para o seu Mac/celular alcançar o PC. (O acesso à rede local do cliente ainda não existe no Windows.)")
+        : `<div class="note">WireGuard pelo seu servidor: desligado neste painel (defina <code>HUB_ENDPOINT</code> no Coolify).</div>`}
+      ${toggle("win_tailscale", "Tailscale", "Acesso remoto pela sua Tailnet, sem depender do seu servidor estar no ar.")}
+      <div id="ts" class="${W.win_tailscale ? "" : "hidden"}">
+        <label class="f"><span>Auth key</span><input type="password" name="tailscale_key" value="${esc(W.tailscale_key)}" placeholder="tskey-auth-…" autocomplete="off">
+        <small>Gere em <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noopener">login.tailscale.com → Settings → Keys</a>: <b>Reusable desligado</b>, <b>Ephemeral desligado</b>, <b>Pre-approved ligado</b>, tag <code>tag:server</code> (recomendado). A chave vai dentro da configuração do pendrive e é apagada do PC após o uso.</small></label>
+        ${field("tailscale_hostname", "Nome na Tailnet (opcional)", `placeholder="${esc(W.hostname || "igual ao nome do computador")}" autocapitalize="off" spellcheck="false"`)}
+      </div>`;
     case "wapps": {
       if (!WINCAT) { loadWinCat(); return `<h2>Programas</h2><p class="muted">Carregando o catálogo…</p>`; }
       return `<h2>Programas</h2>
@@ -421,10 +440,11 @@ function stepHTML() {
       <div class="table-wrap"><table>
         <tr><th>Sistema</th><td>${osLogo("Windows", "xs")} Windows 11 Pro · pt-BR · 64 bits</td></tr>
         <tr><th>Computador</th><td>${esc(W.hostname)} · usuário local ${esc(W.username)}</td></tr>
-        <tr><th>Ativação</th><td>${key ? `chave informada (termina em <span class="mono">${esc(key.slice(-5).toUpperCase())}</span>)` : "sem chave: instala sem ativar"}</td></tr>
+        <tr><th>Ativação</th><td>${key ? `chave informada (termina em <span class="mono">${esc(key.slice(-5).toUpperCase())}</span>): ativa sozinho depois da instalação, com internet — o resultado aparece em Máquinas` : "sem chave: instala sem ativar"}</td></tr>
         <tr><th>Região</th><td>${esc((WINCAT && WINCAT.timezones[W.win_timezone]) || W.win_timezone)} · teclado ${esc((WINCAT && WINCAT.keyboards[W.win_keyboard]) || W.win_keyboard)}</td></tr>
         <tr><th>Disco</th><td>maior disco interno (nunca USB)</td></tr>
-        <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : ""].filter(Boolean).join(" · ") || "só aparece em Máquinas"}</td></tr>
+        <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "",
+          W.wireguard && FEATURES.wireguard ? "WireGuard pelo seu servidor" : "", W.win_tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" · ") || "só aparece em Máquinas"}</td></tr>
         <tr><th>Programas</th><td>${names.length ? esc(names.join(", ")) : "nenhum"}</td></tr>
       </table></div>
       <div class="note u-mt16">O painel gera só a <b>configuração</b> (alguns KB). O gravador isoBuilder baixa o Windows 11 oficial direto da Microsoft no computador de quem grava o pendrive e aplica esta configuração.</div>
@@ -574,6 +594,10 @@ function checkStep() {
     const key = W.win_key.replace(/[^A-Z0-9]/gi, "");
     if (key && !/^[BCDFGHJKMNPQRTVWXY2346789]{25}$/i.test(key)) e.push("Chave do Windows: 25 caracteres (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX) ou deixe em branco.");
   }
+  if (k === "wacc" && W.win_tailscale && !/^tskey-/.test(W.tailscale_key.trim())) e.push("Cole a auth key do Tailscale (tskey-auth-…) ou desligue o Tailscale.");
+  if (k === "wacc" && W.win_tailscale && W.tailscale_hostname && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(W.tailscale_hostname.toLowerCase())) e.push("Nome na Tailnet: minúsculas, números e hífen.");
+  if (k === "wacc" && !e.length && !(W.remote_agent && FEATURES.remote_agent) && !(W.wireguard && FEATURES.wireguard) && !W.win_tailscale
+    && !confirm("Sem Remoto, WireGuard e Tailscale, o PC só será alcançável pela rede local do cliente. Continuar?")) e.push("Escolha pelo menos uma forma de acesso (Remoto, WireGuard ou Tailscale).");
   if (k === "wapps" && W.win_apps.split(/\s+/).some(i => i && !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$/.test(i))) e.push("ID do winget inválido em “Avançado”.");
   if (k === "wrev" && W.deliver_on && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
   if (k === "srv") {
@@ -641,6 +665,12 @@ function renderWizard() {
   $("#stepbar").style.width = ((step + 1) / STEPS.length) * 100 + "%";  // via CSSOM (a CSP barra style inline)
   // trocar o sistema troca as etapas: redesenha na hora (a lista da esquerda muda)
   $$('input[name="sys"]').forEach(r => r.onchange = () => { collect(); renderWizard(); });
+  // trocar a família escolhe a 1ª versão dela (ou a que já estava escolhida)
+  $$('input[name="fam"]').forEach(r => r.onchange = () => {
+    collect();
+    if (famOf(W.sys) !== r.value) W.sys = SYSTEMS.find(([v]) => famOf(v) === r.value)[0];
+    applySys(); renderWizard();
+  });
   wireWinCatalog();
   wireWinKey();
   $$(".steps li").forEach(li => li.onclick = () => { collect(); const i = +li.dataset.i; if (i < step) { step = i; renderWizard(); } });
@@ -656,7 +686,7 @@ function renderWizard() {
   $$('input[name="apps"]').forEach(r => r.onchange = () => { $("#coolifyBox").classList.toggle("hidden", !r.value.startsWith("coolify")); syncPkgs(); });
   wirePkgCatalog();
   const dl = $('input[name="deliver_on"]'); if (dl) dl.onchange = () => $("#deliverBox").classList.toggle("hidden", !dl.checked);
-  const ts = $('input[name="tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
+  const ts = $('input[name="tailscale"]') || $('input[name="win_tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
   [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"]].forEach(([n, box]) => {
     const c = $(`input[name="${n}"]`); if (c) c.onchange = () => $(box).classList.toggle("hidden", !c.checked);
   });
@@ -691,6 +721,8 @@ function renderWizard() {
       const body = isWin()
         ? { os: "windows", hostname: W.hostname, username: W.username, realname: W.realname, password: W.password, win_key: W.win_key,
             win_timezone: W.win_timezone, win_keyboard: W.win_keyboard, panel_access: W.panel_access, remote_agent, win_apps: W.win_apps,
+            wireguard: !!(W.wireguard && FEATURES.wireguard), tailscale: W.win_tailscale,
+            ...(W.win_tailscale ? { tailscale_key: W.tailscale_key, tailscale_hostname: W.tailscale_hostname } : {}),
             confirm_erase: W.confirm_erase }
         : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent };
       if (!isWin()) delete body.win_key;
@@ -878,7 +910,7 @@ function renderWinDownload(b) {
     <p class="muted">Windows ${esc(s.WIN_VERSION || b.series)} ${esc(s.WIN_EDITION || "Pro")} · ${esc(s.WIN_LANG || "pt-BR")} · disponível até ${fmtDate(b.expires_at)}</p></div></div>
     <span class="pill done">Pronta</span></div>
   <div class="note"><b>O gravador baixa o Windows oficial da Microsoft e aplica esta configuração.</b> O painel gera só a configuração (${fmtBytes(b.iso_size)}): usuário, região, disco, acesso e programas. Nenhuma ISO do Windows passa por aqui.</div>
-  <div class="note warn">A configuração contém a senha do usuário${s.WIN_ACTIVATION === "key" ? " e a chave do Windows" : ""}: guarde o pendrive com cuidado.</div>
+  <div class="note warn">A configuração contém a senha do usuário${[s.WIN_ACTIVATION === "key" ? "a chave do Windows" : "", s.TAILSCALE_ENABLED === "yes" ? "a auth key do Tailscale" : ""].filter(Boolean).map(x => ", " + x).join("").replace(/, ([^,]*)$/, " e $1")}: guarde o pendrive com cuidado.</div>
   <div class="dl">
     ${os !== "mobile" ? `<div class="stepbox"><span class="n">1</span><div><h2>Baixe o isoBuilder (gravador de pendrive)</h2>
       <div class="row"><a class="btn primary big-dl" href="/download/bundle/${b.id}/${os}" download>⬇ Baixar para ${OS_NAME[os]}</a></div>
@@ -890,7 +922,7 @@ function renderWinDownload(b) {
       <ol><li>Conecte o pendrive (e, se possível, o <b>cabo de rede</b>: os programas e o OpenSSH precisam de internet).</li>
       <li>Ligue e abra o menu de boot (<b>F12</b>, F11, F8 ou Esc, conforme a marca) e escolha o pendrive (modo <b>UEFI</b>).</li>
       <li>Não precisa fazer mais nada: o <b>maior disco interno é apagado</b>, o Windows se instala sozinho (~20–40 min) e reinicia algumas vezes. Entra direto com o usuário <b class="mono">${esc(s.ADMIN_USER)}</b>.</li>
-      <li>Com internet, ele aparece em <b>Máquinas</b> com o nome <b>${esc(b.hostname)}</b>${s.REMOTE_AGENT === "yes" ? " e no <b>Remoto</b>" : ""}${apps.length ? `, e instala ${apps.length === 1 ? "o programa escolhido" : `os ${apps.length} programas escolhidos`} (acompanhe em Máquinas → Resumo)` : ""}.</li>
+      <li>Com internet, ele aparece em <b>Máquinas</b> com o nome <b>${esc(b.hostname)}</b>${s.REMOTE_AGENT === "yes" ? " e no <b>Remoto</b>" : ""}${s.WG_ENABLED === "yes" ? ", conecta o túnel WireGuard até o seu servidor" : ""}${s.TAILSCALE_ENABLED === "yes" ? `, entra na sua Tailnet como <b>${esc(s.TAILSCALE_HOSTNAME || b.hostname)}</b>` : ""}${apps.length ? `, e instala ${apps.length === 1 ? "o programa escolhido" : `os ${apps.length} programas escolhidos`} (acompanhe em Máquinas → Resumo)` : ""}.</li>
       <li>Retire o pendrive quando a instalação começar a reiniciar${s.WIN_ACTIVATION === "key" ? "" : ". Sem chave, o Windows fica sem ativar (ative depois em Configurações → Sistema → Ativação)"}.</li></ol></div></div>
   </div>
   <details><summary>Avançado: gravar com Ventoy ou Rufus / outros sistemas</summary>
@@ -1393,7 +1425,6 @@ async function openMachine(id, tab = "resumo") {
   // só as abas que a conta pode usar (o admin pode tudo; o sócio, o que foi liberado)
   const P = OVL.m.perms ?? 63, need = { terminal: 2, vpn: 16, config: 32 };
   $$("#ovlTabs button").forEach(b => { const n = need[b.dataset.t]; if (n && !(P & n)) b.remove(); });
-  if (OVL.m.platform === "windows") { $("#ovlTabs button[data-t=vpn]")?.remove(); if (tab === "vpn") tab = "resumo"; }  // Windows: sem WireGuard nesta fase
   if (need[tab] && !(P & need[tab])) tab = "resumo";
   // com o agente do Remoto no servidor: aba "Tela" (mesmo nome de computador)
   if (FEATURES.remote_sso && (P & 14)) {
@@ -1479,12 +1510,14 @@ function tabResumoWin(m, r, sv, gb, svc) {
       ${kv("Sistema", `${osLogo(m.os, "xs")} ${esc(m.os || "Windows")}`)}${kv("Versão", esc(m.kernel || "—"))}
       ${kv("Rede local", esc(m.local_ips.map(x => x.split(" ").pop()).join(", ") || "—"))}${kv("IP de origem", `<span class="mono">${esc(m.source_ip || "—")}</span>`)}
       ${kv("Ligado há", fmtUptime(m.uptime))}${kv("OpenSSH", m.panel_access ? `chave do painel · porta ${m.ssh_port_real || 22} · PowerShell` : "sem acesso pelo painel")}
+      ${m.wg || m.build_wg ? kv("VPN (WireGuard)", m.wg ? `<span class="mono">${esc(m.wg.server_ip)}</span> ${m.wg.connected ? `<span class="ok small">conectado</span>` : `<span class="err small">sem conexão</span>`}` : `<span class="muted">aguardando o registro no hub</span>`) : ""}
+      ${m.tailscale_ip || m.build_ts ? kv("Tailscale", m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span>${m.tailscale_dns ? ` <span class="muted small">${esc(m.tailscale_dns)}</span>` : ""}` : `<span class="muted">${esc(m.tailscale_state || "não conectado")}</span>`) : ""}
       ${kv("CPU", `${r.cpus || "—"} núcleos`)}${kv("Memória", `${gb(r.mem_available)} livres de ${gb(r.mem_total)}`)}
       ${kv("Disco C:", `${gb(r.disk_free)} livres de ${gb(r.disk_total)}`)}${kv("Primeiro contato", fmtDate(m.first_seen))}
     </div>
-    <h3>Serviços</h3><div class="row">${"ssh" in sv || m.panel_access ? svc("OpenSSH", sv.ssh) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}${"tailscaled" in sv ? svc("Tailscale", sv.tailscaled) : ""}</div>
+    <h3>Serviços</h3><div class="row">${"ssh" in sv || m.panel_access ? svc("OpenSSH", sv.ssh) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}${"wireguard" in sv ? svc("WireGuard", sv.wireguard) : ""}${"tailscaled" in sv ? svc("Tailscale", sv.tailscaled) : ""}</div>
     <h3>Provisionamento</h3>
-    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(WIN_STEP[k] || k)}</td><td>${String(v).startsWith("ok") ? `<span class="ok">${esc(v)}</span>` : String(v).startsWith("falhou") ? `<span class="err">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
+    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(WIN_STEP[k] || k)}</td><td>${String(v).startsWith("ok") ? `<span class="ok">${esc(v)}</span>` : /^(falhou|desistiu)/.test(String(v)) ? `<span class="err">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
       <tr><td><b>geral</b></td><td>${esc(m.provisioned || "—")}</td></tr></table></div>
     ${m.downloads && m.downloads.length ? `<h3>Quem baixou</h3><div class="table-wrap"><table>${m.downloads.slice().reverse().map(x => `<tr><td>${esc(x.email)}</td><td class="small">${esc(x.kind === "config" ? "autounattend.xml" : "gravador " + x.kind.replace("gravador-", ""))}</td><td class="small">${fmtDate(x.at)}</td></tr>`).join("")}</table></div>` : ""}
     <div class="row u-mt16">${OVL.rdev ? `<button class="btn primary" id="goTela">Abrir tela (Remoto)</button>` : ""}<button class="btn ${OVL.rdev ? "" : "primary"}" id="goTerm">Abrir terminal</button><button class="btn" id="goConn">Conectar do meu computador</button></div>`;
@@ -1493,7 +1526,8 @@ function tabResumoWin(m, r, sv, gb, svc) {
   $("#goConn").onclick = () => showTab("conectar");
 }
 // nomes das etapas do provisionamento do Windows (docs/windows/CONTRACT.md §4)
-const WIN_STEP = { openssh: "OpenSSH (terminal pelo painel)", remote_agent: "Agente do Remoto", apps: "Programas (winget)", report: "Relatório ao painel" };
+const WIN_STEP = { openssh: "OpenSSH (terminal pelo painel)", wireguard: "WireGuard (túnel até o seu servidor)", tailscale_install: "Tailscale (instalação)",
+  tailscale_login: "Tailscale (login na Tailnet)", remote_agent: "Agente do Remoto", apps: "Programas (winget)", activation: "Ativação do Windows", report: "Relatório ao painel" };
 
 function appLinks(m) {
   const ip = m.tailscale_ip || sshTarget(m);
@@ -1528,8 +1562,9 @@ function tabTerminal() {
   const reason = !m.panel_access ? (win ? "Esta configuração foi gerada sem “terminal pelo painel”: o OpenSSH não recebeu a chave do painel." + (OVL.rdev ? " Use a aba Tela (Remoto), que também tem terminal." : "")
       : "Esta ISO foi gerada sem “acesso pelo painel”: a chave do painel não está no servidor. Use “Conectar do meu computador”.")
     : m.ssh_host || viaWg || viaTs ? ""
-    : win ? "O Windows ainda não tem túnel próprio (Tailscale/WireGuard) nesta versão: em Configurações, informe um endereço que o painel alcance (ex.: o IP da rede local, se o painel estiver na mesma rede)." + (OVL.rdev ? " Ou use a aba Tela (Remoto), que também tem terminal." : "")
-    : m.wg ? (m.wg_reason || "O túnel WireGuard desta máquina está desconectado agora.")
+    : m.wg ? (m.wg_reason || "O túnel WireGuard desta máquina está desconectado agora.") + (win && OVL.rdev ? " Enquanto isso, use a aba Tela (Remoto), que também tem terminal." : "")
+    : win && m.tailscale_ip ? (p.message || "O painel não está na Tailnet.")
+    : win ? (m.build_wg ? "O PC ainda não se conectou ao hub WireGuard (acontece na pós-instalação, com internet)." : "Este PC não tem túnel (WireGuard/Tailscale) conectado.") + " Em Configurações, dá para informar um endereço que o painel alcance (ex.: o IP da rede local, se o painel estiver na mesma rede)." + (OVL.rdev ? " Ou use a aba Tela (Remoto), que também tem terminal." : "")
     : !m.tailscale_ip ? "A máquina ainda não informou IP do Tailscale nem se conectou ao hub WireGuard. Aguarde ou defina um endereço em Configurações."
     : (p.message || "O painel não está na Tailnet.");
   $("#ovlBody").innerHTML = `${provBanner(m)}
@@ -1576,31 +1611,32 @@ async function tabVpn() {
   $("#ovlBody").innerHTML = "Carregando…";
   let d;
   try { d = await api(`/api/machines/${OVL.id}/wg`); } catch (e) { $("#ovlBody").innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
-  const m = OVL.m, w = d.machine;
+  const m = OVL.m, w = d.machine, win = m.platform === "windows";
   if (!d.enabled) { $("#ovlBody").innerHTML = `<div class="note warn">WireGuard pelo seu servidor está desligado neste painel. Defina <code>HUB_ENDPOINT</code> no Coolify (e abra a porta UDP no roteador).</div>`; return; }
-  if (!w) { $("#ovlBody").innerHTML = `<div class="note">Esta máquina ainda não se registrou no hub. Isso acontece sozinho no primeiro boot se a ISO foi gerada com “WireGuard pelo seu servidor”${d.hub.online ? "" : " — e o hub precisa estar no ar (" + esc(d.hub.message || "") + ")"}.</div>`; return; }
+  if (!w) { $("#ovlBody").innerHTML = `<div class="note">Esta máquina ainda não se registrou no hub. Isso acontece sozinho ${win ? "na pós-instalação do Windows se a configuração" : "no primeiro boot se a ISO"} foi gerada com “WireGuard pelo seu servidor”${d.hub.online ? "" : " — e o hub precisa estar no ar (" + esc(d.hub.message || "") + ")"}.</div>`; return; }
   const lans = (m.local_ips || []).map(x => { const [ifn, cidr] = x.split(" "); return { ifn, cidr }; }).filter(x => x.cidr && x.cidr.endsWith("/24"));
   $("#ovlBody").innerHTML = `
     <div class="grid2">
       ${kv("Túnel", w.connected ? `<span class="ok">● conectado</span> <span class="muted small">(${fmtAgo(w.last_handshake)})</span>` : `<span class="err">● sem conexão</span> <span class="muted small">${w.last_handshake ? "último contato " + fmtAgo(w.last_handshake) : "nunca conectou"}</span>`)}
-      ${kv("IP do servidor na VPN", `<span class="mono">${esc(w.server_ip)}</span>`)}
+      ${kv(win ? "IP do PC na VPN" : "IP do servidor na VPN", `<span class="mono">${esc(w.server_ip)}</span>`)}
       ${kv("Hub", d.hub.online ? `<span class="ok">no ar</span> · <span class="mono small">${esc(d.endpoint)}</span>` : `<span class="err">${esc(d.hub.message || "fora do ar")}</span>`)}
-      ${kv("Rede do cliente", w.lan ? `<span class="mono">${esc(w.lan_cidr)}</span> → <span class="mono">${esc(w.lan_map)}</span>` : "desligada")}
+      ${kv("Rede do cliente", win ? "não disponível no Windows" : w.lan ? `<span class="mono">${esc(w.lan_cidr)}</span> → <span class="mono">${esc(w.lan_map)}</span>` : "desligada")}
     </div>
     ${!w.connected && m.wg_reason ? `<div class="note warn u-mt12"><b>Por que não conecta:</b> ${esc(m.wg_reason)}</div>` : ""}
     ${m.wg_note ? `<div class="note u-mt12">${esc(m.wg_note)}</div>` : ""}
     <h3>Conectar um dispositivo seu (Mac, Windows, celular)</h3>
-    <p class="small muted">Gera uma configuração só para este servidor. Instale o app oficial do WireGuard, importe o arquivo ou escaneie o QR code e ative. A chave privada é mostrada <b>uma única vez</b>.</p>
+    <p class="small muted">Gera uma configuração só para ${win ? "este PC" : "este servidor"}. Instale o app oficial do WireGuard, importe o arquivo ou escaneie o QR code e ative. A chave privada é mostrada <b>uma única vez</b>.</p>
     <form id="wgNew" class="row"><input name="name" placeholder="ex.: MacBook do suporte" maxlength="40"><button class="btn primary" type="submit">Gerar acesso</button></form>
     <div id="wgOut"></div>
     <h3>Dispositivos com acesso</h3>
     <div id="wgList">${d.clients.length ? `<div class="table-wrap"><table>${d.clients.map(c => `<tr><td><b>${esc(c.name)}</b><br><span class="muted small mono">${esc(c.ip)}</span></td><td class="small">${c.last_handshake ? "último uso " + fmtAgo(c.last_handshake) : "nunca conectou"}</td><td class="small">${fmtDate(c.created_at)}</td><td><button class="btn sm danger" data-rev="${c.id}">Revogar</button></td></tr>`).join("")}</table></div>` : `<p class="muted small">Nenhum ainda.</p>`}</div>
-    <h3>Acesso à rede local do cliente (opcional)</h3>
+    ${win ? `<h3>Acesso à rede local do cliente</h3>
+    <p class="small muted">Ainda não existe no Windows: pela VPN você alcança só o próprio PC (<span class="mono">${esc(w.server_ip)}</span>), não os outros equipamentos da rede do cliente. Se precisar disso, use um servidor Ubuntu instalado por este painel na mesma rede.</p>` : `<h3>Acesso à rede local do cliente (opcional)</h3>
     <p class="small muted">Com isso ligado, pela VPN você alcança também os equipamentos da rede do cliente (impressoras, câmeras, sistemas). Para não conflitar com redes iguais de outros clientes, cada rede ganha um endereço próprio: <span class="mono">192.168.0.50</span> vira <span class="mono">${esc(w.lan_map.replace(/\.0\/24$/, ".50"))}</span>. Aplicado pelo servidor em até 10 min; depois, gere o acesso do dispositivo de novo para incluir essa rota.</p>
     ${lans.length ? `<form id="wgLan" class="row"><select name="lan">${lans.map(l => `<option value="${esc(l.ifn)}|${esc(l.cidr)}" ${w.lan_if === l.ifn ? "selected" : ""}>${esc(l.ifn)} · ${esc(l.cidr)}</option>`).join("")}</select>
       <button class="btn ${w.lan ? "" : "primary"}" type="submit" name="on" value="1">${w.lan ? "Atualizar" : "Ligar acesso à rede"}</button>
       ${w.lan ? `<button class="btn danger" type="button" id="wgLanOff">Desligar</button>` : ""}</form>`
-      : `<p class="muted small">A máquina não informou nenhuma rede local /24.</p>`}`;
+      : `<p class="muted small">A máquina não informou nenhuma rede local /24.</p>`}`}`;
   $("#wgNew").onsubmit = async ev => {
     ev.preventDefault();
     try {
@@ -1611,7 +1647,8 @@ async function tabVpn() {
         <div><b>Acesso “${esc(c.name)}” criado</b>
         <ol class="small"><li>Instale o WireGuard: <a href="https://apps.apple.com/app/wireguard/id1451685025" target="_blank" rel="noopener">Mac</a> · <a href="https://www.wireguard.com/install/" target="_blank" rel="noopener">Windows/Linux</a> · <a href="https://apps.apple.com/app/wireguard/id1441195209" target="_blank" rel="noopener">iPhone</a> · <a href="https://play.google.com/store/apps/details?id=com.wireguard.android" target="_blank" rel="noopener">Android</a></li>
         <li>Celular: escaneie o QR code. Computador: baixe o arquivo e use “Importar túnel de arquivo”.</li>
-        <li>Ative o túnel e conecte: <code>ssh ${esc(m.admin_user)}@${esc(c.server_ip)}</code>${c.lan_map ? ` · rede do cliente em <span class="mono">${esc(c.lan_map)}</span>` : ""}</li></ol>
+        <li>${win ? `Ative o túnel: o PC fica em <span class="mono">${esc(c.server_ip)}</span> (ex.: Área de Trabalho Remota, se ligada no PC, ou pastas compartilhadas). O OpenSSH do PC aceita só a chave do painel: para o PowerShell, use o terminal no navegador.`
+          : `Ative o túnel e conecte: <code>ssh ${esc(m.admin_user)}@${esc(c.server_ip)}</code>${c.lan_map ? ` · rede do cliente em <span class="mono">${esc(c.lan_map)}</span>` : ""}`}</li></ol>
         <div class="row"><a class="btn primary" href="${blob}" download="${esc(fname)}">⬇ Baixar ${esc(fname)}</a><button class="btn" id="wgCopy">Copiar configuração</button></div>
         <p class="muted small u-mt8">Guarde agora: por segurança a chave privada não fica no painel. Perdeu? Revogue e gere outro.</p></div></div></div>`;
       $("#wgCopy").onclick = async () => { try { await navigator.clipboard.writeText(c.config); toast("Copiado!"); } catch (e) { toast("Não foi possível copiar."); } };
@@ -1669,27 +1706,33 @@ function tabConectar() {
   const gv = $("#goVpn"); if (gv) gv.onclick = () => showTab("vpn");
 }
 
-// Windows: SSH (OpenSSH, PowerShell) pela rede local ou endereço definido; Remoto para tela
+// Windows: Remoto (tela), VPN (WireGuard/Tailscale) até o PC e o terminal no navegador.
+// O OpenSSH do PC aceita só a chave do painel (sem senha), por isso o SSH direto fica
+// para quem cadastrar a própria chave.
 function tabConectarWin(m, os) {
   const host = sshTarget(m) || "IP-DO-PC", user = m.admin_user, port = m.ssh_host ? +m.ssh_port || 22 : m.ssh_port_real || 22;
   const cmd = `ssh ${port !== 22 ? `-p ${port} ` : ""}${user}@${host}`;
+  let n = 0;
+  const box = (title, body) => `<div class="stepbox"><span class="n">${++n}</span><div><h2>${title}</h2>${body}</div></div>`;
+  const tsDl = { windows: "https://tailscale.com/download/windows", "windows-arm64": "https://tailscale.com/download/windows", macos: "https://tailscale.com/download/mac", linux: "https://tailscale.com/download/linux", mobile: "https://tailscale.com/download" }[os];
   $("#ovlBody").innerHTML = `
     <div class="dl">
-      ${OVL.rdev ? `<div class="stepbox"><span class="n">1</span><div><h2>Pelo Remoto (de qualquer lugar)</h2>
-        <p class="small">Tela, terminal e arquivos pelo navegador, sem instalar nada e sem abrir portas.</p>
-        <button class="btn primary" id="goTela">Abrir tela</button></div></div>` : ""}
-      <div class="stepbox"><span class="n">${OVL.rdev ? 2 : 1}</span><div><h2>SSH pela rede local</h2>
-        <p class="small">Com o seu computador na mesma rede do PC (ou com um endereço que alcance ele), no ${os.startsWith("windows") ? "PowerShell" : "terminal"}:</p>
+      ${OVL.rdev ? box("Pelo Remoto (de qualquer lugar)", `<p class="small">Tela, terminal e arquivos pelo navegador, sem instalar nada e sem abrir portas.</p>
+        <button class="btn primary" id="goTela">Abrir tela</button>`) : ""}
+      ${m.wg ? box("Pela VPN do seu servidor (WireGuard)", `<p class="small">Na aba <b>VPN (WireGuard)</b>, gere um acesso para este computador, importe no app WireGuard e ative o túnel. O PC fica em <b class="mono">${esc(m.wg.server_ip)}</b> (ex.: Área de Trabalho Remota, se ligada no PC).</p>
+        <button class="btn" type="button" id="goVpn">Abrir aba VPN</button>`) : ""}
+      ${m.tailscale_ip ? box("Pela sua Tailnet", `<p class="small">O PC está na sua Tailnet com o IP <b class="mono">${esc(m.tailscale_ip)}</b>${m.tailscale_dns ? ` (<span class="mono">${esc(m.tailscale_dns.split(".")[0])}</span>)` : ""}. Seu computador precisa estar na mesma Tailnet.</p>
+        <a class="btn" href="${tsDl}" target="_blank" rel="noopener">⬇ Instalar Tailscale (${OS_NAME[os]})</a>`) : ""}
+      ${box("Terminal no navegador (PowerShell)", `<p class="small">O painel entra pela chave dele${m.wg || m.tailscale_ip ? " pelo túnel" : ", se alcançar o endereço do PC (defina em Configurações)"}. Abre o PowerShell já como administrador.</p>
+        <button class="btn primary" id="goT">Abrir terminal no navegador</button>`)}
+      ${box("SSH do seu computador", `<p class="small">O OpenSSH do PC aceita <b>só chave</b> (sem senha). Para entrar do seu computador, adicione a sua chave pública pelo terminal do navegador em <code>C:\\ProgramData\\ssh\\administrators_authorized_keys</code> e use:</p>
         <div class="row"><button class="btn" data-copy="${esc(cmd)}">Copiar comando</button></div>
-        <pre class="log u-mt8">${esc(cmd)}</pre>
-        <p class="muted small">Pede a senha do usuário <b class="mono">${esc(user)}</b> definida ao gerar a configuração (o painel não guarda senhas). Abre o PowerShell do Windows.</p></div></div>
-      <div class="stepbox"><span class="n">${OVL.rdev ? 3 : 2}</span><div><h2>Terminal no navegador</h2>
-        <p class="small">O painel entra pela chave dele, se alcançar o endereço da máquina (defina em Configurações).</p>
-        <button class="btn" id="goT">Abrir terminal no navegador</button></div></div>
+        <pre class="log u-mt8">${esc(cmd)}</pre>`)}
     </div>`;
   $$("#ovlBody [data-copy]").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copiado!"); } catch (e) { toast(b.dataset.copy); } });
   $("#goT").onclick = () => showTab("terminal");
   const gt = $("#goTela"); if (gt) gt.onclick = () => showTab("tela");
+  const gv = $("#goVpn"); if (gv) gv.onclick = () => showTab("vpn");
 }
 
 /* ---------- configurações */

@@ -619,10 +619,10 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
     if busy >= 5:
         raise HTTPException(429, "Muitas ISOs na fila. Tente em alguns minutos.")
     data = core.validate_build(d)
-    if data["os"] == "windows":
-        return _create_windows(d, data, u)
     if data["config"].get("WG_ENABLED") == "yes" and not wg.enabled():
         raise core.Invalid("WireGuard escolhido, mas o hub não está configurado (defina HUB_ENDPOINT no Coolify).")
+    if data["os"] == "windows":
+        return _create_windows(d, data, u)
     bid = secrets.token_hex(8)
     cfg = data["config"]
     # token com que a máquina instalada se reporta ao painel (só o hash no banco)
@@ -1071,6 +1071,7 @@ def _vpn_reason(m: dict, hub: dict) -> tuple[str, str]:
     rede do cliente (UDP bloqueado); se nenhuma conecta, está do lado do hub/roteador."""
     w, rep = m["wg"], (m.get("report") or {}).get("wg") or {}
     rep = rep if isinstance(rep, dict) else {}
+    win = m.get("platform") == "windows"
     note = str(rep.get("message") or "") if rep.get("state") in ("ativo", "conectando") else ""
     if w.get("connected"):
         return "", note
@@ -1083,9 +1084,9 @@ def _vpn_reason(m: dict, hub: dict) -> tuple[str, str]:
     if not m.get("online"):
         return "A máquina está desligada ou sem internet: o túnel volta sozinho quando ela ligar.", ""
     if rep.get("state") == "erro":
-        return f"O servidor recusou a configuração do túnel: {rep.get('message') or 'erro desconhecido'}.", ""
+        return f"{'O PC' if win else 'O servidor'} recusou a configuração do túnel: {rep.get('message') or 'erro desconhecido'}.", ""
     if rep.get("state") == "aguardando":
-        return f"O túnel ainda não foi configurado no servidor: {rep.get('message') or 'aguardando o painel'}.", ""
+        return f"O túnel ainda não foi configurado {'no PC' if win else 'no servidor'}: {rep.get('message') or 'aguardando o painel'}.", ""
     if time.time() - (m.get("first_seen") or 0) < 300:
         return "Conectando: a máquina acabou de aparecer; o túnel sobe em alguns minutos.", ""
     mine = w.get("last_handshake") or 0
@@ -1095,7 +1096,7 @@ def _vpn_reason(m: dict, hub: dict) -> tuple[str, str]:
         return (f"A máquina está online (o relatório chega por HTTPS), mas o túnel não tem resposta do hub. "
                 f"Como outras máquinas conectam normalmente, o mais provável é a rede do cliente bloquear UDP "
                 f"de saída (porta {port}); acontece em redes de empresa e de hotel. Peça a liberação ou use "
-                f"o Tailscale nessas ISOs (ele contorna o bloqueio)."), note
+                f"o Tailscale nessas {'instalações' if win else 'ISOs'} (ele contorna o bloqueio)."), note
     return (f"Nenhuma máquina consegue conectar ao hub agora: confira se a porta UDP {port} está liberada "
             f"no seu roteador e se {wg.HUB_ENDPOINT.rsplit(':', 1)[0]} (DDNS) aponta para o IP atual da sua casa."), note
 
@@ -1127,6 +1128,8 @@ def _machines(where: str = "", args: tuple = ()) -> list[dict]:
         summ = json.loads(b.get("summary") or "{}")
         m["apps"] = {"docker": summ.get("DOCKER_ENABLED") == "yes", "coolify": summ.get("COOLIFY_ENABLED") == "yes",
                      "cockpit": summ.get("COCKPIT_ENABLED") == "yes"}
+        m["build_wg"] = summ.get("WG_ENABLED") == "yes"  # a ISO/configuração pediu o túnel WireGuard
+        m["build_ts"] = summ.get("TAILSCALE_ENABLED") == "yes"
         m["wg"] = wg.machine_info(r["id"]) if wg.enabled() else None
         m["archived_at"] = r["archived_at"]
         m["wg_reason"], m["wg_note"] = _vpn_reason(m, hub) if m["wg"] else ("", "")
@@ -1271,9 +1274,11 @@ def machine_wg_client_delete(mid: str, cid: int, u: core.User = Depends(current_
 
 @app.post("/api/machines/{mid}/wg/lan")
 async def machine_wg_lan(mid: str, request: Request, u: core.User = Depends(current_user)):
-    _get_machine(mid)
+    m = _get_machine(mid)
     _need(u, mid, core.P_VPN)
     d = await body(request)
+    if d.get("enabled") and panel.platform_of(json.loads(m["report"] or "{}")) == "windows":
+        raise core.Invalid("O acesso à rede local do cliente ainda não existe no Windows: o túnel dá acesso só ao próprio PC.")
     wg.set_lan(mid, bool(d.get("enabled")), str(d.get("cidr") or ""), str(d.get("iface") or ""))
     return {"ok": True, "machine": wg.machine_info(mid)}
 

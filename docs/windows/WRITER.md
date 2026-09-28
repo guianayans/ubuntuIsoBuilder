@@ -60,10 +60,18 @@ nos testes com a ISO de avaliação).
 
 ## Pendrive gravado
 
-- **MBR** com **uma partição FAT32** (tipo `0x0C`, ativa) de 1 MiB até o fim do pendrive
-  (rótulo `WIN11`), cluster padrão do Windows (4–32 KB), área de dados alinhada a 1 MiB.
-  O UEFI de qualquer PC (e o OVMF) inicia por `\EFI\BOOT\BOOTX64.EFI`, assinado pela Microsoft:
-  funciona **com Secure Boot ligado**.
+- **MBR** com **uma partição FAT32** (tipo `0x0C`, ativa, CHS do início calculado para
+  255×63 e `FE FF FF` além do cilindro 1023) de 1 MiB até o fim do pendrive (rótulo `WIN11`),
+  cluster padrão do Windows (4–32 KB), área de dados alinhada a 1 MiB. **Inicia nos dois
+  modos**, sem opção a escolher:
+  - **UEFI**: o firmware inicia `\EFI\BOOT\BOOTX64.EFI`, assinado pela Microsoft (funciona
+    **com Secure Boot ligado**);
+  - **BIOS antiga (Legacy/CSM)**: código de boot **próprio** (assembly 16-bit, `helper/bootcode/`,
+    ver abaixo) na MBR e no setor de boot, que carrega o `bootmgr` da raiz da ISO; ele lê
+    `\boot\BCD` e inicia o WinPE de `\sources\boot.wim`. Daí em diante é igual ao UEFI: o
+    `pe.js` vê `PEFirmwareType = 1` e instala em **MBR** com `bcdboot /f BIOS`.
+    Em PCs sem UEFI o Windows 11 não é suportado oficialmente pela Microsoft (a tela final e o
+    `LEIA-ME.txt` avisam).
 - Todos os arquivos da ISO, com nomes 8.3 exatos quando possível (`EFI\BOOT\BOOTX64.EFI`) e
   nomes longos (LFN) para o resto.
 - `sources/install.wim` > 4 GiB-1 → **`install.swm`, `install2.swm`, …** (até ~3,9 GiB cada).
@@ -75,10 +83,31 @@ nos testes com a ISO de avaliação).
 - Ordem de gravação: FAT/pastas → arquivos → limpa o último 1 MiB (restos de GPT antiga) →
   **MBR por último** (o sistema só vê a partição no fim). Tudo em blocos alinhados a 4 KiB
   (escrita bruta no Windows/macOS). Depois **relê** FAT, pastas e cada arquivo e compara SHA256.
-- **BIOS legado não é suportado**: a MBR e o setor de boot têm só um código mínimo que
-  escreve "Este pendrive inicia somente em modo UEFI…" e para. (Iniciar em BIOS exigiria o código
-  de boot da Microsoft (`bootsect`) ou um carregador próprio de `bootmgr`; o Windows 11 exige
-  UEFI de qualquer forma e o `autounattend` da parte A cria partições GPT.)
+
+### Boot BIOS (`helper/bootcode/`)
+
+Código escrito para o projeto (não é da Microsoft nem de projetos GPL), montado com o `nasm`
+num container descartável (`helper/bootcode/build.sh`); os `.bin` são versionados ao lado dos
+`.asm` e embutidos no gravador com `go:embed` (`helper/bootcode.go`).
+
+- `mbr.asm` → `mbr.bin` (440 bytes, só o código: a assinatura do disco (440..443, aleatória,
+  a mesma na gravação e na conferência), a tabela de partições e o `55AA` são do gravador).
+  Copia-se para `0000:0600`, acha a partição ativa, lê o 1º setor dela com a **INT 13h
+  AH=42h (LBA, extensões EDD)** para `0000:7C00`, confere `55AA` e salta com `DL` = disco e
+  `DS:SI` = entrada da partição.
+- `fat32.asm` → `fat32.bin` (3 setores). Setor 0 = setor de boot FAT32 (`EB 58 90`; os bytes
+  3..89, o BPB, são preenchidos pelo gravador): confere as extensões LBA e lê o **estágio 2**
+  dos setores **2 e 3** da partição (a área reservada tem ≥ 32 setores; o 1 é o FSInfo e o 6/7
+  as cópias), marcado com `UAB2`. O estágio 2 calcula FAT e dados pelo BPB, percorre a raiz
+  seguindo a cadeia na FAT, acha `BOOTMGR` (8.3) e carrega o arquivo **seguindo a FAT**
+  (contíguo ou fragmentado; clusters de 512 B a 64 KB, leituras de até 64 setores; LBA de
+  32 bits) em `2000:0000`, limitado ao topo da memória convencional (INT 12h). Salta para
+  `2000:0000` com `DL` = disco, `DS = ES = SS = 0`, `SP = 7C00` e o setor de boot (com o BPB e
+  o nº do disco em `0x40`) em `0000:7C00`.
+- Erros (sem LBA, leitura, `BOOTMGR` ausente, FAT inválida) mostram o motivo em português,
+  esperam uma tecla e devolvem o controle à BIOS (INT 18h).
+- O gravador aloca os arquivos contíguos (o `BOOTMGR` sai contíguo), mas o carregador não
+  depende disso.
 
 ### Divisão do WIM (`helper/wim.go`)
 
@@ -112,8 +141,8 @@ no Ventoy (ele trataria como variável e pediria um valor na tela).
 
 Windows: "Windows 11 Pro para “host”" → baixando a configuração → pedindo o link à Microsoft →
 barra de progresso do download (velocidade, minutos restantes, retomada) → conferindo → escolher
-pendrive (≥ 16 GB) → gravar/verificar → pronto (instruções de boot UEFI, "FORMATAR ESTA
-MÁQUINA"). Botão "Já tenho a ISO do Windows 11" sempre disponível durante o download (interrompe
+pendrive (≥ 16 GB) → gravar/verificar → pronto (instruções de boot: funciona em UEFI e em BIOS antiga (Legacy/CSM), aviso curto
+de que sem UEFI o Windows 11 não é suportado oficialmente; "FORMATAR ESTA MÁQUINA"). Botão "Já tenho a ISO do Windows 11" sempre disponível durante o download (interrompe
 o download); em erro da Microsoft, a lista de ISOs aparece sozinha.
 
 ## Modo trabalhador (macOS e uso avançado)
@@ -128,11 +157,21 @@ grava o pendrive do Windows (sem `--unattend`: ISO do Ubuntu bit a bit, como ant
   limites, nomes, SHA1 de cada recurso nas partes, `TOTALBYTES`, corrupção detectada),
   `TestWIMSplitRejectsSolid`, `TestBigFAT32` (leitor FAT32 próprio no teste: conteúdo, LFN,
   8.3 do boot UEFI, FATs iguais, alinhamento de toda escrita a 4 KiB, limpeza do fim, corrupção
-  detectada), `TestParseMSPage`, `TestMSGetLink` (servidor falso, incluindo `SentinelReject`),
+  detectada), `TestBootCodeStructure` (tamanhos, `EB 58 90`, `55AA`, BPB zerado no `.bin`,
+  marca `UAB2`, CHS), `TestBootCodeOnStick` (pendrive gravado: código da MBR, assinatura,
+  tabela, BPB, estágio 2 nos setores 2–3, cópia no setor 6, FSInfo intacto, `BOOTMGR` 8.3,
+  contíguo e fora do 1º cluster da raiz), `TestParseMSPage`, `TestMSGetLink` (servidor falso, incluindo `SentinelReject`),
   `TestVentoyAutoInstall`.
 - Opcionais: `UAB_WIN_ISO=/caminho.iso go test -run TestRealWindowsISO` (UDF + edições +
   divisão do install.wim real + conferência byte a byte e SHA1 dos recursos sem compressão;
   `UAB_SWM_OUT=pasta` grava as partes); `UAB_MS_LIVE=1 go test -run TestMSLive` (pede o link
   à Microsoft e baixa só 4 MB por Range).
+- `UAB_MS_FULL=/pasta go test -run TestMSFullDownload`: download **completo** real pelo
+  mesmo código (`downloadWindowsISO`), com conferência do SHA256 publicado pela Microsoft.
+- Boot BIOS real: `helper/bootcode/qemu-test.sh` grava pendrives (arquivos esparsos) de 6, 12,
+  24, 40 e 200 GB (clusters de 4, 8, 16 e 32 KB) com um `BOOTMGR` falso
+  (`bootcode/testbootmgr.asm`: confere CS/SS/SP/DL, o BPB em `7C00` e a soma de todo o
+  arquivo), contíguo ou **fragmentado no fim da partição** (LBA até ~4×10⁸), e inicia cada um
+  como disco USB no QEMU/KVM com SeaBIOS (`pc` e `q35`); resultado pela serial.
 - Teste sem a Microsoft: `UAB_MS_BASE=http://127.0.0.1:<porta>` troca o site por um servidor
   local (e não fala com ov-df/vlscppe).

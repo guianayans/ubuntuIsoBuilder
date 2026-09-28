@@ -1,12 +1,14 @@
 # ubuntu-autoinstall-builder (Windows) — relatório ao painel ("estou vivo").
 # Mesmo JSON do Linux (payload/uab-report.sh), com platform = "windows". Sem segredos.
 # Tarefas "UAB Report" (boot e a cada 10 min) e "UAB Shutdown" (-Shutdown, ao desligar).
+# Com WireGuard: a resposta do painel traz a configuração do túnel, aplicada por vpn.ps1.
 # Uso manual (PowerShell como administrador): & C:\ProgramData\uab\report.ps1 -Verbose
 [CmdletBinding()]
 param([switch]$Shutdown)
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 . (Join-Path $env:ProgramData 'uab\common.ps1')
+. (Join-Path $env:ProgramData 'uab\vpn.ps1')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
 
 $conf = Get-UabConf
@@ -72,7 +74,7 @@ $local = @()
 try {
     foreach ($ip in (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Sort-Object InterfaceIndex)) {
         if ($ip.IPAddress -like '127.*' -or $ip.IPAddress -like '169.254.*') { continue }
-        if ($ip.InterfaceAlias -match '^(vEthernet|Loopback|Tailscale|ZeroTier)') { continue }
+        if ($ip.InterfaceAlias -match '^(vEthernet|Loopback|Tailscale|ZeroTier)' -or $ip.InterfaceAlias -eq $UabWgName) { continue }
         $local += "$($ip.InterfaceAlias) $($ip.IPAddress)/$($ip.PrefixLength)"
     }
 } catch { }
@@ -85,6 +87,8 @@ foreach ($k in $st.steps.Keys) { $steps[$k] = $st.steps[$k] }
 
 $services = [ordered]@{ ssh = (Test-Svc 'sshd') }
 if ($conf.remote_agent) { $services.meshagent = (Test-Svc 'Mesh Agent') }
+if ($conf.wireguard) { $services.wireguard = (Test-Svc $UabWgService) }
+if ($conf.tailscale) { $services.tailscaled = (Test-Svc 'Tailscale') }
 $pt = Get-ScheduledTask -TaskName 'UAB Provision' -ErrorAction SilentlyContinue
 # a própria pós-instalação manda o último relatório ainda rodando: concluída = parada
 $services.'uab-provision' = [bool]($pt -and $pt.State -eq 'Running' -and $st.provisioned -notlike 'ok*')
@@ -112,7 +116,7 @@ $rep = [ordered]@{
     os                = [string]$os.Caption
     kernel            = $kernel
     uptime_seconds    = [int][math]::Floor(((Get-Date) - $os.LastBootUpTime).TotalSeconds)
-    tailscale         = @{}
+    tailscale         = $(if ($conf.tailscale) { Get-UabTsReport } else { @{} })
     local_ips         = @($local)
     gateway           = $gw
     provisioned       = [string]$st.provisioned
@@ -121,7 +125,7 @@ $rep = [ordered]@{
     steps             = $steps
     services          = $services
     docker_containers = $null
-    wg                = $null
+    wg                = $(if ($conf.wireguard) { Get-UabWgReport } else { $null })
     resources         = [ordered]@{
         cpus = $cpus; load1 = $load
         mem_total = [int64]$os.TotalVisibleMemorySize * 1024; mem_available = [int64]$os.FreePhysicalMemory * 1024
@@ -138,7 +142,7 @@ for ($i = 0; $i -lt 3 -and -not $ok; $i++) {
         $resp = Invoke-RestMethod -UseBasicParsing -Method Post -Uri $url -Headers $hdr -ContentType 'application/json' `
             -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 20
         $ok = $true
-        Write-Verbose ("resposta: " + ($resp | ConvertTo-Json -Compress -Depth 3))
+        Write-Verbose ("resposta: " + ($resp | ConvertTo-Json -Compress -Depth 4))  # sem segredos
     } catch {
         $code = 0
         try { $code = [int]$_.Exception.Response.StatusCode } catch { }
@@ -146,6 +150,12 @@ for ($i = 0; $i -lt 3 -and -not $ok; $i++) {
         if ($code -eq 429) { Start-Sleep 6 } elseif ($code -ge 400 -and $code -lt 500) { break } else { Start-Sleep 5 }
     }
 }
-if ($ok) { Set-Content -LiteralPath (Join-Path $UabRoot 'last-report') -Value (Get-UabNow) -Encoding ASCII }
+if ($ok) {
+    Set-Content -LiteralPath (Join-Path $UabRoot 'last-report') -Value (Get-UabNow) -Encoding ASCII
+    # túnel WireGuard até o hub: a resposta do painel traz a configuração
+    if ($conf.wireguard -and $resp -and ($resp.PSObject.Properties.Name -contains 'wg')) {
+        try { Invoke-UabWgApply $resp.wg } catch { Write-UabLog "wg: erro ao aplicar: $($_.Exception.Message)" 'report' }
+    }
+}
 else { Write-UabLog "relatório não enviado a $url" 'report' }
 exit 0

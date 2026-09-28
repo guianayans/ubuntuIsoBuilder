@@ -3,7 +3,9 @@ package main
 // FAT32 grande, gravado direto no pendrive em fluxo (sem montar nada e sem
 // carregar os arquivos na memória): usado no pendrive do Windows, que tem ~8 GB
 // de arquivos. Layout: tabela MBR com UMA partição FAT32 (tipo 0x0C, ativa)
-// começando em 1 MiB; o UEFI de qualquer PC inicializa por \EFI\BOOT\BOOTX64.EFI.
+// começando em 1 MiB; o UEFI de qualquer PC inicializa por \EFI\BOOT\BOOTX64.EFI e a
+// BIOS antiga (Legacy/CSM) pelo código de boot próprio da MBR e do setor de boot
+// (bootcode/), que carrega o BOOTMGR da raiz.
 // Os arquivos ficam contíguos; tudo é gravado em blocos alinhados a 4 KiB (a
 // escrita bruta em disco no Windows/macOS exige alinhamento).
 
@@ -128,6 +130,7 @@ type bigFAT struct {
 	usedBytes int64
 	fileBytes int64
 	label     string
+	diskSig   uint32 // assinatura do disco na MBR (aleatória, a mesma na gravação e na conferência)
 	now       time.Time
 	order     []*bigNode // arquivos na ordem de gravação
 	dirs      []*bigNode
@@ -262,22 +265,13 @@ func (f *bigFAT) clusterOff(c uint32) int64 {
 	return f.partOff + f.dataOff + int64(c-2)*int64(f.cs)
 }
 
-// bootMessageCode: código x86 mínimo para BIOS antiga (modo legado): mostra um
-// aviso e para, em vez de travar numa tela preta.
-func bootMessageCode(base uint16, msg string) []byte {
-	si := 0x7C00 + base + 31
-	code := []byte{0xFA, 0x31, 0xC0, 0x8E, 0xD8, 0x8E, 0xD0, 0xBC, 0x00, 0x7C, 0xFB,
-		0xBE, byte(si), byte(si >> 8), 0xAC, 0x08, 0xC0, 0x74, 0x09, 0xB4, 0x0E, 0xBB, 0x07, 0x00,
-		0xCD, 0x10, 0xEB, 0xF2, 0xF4, 0xEB, 0xFD}
-	return append(code, append([]byte(msg), 0)...)
-}
-
-const legacyBootMsg = "\r\nEste pendrive inicia somente em modo UEFI.\r\nNo setup da placa-mae, ative UEFI e escolha o pendrive (UEFI).\r\n"
-
 func (f *bigFAT) bootSector() []byte {
 	le := binary.LittleEndian
 	bs := make([]byte, 512)
-	copy(bs[0:], []byte{0xEB, 0x58, 0x90})
+	copy(bs, fat32Code[:512]) // código de boot BIOS; o BPB (3..89) é escrito a seguir
+	for i := bpbStart; i < bpbEnd; i++ {
+		bs[i] = 0
+	}
 	copy(bs[3:], "MSWIN4.1")
 	le.PutUint16(bs[11:], 512)
 	bs[13] = byte(f.cs / 512)
@@ -297,7 +291,6 @@ func (f *bigFAT) bootSector() []byte {
 	le.PutUint32(bs[67:], uint32(f.now.Unix()))
 	copy(bs[71:82], padLabel(f.label))
 	copy(bs[82:90], "FAT32   ")
-	copy(bs[90:], bootMessageCode(90, legacyBootMsg))
 	bs[510], bs[511] = 0x55, 0xAA
 	return bs
 }
@@ -331,6 +324,7 @@ func (f *bigFAT) metaChunk(b []byte, off int64) {
 	le.PutUint32(fi[508:], 0xAA550000)
 	put(0, bs)
 	put(512, fi)
+	put(fat32Stage2Sector*512, fat32Code[512:]) // estágio 2 do boot BIOS (setores 2 e 3)
 	put(6*512, bs)
 	put(7*512, fi)
 	// FATs (duas cópias iguais)
@@ -579,16 +573,23 @@ func (f *bigFAT) write(dev rwAt, devSize int64, p *progress) error {
 func (f *bigFAT) mbr() []byte {
 	le := binary.LittleEndian
 	m := make([]byte, 512)
-	copy(m, bootMessageCode(0, legacyBootMsg))
-	var sig [4]byte
-	_, _ = rand.Read(sig[:])
-	copy(m[440:444], sig[:])
+	copy(m, mbrCode[:440]) // código de boot BIOS: carrega o setor de boot da partição ativa
+	if f.diskSig == 0 {
+		var sig [4]byte
+		for f.diskSig == 0 {
+			_, _ = rand.Read(sig[:])
+			f.diskSig = le.Uint32(sig[:])
+		}
+	}
+	le.PutUint32(m[440:], f.diskSig) // assinatura do disco
 	e := m[446:462]
-	e[0] = 0x80                         // ativa
-	e[1], e[2], e[3] = 0xFE, 0xFF, 0xFF // CHS "fora do alcance": usar LBA
-	e[4] = 0x0C                         // FAT32 (LBA)
-	e[5], e[6], e[7] = 0xFE, 0xFF, 0xFF
-	le.PutUint32(e[8:], uint32(f.partOff/512))
+	first := uint32(f.partOff / 512)
+	e[0] = 0x80 // ativa
+	cs, ce := chsOf(first), chsOf(first+f.partSecs-1)
+	copy(e[1:4], cs[:])
+	e[4] = 0x0C // FAT32 (LBA)
+	copy(e[5:8], ce[:])
+	le.PutUint32(e[8:], first)
 	le.PutUint32(e[12:], f.partSecs)
 	m[510], m[511] = 0x55, 0xAA
 	return m
@@ -656,7 +657,7 @@ func (f *bigFAT) verify(dev io.ReaderAt, p *progress) error {
 	if _, err := dev.ReadAt(mbr, 0); err != nil {
 		return fmt.Errorf("falha ao reler o pendrive: %w", err)
 	}
-	if !bytes.Equal(mbr[446:462], f.mbr()[446:462]) || mbr[510] != 0x55 || mbr[511] != 0xAA {
+	if want := f.mbr(); !bytes.Equal(mbr[:512], want) {
 		return errors.New("verificação falhou: tabela de partições não confere")
 	}
 	return nil

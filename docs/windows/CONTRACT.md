@@ -36,11 +36,16 @@ PANEL_ACCESS  = "yes" | "no"                 # OpenSSH + chave do painel (termin
 REMOTE_AGENT  = "yes" | "no"                 # agente MeshCentral (Remoto)
 WIN_APPS      = "Google.Chrome 7zip.7zip ..." # IDs do winget, separados por espaço
 DISK_MODE     = "largest"                    # único modo na Fase 1 (ver §4)
+WG_ENABLED    = "yes" | "no"                 # túnel WireGuard até o hub do painel (Fase 2)
+TAILSCALE_ENABLED  = "yes" | "no"            # Tailscale (Fase 2)
+TAILSCALE_HOSTNAME = "recepcao-01"           # nome na Tailnet (padrão: HOSTNAME_); "" sem Tailscale
 ```
 
 Segredos (fora do `cfg`, passados à parte): `password` (texto), `win_key` (chave do
 Windows; vazio = chave genérica de instalação do Pro, sem ativação:
-`VK7JG-NPHTM-C97JM-9MPGT-3V66T`).
+`VK7JG-NPHTM-C97JM-9MPGT-3V66T`), `tailscale_key` (auth key `tskey-…`; vazio sem Tailscale).
+O `summary` do build guarda `WG_ENABLED`, `TAILSCALE_ENABLED` e `TAILSCALE_HOSTNAME` (nunca a
+chave): o `agent_report` só registra o túnel quando o summary tem `WG_ENABLED=yes`.
 
 ## 2. Gerador (parte A) — API usada pelo painel
 
@@ -48,7 +53,7 @@ Windows; vazio = chave genérica de instalação do Pro, sem ativação:
 # web/app/winconfig.py
 def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
     """Devolve o autounattend.xml completo (UTF-8), autocontido."""
-# secrets = {"password": str, "win_key": str}
+# secrets = {"password": str, "win_key": str, "tailscale_key": str}
 # ctx = {"build_id": str, "panel_url": str, "report_token": str,
 #        "panel_pubkey": str | "", "remote_agent_url": str | "", "remote_meshid": str | ""}
 
@@ -102,6 +107,10 @@ arquivo funciona no pendrive do isoBuilder **e** no Ventoy (plugin `auto_install
      é registrado e não trava os outros.
   4. `report` — tarefa "UAB Report" a cada 10 min e no boot.
   Estado em `C:\ProgramData\uab\status.json` (etapas `ok` / `falhou <data>: <motivo>`).
+- Fase 2 (VPN), entre `openssh` e `remote_agent`: `wireguard` (se WG_ENABLED),
+  `tailscale_install` e `tailscale_login` (se TAILSCALE_ENABLED). Uma etapa pode ficar
+  `desistiu…: <motivo>` (não tenta mais e não trava a pós-instalação; hoje só o
+  `tailscale_login`, após 3 falhas com a auth key).
 
 ## 5. Relatório do Windows (parte A → painel)
 
@@ -113,9 +122,16 @@ Linux (`payload/uab-report.sh`), com:
 - `hostname` em minúsculas; `os` = `Caption` do Windows (ex.: "Microsoft Windows 11 Pro");
 - `platform: "windows"`; `kernel` = versão/build; `admin_user`; `ssh_auth: "key"`; `ssh_port: 22`;
 - `local_ips` no formato `"<nome da interface> <ip>/<prefixo>"`;
-- `services` {`ssh`, `meshagent`}; `provisioned`, `provision_plan`, `provision_current`,
+- `services` {`ssh`, `meshagent`, `wireguard` (serviço do túnel), `tailscaled` (serviço
+  “Tailscale”)} — os dois últimos só quando usados; `provisioned`, `provision_plan`, `provision_current`,
   `steps` (mesmo sentido do Linux); `resources` (cpus, mem_total, mem_available, disk_total,
   disk_free); `uptime_seconds`.
+- `wg` (se WG_ENABLED; senão `null`): `{"pubkey", "state", "address", "handshake", "lan",
+  "message"}`, o mesmo do Linux. A resposta do painel traz `wg` com a configuração do túnel
+  (`address`, `hub_pubkey`, `endpoint`, `allowed_ips`, `keepalive`, `net`, `lanmap_net`, e
+  `lan` opcional) ou `{"pending"|"error": ...}`; o PC valida e aplica (PAYLOAD.md §3.1).
+  No Windows `lan` é **ignorado** (sem NETMAP; `message` avisa) e `lan` no relatório é `""`.
+- `tailscale` (se TAILSCALE_ENABLED; senão `{}`): `{"state", "ips", "dns", "hostname"}`.
 
 ## 6. Gravador (parte B)
 
@@ -142,3 +158,22 @@ Linux (`payload/uab-report.sh`), com:
   conferir `df`; **nunca deixar menos de 10 GB livres**; apagar imagens/VMs ao terminar.
   A ISO do Windows de teste fica em `work/win/iso/` e é compartilhada entre as partes.
 - Textos para o usuário em português do Brasil.
+
+## 8. Mudanças de contrato — Fase 2 (VPN no Windows)
+
+| O quê | Antes | Agora |
+|---|---|---|
+| `cfg` (§1) | sem VPN | `WG_ENABLED`, `TAILSCALE_ENABLED`, `TAILSCALE_HOSTNAME` |
+| `secrets` (§1, §2) | `password`, `win_key` | + `tailscale_key` (vai só para `C:\ProgramData\uab\tailscale-authkey`, apagado após o login) |
+| `summary` do build | sem VPN | + `WG_ENABLED`, `TAILSCALE_ENABLED`, `TAILSCALE_HOSTNAME` |
+| POST `/api/builds` (Windows) | … | + `wireguard`, `tailscale`, `tailscale_key`, `tailscale_hostname` (WireGuard exige `HUB_ENDPOINT` no painel) |
+| Etapas (§4) | openssh, remote_agent, apps, report | + `wireguard`, `tailscale_install`, `tailscale_login`; valor `desistiu…` |
+| Relatório (§5) | `wg: null`, `tailscale: {}` | `wg` e `tailscale` como no Linux; `services.wireguard`/`services.tailscaled` |
+| Resposta do relatório | ignorada | `wg` aplicada pelo `vpn.ps1` (túnel como serviço `WireGuardTunnel$uabwg`) |
+| `uab.json` | … | + `wireguard`, `tailscale`, `tailscale_hostname` |
+| Arquivos extraídos | common/specialize/provision/report.ps1 | + `vpn.ps1` |
+| Painel | aba VPN escondida no Windows | aba VPN no Windows (sem “rede local do cliente”; `POST /api/machines/{id}/wg/lan` recusa ligar no Windows); terminal pelo túnel |
+| `/api/machines` | … | + `build_wg`, `build_ts` (o build pediu WireGuard/Tailscale) |
+
+Chave do painel no Windows continua **sem** `from=` (o painel também pode entrar por um
+endereço manual); o OpenSSH do Windows aceita só chave.

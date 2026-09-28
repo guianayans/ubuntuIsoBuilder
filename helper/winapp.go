@@ -24,7 +24,9 @@ Confirme digitando FORMATAR: o computador reinicia pelo pendrive e a instalaçã
 é automática (não é preciso responder nada).
 
 Sem os programas: desligue, ligue de novo apertando a tecla do menu de boot
-(F12, F11, F8 ou Esc) e escolha o pendrive (a opção "UEFI").
+(F12, F11, F8 ou Esc) e escolha o pendrive. Ele funciona em UEFI e em BIOS antiga
+(Legacy/CSM); se o pendrive aparecer duas vezes, prefira a opção "UEFI".
+Em PCs sem UEFI o Windows 11 funciona, mas não é suportado oficialmente pela Microsoft.
 `
 
 // selectWindowsISO: o usuário escolheu uma ISO própria (ou o download da Microsoft falhou).

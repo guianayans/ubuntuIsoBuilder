@@ -45,13 +45,15 @@ URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:\d{1,5})?(/[A-Za-z0-9._~/%-]*)?$
 PUBKEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|"
                        r"sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [^\r\n]{0,200})?$")
 MESHID_RE = re.compile(r"^[A-Za-z0-9@$_-]{16,128}$")
+TS_KEY_RE = re.compile(r"^tskey-(auth-)?[A-Za-z0-9_-]{10,200}$")
+TS_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 RESERVED_USERS = {"administrator", "administrador", "guest", "convidado", "defaultaccount", "wdagutilityaccount",
                   "defaultuser0", "system", "sistema", "none", "nenhum", "users", "usuarios", "admin",
                   "administrators", "administradores", "everyone", "todos", "sshd", "network", "local"}
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 # arquivos extraídos em C:\ProgramData\uab no passo specialize
-PS_SCRIPTS = ("common.ps1", "specialize.ps1", "provision.ps1", "report.ps1")
+PS_SCRIPTS = ("common.ps1", "specialize.ps1", "provision.ps1", "report.ps1", "vpn.ps1")
 
 # Roda no specialize (via iex, com $x = o unattend.xml carregado): grava cada <File> e
 # chama o specialize.ps1. .ps1 em UTF-8 COM BOM (o PowerShell 5.1 precisa para acentos).
@@ -227,6 +229,19 @@ def _validate(cfg: dict, secrets: dict, ctx: dict) -> dict:
         if not MESHID_RE.match(mid):
             raise ValueError("Id do grupo do Remoto inválido.")
     v["remote_url"], v["meshid"] = (rurl, mid) if v["remote_agent"] else ("", "")
+    # WireGuard pelo hub do painel: nada de segredo aqui (a chave privada é gerada no PC)
+    v["wireguard"] = str(cfg.get("WG_ENABLED") or "no") == "yes"
+    # Tailscale: a auth key é segredo (vai só no arquivo tailscale-authkey, apagado após o uso)
+    v["tailscale"] = str(cfg.get("TAILSCALE_ENABLED") or "no") == "yes"
+    v["ts_host"], v["ts_key"] = "", ""
+    if v["tailscale"]:
+        th = str(cfg.get("TAILSCALE_HOSTNAME") or host).strip().lower()
+        if not TS_HOST_RE.match(th):
+            raise ValueError("Nome na Tailnet inválido.")
+        tk = re.sub(r"\s", "", str(secrets.get("tailscale_key") or ""))
+        if not TS_KEY_RE.match(tk):
+            raise ValueError("Auth key do Tailscale inválida (deve começar com tskey-auth-).")
+        v["ts_host"], v["ts_key"] = th, tk
     return v
 
 
@@ -329,7 +344,8 @@ def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
     conf = {
         "build_id": v["build"], "panel_url": v["panel_url"], "hostname": v["host"], "admin_user": v["user"],
         "panel_access": v["panel_access"], "remote_agent": v["remote_agent"], "remote_url": v["remote_url"],
-        "apps": v["apps"], "win_version": str(cfg.get("WIN_VERSION") or "11"),
+        "apps": v["apps"], "activate": v["key"] != GENERIC_PRO_KEY, "wireguard": v["wireguard"], "tailscale": v["tailscale"], "tailscale_hostname": v["ts_host"],
+        "win_version": str(cfg.get("WIN_VERSION") or "11"),
         "win_edition": str(cfg.get("WIN_EDITION") or "Pro"),
     }
     files: list[tuple[str, str]] = [(f"{UAB_DIR}\\{n}", _read_script(n)) for n in PS_SCRIPTS]
@@ -339,6 +355,8 @@ def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
         files.append((f"{UAB_DIR}\\panel.pub", v["pubkey"]))
     if v["meshid"]:
         files.append((f"{UAB_DIR}\\remote-meshid", v["meshid"]))
+    if v["ts_key"]:
+        files.append((f"{UAB_DIR}\\tailscale-authkey", v["ts_key"]))
     ext = f"  <Extensions xmlns=\"{EXT_NS}\" build=\"uab-build:{v['build']}\">\n"
     for path, text in files:
         ext += f"    <File path={quoteattr(path)}>{_cdata(chr(10) + text)}</File>\n"

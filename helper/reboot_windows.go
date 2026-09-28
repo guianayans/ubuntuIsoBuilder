@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"unsafe"
 )
 
 var fwGUID = regexp.MustCompile(`\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}`)
@@ -35,7 +36,23 @@ func usbFirmwareEntry() string {
 	return ""
 }
 
+// biosFirmware: o Windows iniciou por BIOS antiga (Legacy/CSM), sem UEFI. Aí não existem
+// entradas de boot da placa-mãe nem o menu "Usar um dispositivo": reinicia normalmente.
+func biosFirmware() bool {
+	proc := syscall.NewLazyDLL("kernel32.dll").NewProc("GetFirmwareType")
+	if proc.Find() != nil {
+		return false
+	}
+	var t uint32 // 1 = BIOS, 2 = UEFI
+	ok, _, _ := proc.Call(uintptr(unsafe.Pointer(&t)))
+	return ok != 0 && t == 1
+}
+
 func osRebootInfo() rebootInfo {
+	if biosFirmware() {
+		return rebootInfo{Available: true, How: "O computador reinicia.",
+			Note: "Ao ligar, aperte a tecla do menu de boot (F12, F11, F8 ou Esc) e escolha o pendrive."}
+	}
 	if usbFirmwareEntry() != "" {
 		return rebootInfo{Available: true,
 			How:  "O computador reinicia direto pelo pendrive (só no próximo boot).",
@@ -47,6 +64,9 @@ func osRebootInfo() rebootInfo {
 }
 
 func osRebootToUSB() error {
+	if biosFirmware() {
+		return hidden("shutdown.exe", "/r", "/t", "5", "/c", "isoBuilder: reiniciando para instalar pelo pendrive").Run()
+	}
 	if id := usbFirmwareEntry(); id != "" {
 		// próximo boot (uma vez só) direto pela entrada USB da placa-mãe
 		if hidden("bcdedit.exe", "/set", "{fwbootmgr}", "bootsequence", id).Run() == nil {

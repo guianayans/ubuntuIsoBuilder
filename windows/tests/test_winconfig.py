@@ -167,7 +167,7 @@ class TestXml(unittest.TestCase):
         ext = root.find(f"{X}Extensions")
         files = {f.get("path"): f.text.strip() for f in ext.findall(f"{X}File")}
         base = "C:\\ProgramData\\uab\\"
-        for n in ("common.ps1", "specialize.ps1", "provision.ps1", "report.ps1", "uab.json", "panel-token",
+        for n in ("common.ps1", "specialize.ps1", "provision.ps1", "report.ps1", "vpn.ps1", "uab.json", "panel-token",
                   "panel.pub", "remote-meshid"):
             self.assertIn(base + n, files)
         conf = json.loads(files[base + "uab.json"])
@@ -249,6 +249,111 @@ class TestValidacao(unittest.TestCase):
         self.bad(c=cfg(DISK_MODE="all"), msg="disco")
         self.bad(c=cfg(OS="ubuntu"))
         self.bad(c=cfg(WIN_VERSION="10"))
+
+
+def files_of(xml):
+    root = ET.fromstring(xml.encode())
+    return {f.get("path"): f.text.strip() for f in root.find(f"{X}Extensions").findall(f"{X}File")}
+
+
+TSKEY = "tskey-auth-kAbCdEf1CNTRL-ZyXwVuTsRqPoNmLkJiHgFeDcBa123456"
+
+
+class TestVpn(unittest.TestCase):
+    base = "C:\\ProgramData\\uab\\"
+
+    def test_desligada_por_padrao(self):
+        f = files_of(render())
+        conf = json.loads(f[self.base + "uab.json"])
+        self.assertFalse(conf["wireguard"])
+        self.assertFalse(conf["tailscale"])
+        self.assertEqual(conf["tailscale_hostname"], "")
+        self.assertNotIn(self.base + "tailscale-authkey", f)
+        self.assertIn(self.base + "vpn.ps1", f)  # sempre vai (pequeno); só roda se ligado
+
+    def test_wireguard(self):
+        f = files_of(render(c=cfg(WG_ENABLED="yes")))
+        conf = json.loads(f[self.base + "uab.json"])
+        self.assertTrue(conf["wireguard"])
+        # nada de chave: a privada é gerada no PC; a pública vai pelo relatório
+        self.assertFalse(any("wg" in p.lower() for p in f if not p.endswith(".ps1") and not p.endswith(".json")))
+
+    def test_tailscale(self):
+        xml = render(c=cfg(TAILSCALE_ENABLED="yes", TAILSCALE_HOSTNAME="Recepcao-Tail"), s=sec(tailscale_key=" " + TSKEY + "\n"))
+        f = files_of(xml)
+        conf = json.loads(f[self.base + "uab.json"])
+        self.assertTrue(conf["tailscale"])
+        self.assertEqual(conf["tailscale_hostname"], "recepcao-tail")
+        self.assertEqual(f[self.base + "tailscale-authkey"], TSKEY)
+        self.assertEqual(xml.count(TSKEY), 1)  # só no arquivo da chave (nem no uab.json, nem em comentário)
+        self.assertNotIn(TSKEY, f[self.base + "uab.json"])
+        # sem nome na Tailnet: usa o nome do computador
+        conf = json.loads(files_of(render(c=cfg(TAILSCALE_ENABLED="yes"), s=sec(tailscale_key=TSKEY)))[self.base + "uab.json"])
+        self.assertEqual(conf["tailscale_hostname"], "recepcao-01")
+
+    def test_tailscale_ignorado_se_desligado(self):
+        f = files_of(render(c=cfg(TAILSCALE_ENABLED="no"), s=sec(tailscale_key=TSKEY)))
+        self.assertNotIn(self.base + "tailscale-authkey", f)
+        self.assertNotIn(TSKEY, json.dumps(f))
+
+    def test_tailscale_invalido(self):
+        for k in ("", "abc", "tskey-", "tskey-auth-x", "tskey-auth-aaaaaaaaaaaa\"/>"):
+            with self.assertRaises(ValueError, msg=k) as cm:
+                render(c=cfg(TAILSCALE_ENABLED="yes"), s=sec(tailscale_key=k))
+            self.assertIn("Tailscale", str(cm.exception))
+        for h in ("-x", "a_b", "a" * 64, "tail net"):
+            with self.assertRaises(ValueError, msg=h):
+                render(c=cfg(TAILSCALE_ENABLED="yes", TAILSCALE_HOSTNAME=h), s=sec(tailscale_key=TSKEY))
+
+    def test_scripts_vpn(self):
+        def rd(n):
+            with open(os.path.join(w.SCRIPTS_DIR, n), encoding="utf-8") as fh:
+                return fh.read()
+        vpn, prov, rep, com = rd("vpn.ps1"), rd("provision.ps1"), rd("report.ps1"), rd("common.ps1")
+        # instaladores oficiais com a assinatura conferida antes de executar
+        self.assertIn("https://download.wireguard.com/windows-client/", vpn)
+        self.assertIn("https://pkgs.tailscale.com/stable/", vpn)
+        self.assertIn("Get-AuthenticodeSignature", vpn)
+        # latest.sig vem como application/octet-stream: precisa decodificar os bytes
+        self.assertIn("Get-UabWebText ($base + 'latest.sig')", vpn)
+        self.assertIn("WireGuard LLC", vpn)
+        self.assertIn("Tailscale Inc", vpn)
+        # túnel como serviço do Windows; auth key lida do arquivo (nunca na linha de comando)
+        self.assertIn("/installtunnelservice", vpn)
+        self.assertIn("--auth-key=file:", vpn)
+        self.assertNotIn("--authkey ", vpn)
+        # plano único (specialize e provision) e relatório com wg/tailscale/serviços
+        for n in ("'openssh'", "'wireguard'", "'tailscale_install'", "'tailscale_login'", "'remote_agent'", "'apps'", "'report'"):
+            self.assertIn(n, com)
+        self.assertIn("Get-UabPlan", prov)
+        self.assertIn("Get-UabPlan", rd("specialize.ps1"))
+        self.assertIn("Invoke-UabWgApply", rep)
+        self.assertIn("services.wireguard", rep)
+        self.assertIn("services.tailscaled", rep)
+        self.assertIn("vpn.ps1", w.PS_SCRIPTS)  # extraído com os outros
+
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh indisponível")
+    def test_powershell_sintaxe(self):
+        cmd = ("$ok=$true; foreach ($f in Get-ChildItem '%s' -Filter *.ps1) { $t=$null; $e=$null; "
+               "[void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$t, [ref]$e); "
+               "if ($e) { $ok=$false; $e | %% { \"$($f.Name):$($_.Extent.StartLineNumber): $($_.Message)\" } } }; "
+               "if (-not $ok) { exit 1 }") % w.SCRIPTS_DIR
+        r = subprocess.run(["pwsh", "-NoProfile", "-Command", cmd], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class TestAtivacao(unittest.TestCase):
+    base = "C:\\ProgramData\\uab\\"
+
+    def test_sem_chave_nao_ativa(self):
+        # chave genérica (instala o Pro sem ativar): nada a ativar
+        conf = json.loads(files_of(render(s=sec(win_key="")))[self.base + "uab.json"])
+        self.assertFalse(conf["activate"])
+
+    def test_com_chave_ativa(self):
+        conf = json.loads(files_of(render(s=sec(win_key="BCDFG-HJKMN-PQRTV-WXY23-46789")))[self.base + "uab.json"])
+        self.assertTrue(conf["activate"])
+        self.assertNotIn("BCDFG-HJKMN", json.dumps(conf))  # a chave não vai para o uab.json
 
 
 class TestApps(unittest.TestCase):

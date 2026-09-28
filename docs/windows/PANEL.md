@@ -11,25 +11,33 @@ O que o painel faz para o Windows 11 Pro. O contrato entre as partes está em `C
   (as mesmas de antes; a versão passou do antigo 1º passo para os cartões).
 - Etapas do Windows: Sistema, Identificação (nome do PC com 1 a 15 caracteres, usuário local,
   senha, chave opcional com máscara), Região (pt-BR, teclado, fuso), Disco (aviso), Acesso
-  (OpenSSH/terminal pelo painel e agente do Remoto), Programas (catálogo winget com logos),
-  Revisar.
+  (OpenSSH/terminal pelo painel, agente do Remoto, **WireGuard pelo seu servidor** — só se o
+  painel tiver o hub, `features.wireguard` — e **Tailscale** com auth key `tskey-…` e nome na
+  Tailnet opcional), Programas (catálogo winget com logos), Revisar. Textos e validações do
+  Tailscale iguais aos do Ubuntu; no Windows o Tailscale começa desligado (`W.win_tailscale`).
+  Sem Remoto, WireGuard e Tailscale, o assistente pede confirmação (como o Ubuntu).
 - O catálogo, os fusos e os teclados vêm de `GET /api/windows/apps` (`core.win_apps()` lê
   `winconfig.load_apps()`, e as listas vêm de `core.WIN_TIMEZONES` e `core.WIN_KEYBOARDS`).
 
 ## Backend
 
 - `core.validate_build(d)` com `os: "windows"` chama `validate_windows`, que devolve
-  `{"os", "config", "secrets": {"password", "win_key"}, "panel_access", "win_key_set"}`.
+  `{"os", "config", "secrets": {"password", "win_key", "tailscale_key"}, "panel_access", "win_key_set"}`.
+  A config tem `WG_ENABLED`, `TAILSCALE_ENABLED` e `TAILSCALE_HOSTNAME`, que vão para o
+  `summary` (o `agent_report` registra o túnel só com `WG_ENABLED=yes`). A auth key nunca vai
+  para o summary nem para o log: só para o `autounattend.xml` (0600).
   Chave em branco vira a chave genérica do Pro (sem ativação).
 - Campos do POST `/api/builds`: `os, hostname, username, realname, password, win_key,
-  win_timezone, win_keyboard, panel_access, remote_agent, win_apps, confirm_erase` e,
-  opcionalmente, `deliver`.
+  win_timezone, win_keyboard, panel_access, remote_agent, win_apps, wireguard, tailscale,
+  tailscale_key, tailscale_hostname, confirm_erase` e, opcionalmente, `deliver`.
+  `wireguard` sem hub configurado (`HUB_ENDPOINT`) é recusado, como no Ubuntu.
 - `builds.os` (migração: `'ubuntu'` por padrão). Um build Windows fica com `series = "11"` e gera
   o `autounattend.xml` na hora (`builder.make_windows`) em `jobs/<id>/output/` (arquivo 0600).
   O status vai direto para `done`, sem passar pela fila da ISO.
 - `ctx` do gerador: `panel_url` (`AGENT_URL` ou `PUBLIC_URL`), `report_token` (novo; no banco
-  fica só o hash), `panel_pubkey` (a chave pública do painel, **sem** `from=`, porque o Windows
-  ainda não tem túnel), `remote_agent_url` = `<panel_url>/remoto` e `remote_meshid`.
+  fica só o hash), `panel_pubkey` (a chave pública do painel, **sem** `from=`: além do túnel,
+  o painel pode entrar por um endereço manual), `remote_agent_url` = `<panel_url>/remoto` e
+  `remote_meshid`.
 - Validade e limpeza iguais às da ISO. As configurações do Windows não contam no limite
   `MAX_STORED_ISOS`, que continua valendo para as ISOs grandes.
 - Erros do gerador são registrados só com o tipo da exceção (nunca com a senha nem com a chave).
@@ -53,9 +61,19 @@ Contas "só download" funcionam da mesma forma com um build Windows.
   do build. O logo aparece por `osLogo`.
 - No Windows, o Resumo mostra o nome do computador, a versão (em vez do kernel), o disco C:, os
   serviços OpenSSH e Remoto e as etapas `openssh`, `remote_agent`, `apps` e `report`.
-- A aba VPN fica escondida no Windows.
-- O terminal usa o OpenSSH do Windows (PowerShell). Sem Tailscale/WireGuard, o painel usa o
-  endereço definido em Configurações; sem endereço, o aviso sugere a aba Tela (Remoto).
+- Resumo do Windows: IP da VPN (WireGuard) com o estado, IP/nome do Tailscale, serviços
+  WireGuard/Tailscale e as etapas `wireguard`, `tailscale_install`, `tailscale_login`
+  (`desistiu…` aparece em vermelho).
+- **Aba VPN** também no Windows: estado do túnel, IP do PC na VPN, motivo quando não conecta
+  (`_vpn_reason`, com “o PC” em vez de “o servidor”) e “gerar acesso de dispositivo” (QR/arquivo).
+  A seção **“Acesso à rede local do cliente” é trocada por uma explicação** (não existe no
+  Windows) e `POST /api/machines/{id}/wg/lan` recusa ligar para PCs Windows.
+- O terminal usa o OpenSSH do Windows (PowerShell), pelo mesmo caminho do Linux: endereço
+  manual > túnel WireGuard conectado (SOCKS do hub, `panel.open_ssh`) > Tailscale (SOCKS do
+  tailscaled do painel). Sem túnel, o aviso sugere o endereço em Configurações ou a aba Tela.
+- “Conectar do meu computador” no Windows: Remoto, VPN (WireGuard), Tailnet e terminal no
+  navegador; o SSH direto exige cadastrar a própria chave (o OpenSSH do PC não aceita senha).
+- `/api/machines` traz `build_wg`/`build_ts` (o build pediu WireGuard/Tailscale).
 
 ## Ícones
 

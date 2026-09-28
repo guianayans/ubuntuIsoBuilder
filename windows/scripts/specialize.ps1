@@ -18,11 +18,7 @@ Write-UabLog "specialize: ACL de $UabRoot (códigos $rc1 $LASTEXITCODE)" 'specia
 & reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' /v BypassNRO /t REG_DWORD /d 1 /f | Out-Null
 
 $conf = Get-UabConf
-$plan = @()
-if ($conf.panel_access) { $plan += 'openssh' }
-if ($conf.remote_agent -and $conf.remote_url) { $plan += 'remote_agent' }
-if (@($conf.apps).Count -gt 0) { $plan += 'apps' }
-$plan += 'report'
+$plan = Get-UabPlan $conf
 $st = Get-UabStatus
 $st.plan = $plan
 $st.provisioned = 'aguardando o fim da instalação do Windows'
@@ -31,7 +27,7 @@ Save-UabStatus $st
 $prov = Join-Path $UabRoot 'provision.ps1'
 $rep = Join-Path $UabRoot 'report.ps1'
 foreach ($t in @(
-        @{ n = 'UAB Provision'; s = $prov; a = ''; m = 5; boot = $true; sd = $false; lim = 240; d = 'ISO Builder: pós-instalação (OpenSSH, Remoto, programas). Repete até concluir.' },
+        @{ n = 'UAB Provision'; s = $prov; a = ''; m = 5; boot = $true; sd = $false; lim = 240; d = 'ISO Builder: pós-instalação (OpenSSH, VPN, Remoto, programas). Repete até concluir.' },
         @{ n = 'UAB Report'; s = $rep; a = ''; m = 10; boot = $true; sd = $false; lim = 5; d = 'ISO Builder: relatório ao painel (no boot e a cada 10 min).' },
         @{ n = 'UAB Shutdown'; s = $rep; a = '-Shutdown'; m = 0; boot = $false; sd = $true; lim = 2; d = 'ISO Builder: avisa o painel ao desligar/reiniciar.' })) {
     try {

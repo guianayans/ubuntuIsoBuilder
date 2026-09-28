@@ -778,11 +778,14 @@ No assistente, o 1º passo é **Qual sistema?**. Com **Windows 11 Pro**, o paine
 **configuração** (`autounattend.xml`, ~50 KB: nome do PC, usuário local, chave, região,
 disco, acesso e programas via winget). O gravador **isoBuilder baixa o Windows 11 oficial
 direto da Microsoft** no computador de quem grava (ou usa uma ISO já baixada), divide o
-`install.wim` para caber no FAT32 e grava o pendrive (UEFI) — o painel nunca hospeda o
-Windows. No PC, a instalação apaga o **maior disco interno** (nunca USB), pula todas as telas,
+`install.wim` para caber no FAT32 e grava o pendrive (inicia em UEFI **e** em BIOS antiga, com
+código de boot próprio) — o painel nunca hospeda o Windows. No PC, a instalação apaga o **maior disco interno** (nunca USB), pula todas as telas,
 instala OpenSSH (chave do painel), o agente do **Remoto** e os programas, e a máquina aparece
-em **Máquinas** com o logo do Windows. Detalhes: `docs/windows/` (contrato, gerador,
-gravador e painel).
+em **Máquinas** com o logo do Windows. Opcionais: **WireGuard** pelo hub do painel (túnel como
+serviço do Windows; terminal do painel e acesso de dispositivos pela VPN — o acesso à rede
+local do cliente é só para Ubuntu) e **Tailscale**. Com a chave informada, a etapa
+**Ativação** ativa o Windows depois da instalação e mostra o resultado em Máquinas.
+Detalhes: `docs/windows/` (contrato, gerador, gravador e painel).
 
 ## Sócios (acesso a máquinas escolhidas)
 

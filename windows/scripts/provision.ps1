@@ -1,10 +1,13 @@
 # ubuntu-autoinstall-builder (Windows) — pós-instalação (tarefa "UAB Provision", como SYSTEM).
 # Roda no boot e a cada 5 min até concluir (sobrevive a reinícios; etapa concluída não
-# se repete). Etapas: openssh, remote_agent, apps, report. Estado em status.json:
-#   etapa "ok" ou "falhou <data>: <motivo>"; provisioned "ok <data>" ou "pendente: ...".
+# se repete). Etapas: openssh, wireguard, tailscale_install, tailscale_login, remote_agent,
+# apps, report. Estado em status.json: etapa "ok", "falhou <data>: <motivo>" ou
+# "desistiu...: <motivo>" (não tenta mais; não trava as outras);
+# provisioned "ok <data>" ou "pendente: ...".
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 . (Join-Path $env:ProgramData 'uab\common.ps1')
+. (Join-Path $env:ProgramData 'uab\vpn.ps1')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
 
 $mutex = New-Object Threading.Mutex($false, 'Global\uab-provision')
@@ -47,12 +50,13 @@ $failed = @()
 
 function Invoke-Step([string]$Name, [scriptblock]$Body) {
     $s = Get-UabStatus
-    if ([string]$s.steps[$Name] -like 'ok*') { return }
+    if ([string]$s.steps[$Name] -like 'ok*' -or [string]$s.steps[$Name] -like 'desistiu*') { return }
     Set-UabStatus 'current' $Name
     Log ">>> $Name"
     try {
         $r = & $Body
-        $v = if ($r -is [string] -and $r -like 'ok*') { $r } else { 'ok' }
+        $r = @($r | Where-Object { $_ -is [string] })[-1]
+        $v = if ($r -like 'ok*' -or $r -like 'desistiu*') { $r } else { 'ok' }
         Set-UabStep $Name $v
         Log "<<< ${Name}: $v"
     } catch {
@@ -259,6 +263,60 @@ function Step-Apps {
     return 'ok'
 }
 
+function Step-WireGuard {
+    # Túnel até o hub (seu servidor). A chave privada é gerada AQUI e nunca sai do PC; o
+    # painel recebe só a pública, pelo relatório, e devolve a configuração do túnel.
+    Install-UabWireGuard
+    $pub = Initialize-UabWgKeys
+    Log "WireGuard: chave pública $($pub.Substring(0, 8))…"
+    # registra no painel já agora (o relatório aplica o túnel quando o hub responder)
+    & $UabPS -NoProfile -ExecutionPolicy Bypass -File (Join-Path $UabRoot 'report.ps1') 2>$null | Out-Null
+    $w = Get-UabWgState
+    if ((Get-Service -Name $UabWgService -ErrorAction SilentlyContinue) -and $w.state -ne 'erro') {
+        Log "WireGuard: túnel configurado ($($w.address))"
+        return 'ok'
+    }
+    $why = if ($w.message) { $w.message } else { 'aguardando o painel/hub' }
+    Log "WireGuard: $why; o relatório (a cada 10 min) aplica o túnel assim que possível"
+    return "ok (túnel ainda não aplicado: $why)"
+}
+
+function Step-TailscaleInstall { Install-UabTailscale }
+
+function Step-TailscaleLogin {
+    $h = if ($conf.tailscale_hostname) { [string]$conf.tailscale_hostname } else { [string]$conf.hostname }
+    return (Invoke-UabTailscaleLogin $h)
+}
+
+function Get-UabWinLicense {
+    # Licença do Windows instalada (ApplicationID do Windows; LicenseStatus 1 = ativado)
+    Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+}
+
+function Step-Activation {
+    # Ativa o Windows com a chave digitada no painel (aplicada na instalação). O Windows
+    # também tentaria sozinho mais tarde; aqui a ativação é pedida já e o resultado vai
+    # para o painel. Chave recusada: desiste após 3 tentativas, sem travar o resto.
+    $lic = Get-UabWinLicense
+    if ($lic -and $lic.LicenseStatus -eq 1) { return 'ok (Windows ativado)' }
+    # contador de tentativas num arquivo próprio (o status.json só guarda os campos dele)
+    $triesFile = Join-Path $UabRoot 'activation-tries'
+    $tries = 0
+    if (Test-Path -LiteralPath $triesFile) { $tries = [int](Get-Content -LiteralPath $triesFile -Raw) }
+    if ($tries -ge 3) { return "ok (não ativado após 3 tentativas; confira a chave em Configurações > Sistema > Ativação)" }
+    $out = (& cscript.exe //nologo "$env:SystemRoot\System32\slmgr.vbs" /ato 2>&1 | Out-String).Trim()
+    $lic = Get-UabWinLicense
+    if ($lic -and $lic.LicenseStatus -eq 1) { Log 'ativação: Windows ativado'; return 'ok (Windows ativado)' }
+    $tries++
+    Set-Content -LiteralPath $triesFile -Value $tries -Encoding ASCII
+    $why = ($out -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+    if (-not $why) { $why = 'o servidor de ativação da Microsoft não confirmou' }
+    Log "ativação: tentativa $tries falhou: $why"
+    if ($tries -ge 3) { return "ok (não ativado após 3 tentativas: $why)" }
+    throw "não ativado ainda ($why)"
+}
+
 function Step-Report {
     if (-not (Get-ScheduledTask -TaskName 'UAB Report' -ErrorAction SilentlyContinue)) {
         Register-UabTask -Name 'UAB Report' -Script (Join-Path $UabRoot 'report.ps1') -EveryMinutes 10 -AtBoot -LimitMinutes 5 `
@@ -271,11 +329,7 @@ function Step-Report {
 }
 
 # ---------------------------------------------------------------- execução
-$plan = @()
-if ($conf.panel_access) { $plan += 'openssh' }
-if ($conf.remote_agent -and $conf.remote_url) { $plan += 'remote_agent' }
-if (@($conf.apps).Count -gt 0) { $plan += 'apps' }
-$plan += 'report'
+$plan = Get-UabPlan $conf
 Set-UabStatus 'plan' $plan
 Set-UabStatus 'provisioned' 'em andamento'
 
@@ -283,8 +337,15 @@ $net = $false
 for ($i = 0; $i -lt 20 -and -not $net; $i++) { $net = Test-Internet; if (-not $net) { Start-Sleep 15 } }
 if ($net) {
     if ($plan -contains 'openssh') { Invoke-Step 'openssh' { Step-OpenSSH } }
+    if ($plan -contains 'wireguard') { Invoke-Step 'wireguard' { Step-WireGuard } }
+    if ($plan -contains 'tailscale_install') {
+        Invoke-Step 'tailscale_install' { Step-TailscaleInstall }
+        if ((Get-UabStatus).steps['tailscale_install'] -like 'ok*') { Invoke-Step 'tailscale_login' { Step-TailscaleLogin } }
+        else { $failed += 'tailscale_login' }
+    }
     if ($plan -contains 'remote_agent') { Invoke-Step 'remote_agent' { Step-RemoteAgent } }
     if ($plan -contains 'apps') { Invoke-Step 'apps' { Step-Apps } }
+    if ($plan -contains 'activation') { Invoke-Step 'activation' { Step-Activation } }
 } else {
     Log 'sem internet'
     $failed += 'network'

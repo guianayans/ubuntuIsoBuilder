@@ -674,6 +674,20 @@ def validate_windows(d: dict) -> dict:
     panel_access = d.get("panel_access", True) is not False
     c["PANEL_ACCESS"] = "yes" if panel_access else "no"
     c["REMOTE_AGENT"] = "yes" if d.get("remote_agent") else "no"  # o painel completa URL e id do grupo
+    # WireGuard pelo seu servidor (hub): o PC gera as chaves e se registra pelo relatório
+    c["WG_ENABLED"] = "yes" if d.get("wireguard") else "no"
+    # Tailscale: auth key (segredo, vai só para o autounattend.xml 0600) e nome na Tailnet
+    ts_key = ""
+    if d.get("tailscale"):
+        c["TAILSCALE_ENABLED"] = "yes"
+        c["TAILSCALE_HOSTNAME"] = (_req(d, "tailscale_hostname") or host).lower()
+        if not HOSTNAME_RE.match(c["TAILSCALE_HOSTNAME"]):
+            raise Invalid("Nome na Tailnet inválido.")
+        ts_key = re.sub(r"\s", "", str(d.get("tailscale_key") or ""))
+        if not re.match(r"^tskey-(auth-)?[A-Za-z0-9_-]{10,}$", ts_key):
+            raise Invalid("Auth key do Tailscale inválida (deve começar com tskey-auth-).")
+    else:
+        c.update(TAILSCALE_ENABLED="no", TAILSCALE_HOSTNAME="")
     ids = list(dict.fromkeys(_req(d, "win_apps").split()))
     if len(ids) > 60:
         raise Invalid("Programas demais (máximo 60).")
@@ -685,7 +699,7 @@ def validate_windows(d: dict) -> dict:
     if _req(d, "confirm_erase") != "APAGAR":
         raise Invalid("Digite APAGAR para confirmar que o maior disco interno será apagado.")
     return {"os": "windows", "config": c, "panel_access": panel_access, "win_key_set": bool(key),
-            "secrets": {"password": pw, "win_key": key or WIN_GENERIC_KEY}}
+            "secrets": {"password": pw, "win_key": key or WIN_GENERIC_KEY, "tailscale_key": ts_key}}
 
 
 def validate_email_or_login(s: str) -> str:

@@ -18,11 +18,12 @@ autounattend.xml
 │               C:\ProgramData\uab\* e roda specialize.ps1 (tarefas)       │
 ├─ oobeSystem   OOBE sem telas, usuário local administrador, fuso          │
 └─ <Extensions xmlns="urn:uab:windows" build="uab-build:<id>">  (ignorado pelo Setup)
-     <File path="C:\ProgramData\uab\common.ps1|specialize.ps1|provision.ps1|report.ps1">
+     <File path="C:\ProgramData\uab\common.ps1|specialize.ps1|provision.ps1|report.ps1|vpn.ps1">
      <File path="...\uab.json">        configuração (sem segredos)
      <File path="...\panel-token">     token do relatório
      <File path="...\panel.pub">       chave pública do painel (se acesso pelo painel)
      <File path="...\remote-meshid">   grupo do MeshCentral (se Remoto)
+     <File path="...\tailscale-authkey"> auth key do Tailscale (se Tailscale; apagada após o login)
      <Extract>  código PowerShell que grava os <File> (roda via iex no specialize)
      <PE>  linhas "UABPE|<js>" (CDATA)  ◄──────────────────────────────────┘
 ```
@@ -52,10 +53,15 @@ tem `cmd`, `find`, `cscript` (JScript), WMI (`Win32_DiskDrive`), `diskpart`, `di
    - se já existir `\ProgramData\uab\build-id` com este build em alguma unidade (o PC voltou
      a iniciar pelo pendrive depois de instalar), mostra um aviso e só apaga se o técnico
      fechar a janela — evita reinstalar em laço;
+   - descobre o firmware: `PEFirmwareType` do registro (1 = BIOS, 2 = UEFI); se a leitura
+     falhar, pela saída de `bcdedit /enum {current}` (carregador do WinPE terminando em `.efi`
+     = UEFI, `.exe` = BIOS); se ainda assim for desconhecido, usa **MBR** (disco < 2 TB; senão
+     GPT) com a partição de sistema em **FAT32** ativa e `bcdboot /f ALL`, que inicia nos dois
+     (o UEFI só lê FAT; o BIOS inicia da partição ativa). Quando a leitura funciona, nada muda;
    - particiona com `diskpart` (UEFI: GPT com EFI 300 MB + MSR 16 MB + Windows; BIOS: MBR
      com partição de sistema de 500 MB ativa + Windows), aplica a edição
      `Windows 11 <edição>` com `dism /Apply-Image` (com `/SWMFile` quando dividido), cria o
-     boot com o `bcdboot` da própria imagem, copia o arquivo de respostas para
+     boot com o `bcdboot` da própria imagem (`/f UEFI`, `/f BIOS` ou `/f ALL`), copia o arquivo de respostas para
      `<Windows>\Panther\unattend.xml`, grava `ProgramData\uab\build-id` e `logs\pe.log`,
      e reinicia (`wpeutil reboot`).
    - **Sem disco elegível** (ou qualquer erro): mostra o motivo no Bloco de Notas e, ao
@@ -99,6 +105,9 @@ novo na próxima execução (5 min ou próximo boot):
 | `openssh` (se acesso pelo painel) | capacidade `OpenSSH.Server` (Windows Update); se falhar, `winget Microsoft.OpenSSH.Preview`. Serviço automático, `DefaultShell` = PowerShell, chave do painel em `C:\ProgramData\ssh\administrators_authorized_keys` (ACL: só Administradores e SYSTEM, sem herança), `PasswordAuthentication no` (só chave, como no Ubuntu), regra de firewall porta 22 em todos os perfis. |
 | `remote_agent` (se Remoto) | baixa `<remote_agent_url>/meshagents?id=4&meshid=<id>&installflags=0` (x64; `id=3` em 32 bits) — o MeshCentral devolve o `MeshService64.exe` já com a configuração do grupo embutida — e roda `-fullinstall` (serviço “Mesh Agent”). Apaga o `remote-meshid` depois. |
 | `apps` | cada ID via winget (`--exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity`, primeiro `--scope machine`, depois sem escopo). ID já instalado é pulado. Falha é registrada em `status.json → apps` e não trava os outros; após 3 tentativas o ID é desistido e a etapa fica `ok (sem sucesso após 3 tentativas: …)`. |
+| `wireguard` (se WireGuard) | instala o WireGuard oficial, gera as chaves e registra no painel pelo relatório (§3.1). Túnel ainda não aplicado (hub fora do ar, painel sem hub) não é falha: fica `ok (túnel ainda não aplicado: …)` e o relatório aplica depois. |
+| `tailscale_install` (se Tailscale) | MSI oficial estável do Tailscale (§3.2), serviço “Tailscale” automático. |
+| `tailscale_login` (se Tailscale) | `tailscale up --auth-key=file:… --hostname=<nome> --unattended`. Chave inválida/expirada/já usada: `falhou …` com o motivo e nova tentativa; na 3ª falha a etapa fica `desistiu após 3 tentativas: …`, a chave é apagada e a pós-instalação termina (as outras etapas não esperam por ela). |
 | `report` | garante as tarefas UAB Report / UAB Shutdown. |
 
 Sem internet: `provisioned = "pendente: network"` e nova tentativa.
@@ -115,6 +124,46 @@ no GitHub, com `DesktopAppInstaller_Dependencies.zip`) via `Add-AppxProvisionedP
 Rodar como SYSTEM permite instalar sem ninguém logar; programas que só têm instalador
 “por usuário” (ex.: Discord, Spotify) não ficam bem assim e foram deixados fora do catálogo.
 
+Ordem: `openssh`, `wireguard`, `tailscale_install`, `tailscale_login`, `remote_agent`,
+`apps`, `report` (função `Get-UabPlan`, a mesma no specialize e na pós-instalação). Valor
+`desistiu…` = não tenta mais e não conta como pendente.
+
+### 3.1 WireGuard pelo hub do painel (`vpn.ps1`)
+
+- **Instalador:** o `latest.sig` de `https://download.wireguard.com/windows-client/` dá o
+  nome do MSI atual (`wireguard-amd64-<versão>.msi`). O hash desse arquivo é BLAKE2b (o
+  PowerShell 5.1 não calcula), então a garantia é a **assinatura Authenticode**: estado
+  `Valid` e assinante `CN=WireGuard LLC` — conferida antes do `msiexec /qn DO_NOT_LAUNCH=1`.
+- **Chaves:** `wg.exe genkey` no próprio PC; `C:\ProgramData\uab\wg\private.key` (pasta só
+  SYSTEM + Administradores, sem herança). A privada nunca sai do PC; a pública vai no
+  relatório (`wg.pubkey`).
+- **Aplicação** (a cada relatório, com a resposta do painel): mesma validação estrita do
+  `payload/uab-wg-apply.py` — `address` /32 dentro de `net`, `allowed_ips` dentro de `net`,
+  chave do hub e `endpoint` (`host:porta`) no formato certo, nenhuma rede local do PC
+  sobrepondo `net`/`lanmap_net`. Grava `wg\uabwg.conf` e instala o túnel como **serviço**
+  (`wireguard.exe /installtunnelservice`, serviço `WireGuardTunnel$uabwg`, automático:
+  sobe no boot antes de qualquer login). Só reinstala o serviço se a config mudou; serviço
+  parado é reiniciado.
+- **Sem handshake há mais de 3 min** (e mais de 3 min desde a última aplicação): reinicia o
+  serviço do túnel, que resolve o nome do hub de novo (IP de casa/DDNS pode ter mudado).
+- **`lan` (acesso à rede local do cliente): ignorado no Windows** — o túnel sobe sem ele e
+  o `message` do relatório avisa. O painel esconde a opção para PCs Windows.
+- Estado em `wg\status.json` (`state` = `aguardando` | `conectando` | `ativo` | `erro`,
+  `address`, `handshake`, `lan`, `message`, `applied`), enviado no relatório como no Linux.
+- A interface `uabwg` fica fora de `local_ips`. O firewall do Windows já libera o SSH
+  (porta 22) em todos os perfis; o painel entra pelo SOCKS do hub (origem `10.77.0.1`).
+
+### 3.2 Tailscale (`vpn.ps1`)
+
+- `https://pkgs.tailscale.com/stable/?mode=json` → `MSIs.amd64`; baixa o MSI, confere o
+  **SHA256** publicado ao lado (`<msi>.sha256`) e a **assinatura Authenticode**
+  (`CN=Tailscale Inc.`), e instala com `TS_UNATTENDEDMODE=always TS_NOLAUNCH=true`.
+- Login com a auth key lida do arquivo (`--auth-key=file:…`: não aparece na linha de
+  comando nem no log; a saída do `tailscale up` que vai para o status tem `tskey-***`).
+  Depois do login (ou de desistir) o arquivo é apagado.
+- Relatório: `tailscale` = `{state, ips, dns, hostname}` (de `tailscale status --json`),
+  `services.tailscaled` = serviço “Tailscale” ativo.
+
 `C:\ProgramData\uab\status.json`:
 ```json
 {"plan":["openssh","remote_agent","apps","report"],"current":"","provisioned":"ok 2026-09-28 15:10:02",
@@ -122,6 +171,18 @@ Rodar como SYSTEM permite instalar sem ninguém logar; programas que só têm in
  "apps":{"7zip.7zip":"ok","Notepad++.Notepad++":"ok"}}
 ```
 Logs em `C:\ProgramData\uab\logs\` (`pe.log`, `specialize.log`, `provision.log`, `report.log`).
+
+### 3.3 Ativação (`provision.ps1`, etapa `activation`)
+
+Só existe quando o técnico informou a chave no painel (`uab.json` → `activate: true`; com a
+chave genérica do Pro não há o que ativar). A chave já é aplicada na instalação
+(`ProductKey`); depois dos programas, com internet, a etapa pede a ativação na hora
+(`slmgr.vbs /ato`) e confere `SoftwareLicensingProduct.LicenseStatus = 1`. Resultado no painel:
+`ok (Windows ativado)` ou, com chave recusada, até 3 tentativas (contador em
+`C:\ProgramData\uab\activation-tries`, porque o `status.json` só guarda os campos dele) e
+então `ok (não ativado após 3 tentativas: <motivo>)` — sem travar o resto. A chave não vai
+para o `uab.json`. Não testado com chave real (a VM usa a chave genérica); sintaxe
+conferida com o parser do PowerShell 7.
 
 ## 4. Relatório (`report.ps1`)
 
@@ -133,7 +194,9 @@ Linux (`payload/uab-report.sh`): `machine_id` (MachineGuid sem hífens), `hw_id`
 `local_ips` (`"<interface> <ip>/<prefixo>"`), `gateway`, `provisioned`/`provision_plan`/
 `provision_current`/`steps` (+ `apps`), `services` (`ssh`, `meshagent` se Remoto,
 `uab-provision`), `resources` (cpus, `load1` aproximado pelo uso de CPU, memória, disco do
-sistema), `uptime_seconds`. `-Shutdown` manda o aviso `X-UAB-Event: shutdown`.
+sistema), `uptime_seconds`, `wg` e `tailscale` (§3.1/§3.2; `services.wireguard` e
+`services.tailscaled` quando usados). Com WireGuard, a resposta do painel é passada ao
+`Invoke-UabWgApply`. `-Shutdown` manda o aviso `X-UAB-Event: shutdown`.
 Uso manual: `& C:\ProgramData\uab\report.ps1 -Verbose` (PowerShell como administrador).
 
 ## 5. Catálogo (`windows/apps.json`)
@@ -149,7 +212,8 @@ usam Lucide — o Simple Icons não tem logos da Microsoft).
 ## 6. Testes
 
 ```bash
-# unitários (XML válido, escape, validação, extração do pe.js, catálogo)
+# unitários (XML válido, escape, validação, extração do pe.js, catálogo, VPN,
+# validação do assistente/painel para o Windows; o de sintaxe PowerShell roda se houver pwsh)
 python3 -m unittest discover -s windows/tests -v
 
 # instalação em VM (QEMU/KVM + OVMF), sem o gravador:
@@ -200,6 +264,31 @@ pendrive de novo → aviso “JÁ FOI INSTALADO” sem apagar; só um disco de 8
 “Nenhum disco interno elegível… Nenhum disco foi apagado” e, ao fechar, o Setup normal
 pedindo o disco.
 
+### Resultado do teste em VM — VPN (2026-09-28, ISO oficial Win11 25H2 **Pro** pt-BR)
+
+Hub de teste (imagem de `web/hub`, container `uabtest-hub`, UDP só em `127.0.0.1`) e painel
+de teste compartilhando o `WG_STATE`, como no compose; build criado por `POST /api/builds`
+com `wireguard`, `tailscale` (auth key **inválida** de propósito), `panel_access` e 7-Zip.
+
+| hora | evento |
+|---|---|
+| 18:01 → 18:08 | instalação sem toque e 1º relatório (~7 min) |
+| 18:20 | `tailscale_install` ok (SHA256 + Authenticode “Tailscale Inc.”); `tailscale_login`: `falhou …: backend error: invalid key: API key does not exist` — `openssh`/`apps` seguiram normalmente |
+| 18:20 | **bug achado:** `latest.sig` vem como `application/octet-stream` e o `Invoke-WebRequest` devolve bytes → corrigido (`Get-UabWebText`) |
+| 18:25 | **bug achado:** `wg genkey` (saída junto com stderr) tinha um aviso extra → corrigido (pega só a linha da chave) |
+| 18:30 | `wireguard` ok: MSI 1.1.1 assinado por WireGuard LLC, chaves geradas no PC (ACL só SISTEMA/Administradores), túnel `WireGuardTunnel$uabwg` automático; handshake no hub em segundos; `/api/machines`: `connected: true`, IP `10.77.1.1` |
+| 18:30 | `tailscale_login` = `desistiu após 3 tentativas: …` (chave apagada); `provisioned = ok` |
+| 18:31 | terminal do painel (websocket `/api/machines/{id}/terminal`) abre o PowerShell como `pc-vpn-01\suporte` “via WireGuard do seu servidor”; no PC a conexão SSH vem de `10.77.0.1` (hub) |
+| 18:31 | “gerar acesso de dispositivo”: config + QR; usada num container de teste, alcança a porta 22 do PC pela VPN (`SSH-2.0-OpenSSH_for_Windows_9…`); ligar “rede local do cliente” num PC Windows é recusado com mensagem clara |
+| 18:32 → 18:35 | reinício: o serviço do túnel sobe 3 s após o boot, **sem ninguém logado**, novo handshake e terminal de novo pelo túnel |
+| 18:36 → 18:53 | **reinstalação** (mesmo build, mesmo hardware, scripts corrigidos, instalação do zero): `wireguard` ok na 1ª tentativa; entrada adotada — mesmo slot/IP `10.77.1.1` com a chave nova, os 2 acessos de dispositivo mantidos, peer antigo removido do hub; terminal pelo túnel ok |
+
+Também achado e corrigido: sem login no Tailscale o relatório mandava `"ips": [null]` e a
+lista de máquinas do painel quebrava (`panel.machine_row`); agora o PC manda `[]` e o painel
+ignora itens que não são texto (teste em `windows/tests/test_panel_windows.py`).
+Observação (Fase 1): `Stop-Computer` pela sessão SSH não gerou o aviso de desligamento
+(evento 1074); a adoção da reinstalação aconteceu pela janela de 15 min, como previsto.
+
 ## 7. Limitações conhecidas
 
 - Só x64 (agente Mesh `id=4`; ARM64 não testado). Só Windows 11.
@@ -211,3 +300,6 @@ pedindo o disco.
 - O aviso de desligamento (evento 1074) cobre desligar/reiniciar pelo Windows; queda de
   energia não avisa (o painel marca offline por tempo, como no Linux).
 - Ativação: sem chave, fica com a chave genérica do Pro (não ativado).
+- WireGuard: sem “acesso à rede local do cliente” (NETMAP) no Windows; o MSI do WireGuard
+  é conferido só pela assinatura Authenticode (o hash publicado é BLAKE2b).
+- WireGuard/Tailscale precisam de internet na pós-instalação (baixam os instaladores).
