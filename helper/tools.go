@@ -25,6 +25,7 @@ type StickInfo struct {
 	ISOName  string `json:"iso_name"`
 	Created  string `json:"created"`
 	Ventoy   bool   `json:"ventoy,omitempty"` // no pendrive com Ventoy: escolher a ISO no menu dele
+	OS       string `json:"os,omitempty"`     // "windows" = pendrive do Windows 11 (vazio = Ubuntu)
 }
 
 const toolsReadme = `PENDRIVE DE INSTALAÇÃO DO UBUNTU SERVER — servidor %s
@@ -66,11 +67,16 @@ func (a *app) gatherTools(isoPath string) (string, []string, error) {
 	if b != nil && b.Hostname != "" {
 		host = b.Hostname
 	}
-	info, _ := json.MarshalIndent(StickInfo{Hostname: host, ISOName: filepath.Base(isoPath), Created: time.Now().Format(time.RFC3339)}, "", "  ")
+	si := StickInfo{Hostname: host, ISOName: filepath.Base(isoPath), Created: time.Now().Format(time.RFC3339)}
+	readme := toolsReadme
+	if b.isWindows() {
+		si.OS, readme = "windows", toolsReadmeWindows
+	}
+	info, _ := json.MarshalIndent(si, "", "  ")
 	if err := put(stickMarker, info); err != nil {
 		return dir, nil, err
 	}
-	if err := put("LEIA-ME.txt", []byte(strings.ReplaceAll(fmt.Sprintf(toolsReadme, host), "\n", "\r\n"))); err != nil {
+	if err := put("LEIA-ME.txt", []byte(strings.ReplaceAll(fmt.Sprintf(readme, host), "\n", "\r\n"))); err != nil {
 		return dir, nil, err
 	}
 	got := map[string]bool{}

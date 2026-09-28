@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -259,17 +260,23 @@ func findISOs() []ISO {
 type app struct {
 	rebootErr string     // falha ao pedir o reinício (mostrada na tela)
 	stick     *StickInfo // aberto a partir do pendrive (partição INSTALAR)
-	bundle   *Bundle
-	fetch    *progress
-	token    string
-	mu       sync.Mutex
-	isoPath  string
-	isoHash  string
-	hashing  *progress
-	job      *progress
-	busy     bool
-	lastSeen time.Time
-	port     int
+	bundle    *Bundle
+	fetch     *progress
+	token     string
+	mu        sync.Mutex
+	isoPath   string
+	isoHash   string
+	hashing   *progress
+	job       *progress
+	busy      bool
+	lastSeen  time.Time
+	port      int
+	// Windows
+	unattend     []byte             // autounattend.xml do painel (conferido)
+	unattendPath string             // cópia 0600 numa pasta temporária (para o gravador privilegiado)
+	cfgErr       string             // falha ao baixar a configuração
+	winInfo      *winISOInfo        // ISO do Windows conferida
+	fetchCancel  context.CancelFunc // interrompe o download da Microsoft (ex.: "Já tenho a ISO")
 }
 
 func (a *app) state() map[string]any {
@@ -298,24 +305,118 @@ func (a *app) state() map[string]any {
 	}
 	if a.bundle != nil {
 		st["bundle"] = map[string]any{"hostname": a.bundle.Hostname, "iso_name": a.bundle.ISOName,
-			"size": a.bundle.Size, "server": a.bundle.Server}
+			"size": a.bundle.Size, "server": a.bundle.Server, "kind": a.bundle.Kind,
+			"config_name": a.bundle.ConfigName, "windows": a.bundle.Windows}
 		if a.fetch != nil {
 			st["fetch"] = a.fetch.get()
 		}
+		if a.bundle.isWindows() {
+			w := map[string]any{"config_ok": a.unattend != nil, "config_error": a.cfgErr}
+			if a.winInfo != nil {
+				w["iso_info"] = a.winInfo
+			}
+			if a.isoPath != "" {
+				if fi, err := os.Stat(a.isoPath); err == nil {
+					w["min_size"] = winStickSize(fi.Size())
+				}
+			}
+			st["win"] = w
+		}
 	}
 	return st
+}
+
+// loadConfig baixa o autounattend.xml (build Windows) e guarda uma cópia 0600.
+func (a *app) loadConfig() error {
+	a.mu.Lock()
+	if a.unattend != nil {
+		a.mu.Unlock()
+		return nil
+	}
+	b := a.bundle
+	a.mu.Unlock()
+	data, err := fetchConfig(b)
+	if err == nil {
+		var dir string
+		if dir, err = os.MkdirTemp("", "isobuilder-cfg"); err == nil {
+			path := filepath.Join(dir, "autounattend.xml")
+			if err = os.WriteFile(path, data, 0o600); err == nil {
+				addCleanup(func() { os.RemoveAll(dir) })
+				a.mu.Lock()
+				a.unattend, a.unattendPath, a.cfgErr = data, path, ""
+				a.mu.Unlock()
+				return nil
+			}
+			os.RemoveAll(dir)
+		}
+	}
+	a.mu.Lock()
+	a.cfgErr = err.Error()
+	a.mu.Unlock()
+	return err
+}
+
+// startWindowsFetch: configuração do painel + ISO do Windows direto da Microsoft.
+func (a *app) startWindowsFetch(p *progress) {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.mu.Lock()
+	a.fetchCancel = cancel
+	a.mu.Unlock()
+	go func() {
+		defer cancel()
+		p.set("config", "Baixando a configuração do painel…", 0)
+		if err := a.loadConfig(); err != nil {
+			p.finish("error", err.Error(), "")
+			return
+		}
+		a.mu.Lock()
+		manual := a.isoPath != ""
+		a.mu.Unlock()
+		if manual { // o usuário já escolheu uma ISO própria
+			p.finish("done", "Configuração baixada.", "")
+			return
+		}
+		w := a.bundle.Windows
+		path, sum, err := downloadWindowsISO(ctx, w, p)
+		if err != nil {
+			if ctx.Err() != nil {
+				p.finish("cancelled", "Download da Microsoft interrompido: usando a ISO escolhida.", "")
+				return
+			}
+			p.finish("error", "Não foi possível baixar o Windows da Microsoft: "+err.Error()+".", "")
+			return
+		}
+		info, err := inspectWindowsISO(path, w.Arch, w.Edition, w.Lang)
+		if err != nil {
+			p.finish("error", err.Error(), "")
+			return
+		}
+		a.mu.Lock()
+		if !a.busy && a.isoPath == "" {
+			a.isoPath, a.isoHash, a.winInfo = path, sum, info
+			hp := &progress{}
+			hp.finish("done", "Windows 11 baixado da Microsoft e conferido ("+info.Edition+", "+info.Lang+").", sum)
+			a.hashing = hp
+		}
+		a.mu.Unlock()
+		p.finish("done", "Windows 11 baixado e conferido: "+path, sum)
+	}()
 }
 
 // startFetch baixa a ISO do servidor (gravador personalizado) e já a seleciona.
 func (a *app) startFetch() {
 	p := &progress{}
 	a.mu.Lock()
-	if a.fetch != nil && a.fetch.get().Phase != "error" && a.fetch.get().Phase != "done" {
+	if a.fetch != nil && a.fetch.get().Phase != "error" && a.fetch.get().Phase != "done" && a.fetch.get().Phase != "cancelled" {
 		a.mu.Unlock()
 		return
 	}
 	a.fetch = p
 	a.mu.Unlock()
+	if a.bundle.isWindows() {
+		a.startWindowsFetch(p)
+		return
+	}
 	go func() {
 		path, err := fetchISO(a.bundle, p)
 		if err != nil {
@@ -380,10 +481,19 @@ func (a *app) handler() http.Handler {
 			writeJSON(w, 409, map[string]string{"error": "gravação em andamento"})
 			return
 		}
-		a.isoPath, a.isoHash = req.Path, ""
+		a.isoPath, a.isoHash, a.winInfo = req.Path, "", nil
 		p := &progress{}
 		a.hashing = p
+		win := a.bundle.isWindows()
+		if win && a.fetchCancel != nil && a.fetch != nil && a.fetch.get().Phase != "done" {
+			a.fetchCancel() // "Já tenho a ISO": para o download da Microsoft
+		}
 		a.mu.Unlock()
+		if win {
+			go a.selectWindowsISO(req.Path, p)
+			writeJSON(w, 200, map[string]string{"ok": "1"})
+			return
+		}
 		go func(path string) {
 			sum, err := hashFile(path, p)
 			if err != nil {
@@ -436,7 +546,14 @@ func (a *app) handler() http.Handler {
 			return
 		}
 		iso := a.isoPath
-		if fi, err := os.Stat(iso); err != nil || padLen(fi.Size()) > d.Size {
+		win := a.bundle.isWindows()
+		unattend := a.unattendPath
+		if win && (a.unattend == nil || a.winInfo == nil) {
+			a.mu.Unlock()
+			writeJSON(w, 400, map[string]string{"error": "aguarde a configuração e a conferência da ISO do Windows"})
+			return
+		}
+		if fi, err := os.Stat(iso); err != nil || (!win && padLen(fi.Size()) > d.Size) || (win && winStickSize(fi.Size()) > d.Size) {
 			a.mu.Unlock()
 			writeJSON(w, 400, map[string]string{"error": "o pendrive é pequeno demais para esta ISO"})
 			return
@@ -454,9 +571,15 @@ func (a *app) handler() http.Handler {
 			if tools != "" {
 				defer os.RemoveAll(tools)
 			}
-			if osNeedsPrivilegedWorker() {
-				runViaPrivilegedWorker(iso, d.ID, tools, p)
-			} else {
+			if !win {
+				unattend = ""
+			}
+			switch {
+			case osNeedsPrivilegedWorker():
+				runViaPrivilegedWorker(iso, d.ID, tools, unattend, p)
+			case win:
+				runWriteWindows(iso, d.ID, unattend, tools, p)
+			default:
 				runWrite(iso, d.ID, tools, p)
 			}
 			if len(notes) > 0 && p.get().Phase == "done" {
@@ -540,7 +663,7 @@ func (a *app) handler() http.Handler {
 
 // macOS: roda a gravação como root via janela de senha nativa e acompanha
 // o progresso por um arquivo de status.
-func runViaPrivilegedWorker(iso, diskID, toolsDir string, p *progress) {
+func runViaPrivilegedWorker(iso, diskID, toolsDir, unattend string, p *progress) {
 	dir, err := os.MkdirTemp("", "isobuilder")
 	if err != nil {
 		p.finish("error", err.Error(), "")
@@ -553,6 +676,9 @@ func runViaPrivilegedWorker(iso, diskID, toolsDir string, p *progress) {
 	args := []string{"--write", "--iso", iso, "--disk", diskID, "--status", status}
 	if toolsDir != "" {
 		args = append(args, "--tools", toolsDir)
+	}
+	if unattend != "" {
+		args = append(args, "--unattend", unattend)
 	}
 	go func() { done <- osRunPrivileged(args) }()
 	tick := time.NewTicker(500 * time.Millisecond)
@@ -600,6 +726,7 @@ func main() {
 	disk := flag.String("disk", "", "ID do disco (de --list)")
 	status := flag.String("status", "", "arquivo de status JSON")
 	toolsDir := flag.String("tools", "", "pasta com os arquivos da partição INSTALAR (modo trabalhador)")
+	unattendF := flag.String("unattend", "", "autounattend.xml: grava o pendrive do Windows (modo trabalhador)")
 	noBrowser := flag.Bool("no-browser", false, "não abre o navegador")
 	port := flag.Int("port", 0, "porta local (0 = automática)")
 	showVer := flag.Bool("version", false, "mostra a versão")
@@ -624,7 +751,11 @@ func main() {
 			p.finish("error", "--iso e --disk são obrigatórios", "")
 			os.Exit(2)
 		}
-		runWrite(*iso, *disk, *toolsDir, p)
+		if *unattendF != "" {
+			runWriteWindows(*iso, *disk, *unattendF, *toolsDir, p)
+		} else {
+			runWrite(*iso, *disk, *toolsDir, p)
+		}
 		st := p.get()
 		fmt.Println(st.Message)
 		if st.Phase != "done" {
@@ -710,7 +841,26 @@ func saveInstance(url string) {
 	_ = os.WriteFile(p, []byte(url), 0o600)
 }
 
-func clearInstance() { _ = os.Remove(instanceFile()) }
+func clearInstance() {
+	_ = os.Remove(instanceFile())
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+	for _, f := range cleanups {
+		f()
+	}
+	cleanups = nil
+}
+
+var (
+	cleanupMu sync.Mutex
+	cleanups  []func() // arquivos temporários a apagar ao fechar (ex.: a configuração com senha)
+)
+
+func addCleanup(f func()) {
+	cleanupMu.Lock()
+	cleanups = append(cleanups, f)
+	cleanupMu.Unlock()
+}
 
 // runningInstance devolve o endereço de um isoBuilder que ainda responde, ou "".
 func runningInstance() string {

@@ -30,6 +30,7 @@ COPY build.sh setup.sh validate.sh test-iso.sh ./
 COPY scripts/ ./scripts/
 COPY templates/ ./templates/
 COPY payload/ ./payload/
+COPY windows/ ./windows/
 COPY server-tools/ ./server-tools/
 COPY schema/ ./schema/
 COPY config/install.example.env ./config/

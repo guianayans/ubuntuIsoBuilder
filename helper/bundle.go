@@ -33,9 +33,28 @@ type Bundle struct {
 	Size      int64  `json:"size"`
 	Hostname  string `json:"hostname"`
 	ExpiresAt int64  `json:"expires_at"`
+	// Windows (kind == "windows"): o painel só gera a configuração (autounattend.xml);
+	// a ISO vem direto da Microsoft. Sem "kind" (ou "ubuntu"): ISO do Ubuntu, como antes.
+	Kind       string         `json:"kind,omitempty"`
+	ConfigName string         `json:"config_name,omitempty"`
+	Windows    *BundleWindows `json:"windows,omitempty"`
 }
 
-var safeName = regexp.MustCompile(`^[a-z0-9-]+-autoinstall\.iso$`)
+type BundleWindows struct {
+	Version string `json:"version"` // "11"
+	Edition string `json:"edition"` // "Pro"
+	Lang    string `json:"lang"`    // "pt-BR"
+	Arch    string `json:"arch"`    // "x64"
+}
+
+var (
+	safeName       = regexp.MustCompile(`^[a-z0-9-]+-autoinstall\.iso$`)
+	safeConfigName = regexp.MustCompile(`^[a-z0-9-]+-autounattend\.xml$`)
+	safeLang       = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$`)
+	safeEdition    = regexp.MustCompile(`^[A-Za-z][A-Za-z ]{1,40}$`)
+)
+
+func (b *Bundle) isWindows() bool { return b != nil && b.Kind == "windows" }
 
 func (b *Bundle) valid() bool {
 	if b == nil {
@@ -43,8 +62,53 @@ func (b *Bundle) valid() bool {
 	}
 	secure := strings.HasPrefix(b.Server, "https://") ||
 		(os.Getenv("UAB_BUNDLE_INSECURE") == "1" && strings.HasPrefix(b.Server, "http://127.0.0.1:")) // só testes locais
-	return secure && len(b.Token) >= 32 &&
-		safeName.MatchString(b.ISOName) && len(b.SHA256) == 64 && b.Size > 0
+	if !secure || len(b.Token) < 32 || len(b.SHA256) != 64 || b.Size <= 0 {
+		return false
+	}
+	switch b.Kind {
+	case "", "ubuntu":
+		return safeName.MatchString(b.ISOName)
+	case "windows":
+		w := b.Windows
+		return safeConfigName.MatchString(b.ConfigName) && b.Size <= 4<<20 && w != nil &&
+			w.Version == "11" && (w.Arch == "x64" || w.Arch == "arm64") &&
+			safeLang.MatchString(w.Lang) && safeEdition.MatchString(w.Edition)
+	}
+	return false // tipo desconhecido (gravador antigo demais para esta configuração)
+}
+
+// fetchConfig baixa o autounattend.xml do painel e confere tamanho e SHA256.
+func fetchConfig(b *Bundle) ([]byte, error) {
+	url := strings.TrimRight(b.Server, "/") + "/t/" + b.Token + "/config"
+	client := &http.Client{Timeout: 60 * time.Second}
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		resp, err := client.Get(url)
+		if err != nil {
+			lastErr = err
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
+		resp.Body.Close()
+		switch {
+		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone ||
+			resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return nil, errors.New("o link desta configuração expirou ou foi removido. Gere de novo no painel e baixe o gravador outra vez")
+		case resp.StatusCode != http.StatusOK:
+			lastErr = fmt.Errorf("servidor respondeu %s", resp.Status)
+			time.Sleep(3 * time.Second)
+			continue
+		case err != nil:
+			lastErr = err
+			continue
+		}
+		if int64(len(data)) != b.Size || sha256Hex(data) != b.SHA256 {
+			return nil, errors.New("a configuração baixada não confere (SHA256). Baixe o gravador de novo no painel")
+		}
+		return data, nil
+	}
+	return nil, fmt.Errorf("não foi possível baixar a configuração: %v", lastErr)
 }
 
 // loadBundle procura a configuração embutida (anexo ou arquivo do .app).

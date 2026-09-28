@@ -132,7 +132,15 @@ def ssh_target(m) -> tuple[str, int, bool]:
     ts_ips = [ip for ip in (rep.get("tailscale") or {}).get("ips", []) if "." in ip]
     if ts_ips:
         return ts_ips[0], port, True
+    if platform_of(rep) == "windows":
+        raise LookupError("Máquina Windows sem túnel: defina em Configurações um endereço que o painel alcance "
+                          "(ou use a aba Tela, pelo Remoto).")
     raise LookupError("A máquina ainda não informou um IP do Tailscale. Defina um endereço em Configurações.")
+
+
+def platform_of(rep: dict) -> str:
+    """"windows" (relatório do Windows) ou "linux" (padrão, relatórios antigos sem o campo)."""
+    return "windows" if rep.get("platform") == "windows" else "linux"
 
 
 async def open_ssh(m, username: str):
@@ -175,6 +183,7 @@ def machine_row(r, builds: dict | None = None) -> dict:
         "provision_plan": rep.get("provision_plan") or [], "provision_current": rep.get("provision_current", ""),
         "steps": rep.get("steps", {}), "services": rep.get("services", {}), "resources": rep.get("resources", {}),
         "panel_access": bool(b.get("panel_access")), "build_hostname": b.get("hostname", ""),
+        "platform": platform_of(rep), "build_os": b.get("os") or "ubuntu",
         "wg_ip": (rep.get("wg") or {}).get("address", "").split("/")[0] if isinstance(rep.get("wg"), dict) else "",
         "report": rep,
     }

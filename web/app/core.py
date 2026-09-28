@@ -101,6 +101,8 @@ def init_db() -> None:
             con.execute("ALTER TABLE builds ADD COLUMN report_token_hash TEXT")
         if "panel_access" not in bcols:
             con.execute("ALTER TABLE builds ADD COLUMN panel_access INTEGER NOT NULL DEFAULT 0")
+        if "os" not in bcols:  # sistema da instalação: ubuntu (ISO gerada aqui) | windows (só a configuração)
+            con.execute("ALTER TABLE builds ADD COLUMN os TEXT NOT NULL DEFAULT 'ubuntu'")
         con.executescript(
             """
             CREATE TABLE IF NOT EXISTS machines (
@@ -379,6 +381,10 @@ def validate_pubkeys(text: str) -> list[str]:
 
 def validate_build(d: dict) -> dict:
     """Valida o formulário do assistente e devolve a configuração normalizada."""
+    if _req(d, "os") == "windows":
+        return validate_windows(d)
+    if _req(d, "os") not in ("", "ubuntu"):
+        raise Invalid("Sistema inválido.")
     c: dict = {}
     c["UBUNTU_SERIES"] = _req(d, "series") or "24.04"
     if c["UBUNTU_SERIES"] not in ("24.04", "26.04"):
@@ -568,8 +574,118 @@ def validate_build(d: dict) -> dict:
     c["VIRT_BRIDGE"] = "yes" if d.get("virt") and d.get("virt_bridge", True) else "no"
     c["SERVER_TWEAKS"] = "yes" if d.get("tweaks") else "no"
     c["REMOTE_AGENT"] = "yes" if d.get("remote_agent") else "no"  # o builder completa URL e id do grupo
-    return {"config": c, "keys": keys, "password": pw, "ts_key": ts_key, "panel_access": panel_access,
+    return {"os": "ubuntu", "config": c, "keys": keys, "password": pw, "ts_key": ts_key, "panel_access": panel_access,
             "coolify_password": coolify_pw, "ddns_password": ddns_pw, "cloudflare_token": cf_token}
+
+
+# --------------------------------------------------------------------- Windows 11 Pro
+# O painel gera só o autounattend.xml (web/app/winconfig.py, parte "configuração do
+# Windows"); a ISO vem da Microsoft pelo gravador. Import tardio: o painel continua
+# funcionando (só Ubuntu) se o gerador não estiver instalado.
+def winconfig():
+    """Módulo gerador do Windows, ou None se indisponível."""
+    try:
+        from . import winconfig as wc  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+    return wc if hasattr(wc, "render_autounattend") and hasattr(wc, "load_apps") else None
+
+
+def win_apps() -> list[dict]:
+    """Catálogo de apps do Windows (windows/apps.json), já filtrado."""
+    wc = winconfig()
+    if not wc:
+        return []
+    try:
+        apps = wc.load_apps()
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for a in apps if isinstance(apps, list) else []:
+        if isinstance(a, dict) and WINGET_ID_RE.match(str(a.get("id") or "")):
+            out.append({k: str(a.get(k) or "") for k in ("id", "name", "desc", "cat", "icon")})
+    return out
+
+
+WIN_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?$")  # NetBIOS: até 15
+WINGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$")
+WIN_KEY_RE = re.compile(r"^[BCDFGHJKMNPQRTVWXY2346789]{5}(-[BCDFGHJKMNPQRTVWXY2346789]{5}){4}$")
+WIN_GENERIC_KEY = "VK7JG-NPHTM-C97JM-9MPGT-3V66T"  # chave genérica de instalação do Pro (não ativa)
+# nomes que o Windows reserva ou recusa para contas locais
+WIN_RESERVED_USERS = {"administrator", "administrador", "guest", "convidado", "defaultaccount", "wdagutilityaccount",
+                      "defaultuser0", "system", "sistema", "none", "nenhum", "users", "usuarios", "admin",
+                      "administrators", "administradores", "everyone", "todos", "sshd", "network", "local"}
+# fusos do Windows oferecidos no assistente (ID do Windows -> nome na tela)
+WIN_TIMEZONES = {
+    "E. South America Standard Time": "Brasília (São Paulo, Rio, Sul, Sudeste, GO, DF)",
+    "Bahia Standard Time": "Salvador",
+    "SA Eastern Standard Time": "Fortaleza, Belém, Recife, Maceió",
+    "Tocantins Standard Time": "Palmas",
+    "Central Brazilian Standard Time": "Cuiabá, Campo Grande",
+    "SA Western Standard Time": "Manaus, Porto Velho, Boa Vista",
+    "SA Pacific Standard Time": "Rio Branco",
+    "UTC-02": "Fernando de Noronha",
+    "GMT Standard Time": "Lisboa",
+    "UTC": "UTC",
+}
+# teclados (InputLocale do Windows -> nome na tela)
+WIN_KEYBOARDS = {"0416:00010416": "Português (Brasil ABNT2)", "0416:00000416": "Português (Brasil ABNT)",
+                 "0416:00020409": "Estados Unidos Internacional (idioma pt-BR)"}
+
+
+def validate_windows(d: dict) -> dict:
+    """Assistente do Windows 11 Pro -> configuração do contrato (docs/windows/CONTRACT.md §1)."""
+    if not winconfig():
+        raise Invalid("O gerador do Windows está indisponível neste painel.")
+    c: dict = {"OS": "windows", "WIN_VERSION": "11", "WIN_EDITION": "Pro", "WIN_LANG": "pt-BR", "UI_LANG": "pt-BR"}
+    host = _req(d, "hostname").lower()
+    if not WIN_HOST_RE.match(host) or host.isdigit():
+        raise Invalid("Nome do computador inválido: 1 a 15 caracteres, minúsculas, números e '-' "
+                      "(não pode começar/terminar com '-' nem ser só números).")
+    c["HOSTNAME_"] = host
+    user = _req(d, "username")
+    if not USER_RE.match(user) or len(user) > 20:
+        raise Invalid("Usuário inválido: minúsculas, números, _ ou - (até 20), começando com letra.")
+    if user in WIN_RESERVED_USERS or user in RESERVED_USERS:
+        raise Invalid(f"O nome de usuário “{user}” é reservado no Windows. Escolha outro.")
+    if user == host:
+        raise Invalid("O usuário não pode ter o mesmo nome do computador (o Windows recusa).")
+    c["ADMIN_USER"] = user
+    c["REALNAME"] = re.sub(r"[\x00-\x1f<>&\"'\\]", "", _req(d, "realname"))[:60].strip()
+    pw = str(d.get("password") or "")
+    if len(pw) < 10:
+        raise Invalid("A senha do Windows precisa ter ao menos 10 caracteres.")
+    if len(pw) > 127 or re.search(r"[\x00-\x1f\x7f]", pw):
+        raise Invalid("Senha do Windows inválida (até 127 caracteres, sem caracteres de controle).")
+    if len(user) >= 3 and user.lower() in pw.lower():
+        raise Invalid("A senha não pode conter o nome do usuário.")
+    key = re.sub(r"[\s-]", "", _req(d, "win_key")).upper()
+    if key:
+        key = "-".join(key[i:i + 5] for i in range(0, len(key), 5))
+        if not WIN_KEY_RE.match(key):
+            raise Invalid("Chave do Windows inválida: 25 caracteres no formato XXXXX-XXXXX-XXXXX-XXXXX-XXXXX "
+                          "(deixe em branco para instalar sem ativar).")
+    c["TIMEZONE_WIN"] = _req(d, "win_timezone") or "E. South America Standard Time"
+    if c["TIMEZONE_WIN"] not in WIN_TIMEZONES:
+        raise Invalid("Fuso horário inválido.")
+    c["INPUT_LOCALE"] = _req(d, "win_keyboard") or "0416:00010416"
+    if c["INPUT_LOCALE"] not in WIN_KEYBOARDS:
+        raise Invalid("Teclado inválido.")
+    panel_access = d.get("panel_access", True) is not False
+    c["PANEL_ACCESS"] = "yes" if panel_access else "no"
+    c["REMOTE_AGENT"] = "yes" if d.get("remote_agent") else "no"  # o painel completa URL e id do grupo
+    ids = list(dict.fromkeys(_req(d, "win_apps").split()))
+    if len(ids) > 60:
+        raise Invalid("Programas demais (máximo 60).")
+    for i in ids:
+        if not WINGET_ID_RE.match(i):
+            raise Invalid(f"ID do winget inválido: {i[:40]}")
+    c["WIN_APPS"] = " ".join(ids)
+    c["DISK_MODE"] = "largest"
+    if _req(d, "confirm_erase") != "APAGAR":
+        raise Invalid("Digite APAGAR para confirmar que o maior disco interno será apagado.")
+    return {"os": "windows", "config": c, "panel_access": panel_access, "win_key_set": bool(key),
+            "secrets": {"password": pw, "win_key": key or WIN_GENERIC_KEY}}
 
 
 def validate_email_or_login(s: str) -> str:

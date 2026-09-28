@@ -292,6 +292,60 @@ def run_job(build_id: str) -> None:
             delete_base_iso(series)
 
 
+# ------------------------------------------------------------------ Windows (só a configuração)
+def win_config_name(hostname: str) -> str:
+    return f"{hostname}-autounattend.xml"
+
+
+def make_windows(build_id: str, data: dict) -> None:
+    """Gera o autounattend.xml do build Windows na hora (segundos, sem fila). A ISO do
+    Windows NUNCA passa pelo painel: o gravador baixa da Microsoft e aplica este arquivo.
+    O arquivo contém a senha e a chave: 0600, no diretório do job, apagado com a validade."""
+    import hashlib
+    wc = core.winconfig()
+    if not wc:
+        raise RuntimeError("gerador do Windows indisponível")
+    cfg = data["config"]
+    jd = os.path.join(JOBS_DIR, build_id)
+    os.makedirs(os.path.join(jd, "output"), mode=0o700, exist_ok=True)
+    os.chmod(jd, 0o700)
+    ctx = {"build_id": build_id, "panel_url": PANEL_URL, "report_token": data["report_token"],
+           "panel_pubkey": "", "remote_agent_url": "", "remote_meshid": ""}
+    if cfg.get("PANEL_ACCESS") == "yes":
+        from . import panel
+        # sem from=: nesta fase o Windows não tem Tailscale/WireGuard, e o painel entra
+        # pelo endereço definido em Máquinas → Configurações
+        ctx["panel_pubkey"] = panel.ensure_panel_key()
+    if cfg.get("REMOTE_AGENT") == "yes":
+        from . import remoto
+        mid = remoto.mesh_id()
+        if not mid:
+            raise RuntimeError("o Remoto ainda não está pronto (grupo de servidores não criado)")
+        ctx["remote_agent_url"], ctx["remote_meshid"] = PANEL_URL.rstrip("/") + "/remoto", mid
+    update(build_id, status="running", step="Configuração", progress=50, message="Gerando a configuração do Windows")
+    try:
+        xml = wc.render_autounattend(dict(cfg), dict(data["secrets"]), ctx)
+    except Exception as exc:  # noqa: BLE001  (a mensagem do gerador pode citar dados: só o tipo)
+        raise RuntimeError(f"o gerador do Windows falhou ({type(exc).__name__})") from None
+    if not isinstance(xml, str) or "<unattend" not in xml:
+        raise RuntimeError("o gerador do Windows devolveu um arquivo inválido")
+    raw = xml.encode("utf-8")
+    path = os.path.join(jd, "output", win_config_name(cfg["HOSTNAME_"]))
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(raw)
+    os.chmod(path, 0o600)
+    # mesma validade das ISOs (entregue a um acesso "somente download": até o fim do acesso)
+    exp = core.now() + ISO_TTL_HOURS * 3600
+    with core.db() as con:
+        r = con.execute("SELECT MAX(expires_at) FROM users WHERE mode='download' AND build_id=? AND revoked=0",
+                        (build_id,)).fetchone()
+    exp = max(exp, r[0] or 0)
+    update(build_id, status="done", progress=100, step="Pronto", message="Configuração pronta para o gravador",
+           iso_path=path, iso_size=len(raw), sha256=hashlib.sha256(raw).hexdigest(), finished_at=core.now(),
+           expires_at=exp)
+
+
 def worker() -> None:
     while True:
         bid = _q.get()
@@ -316,13 +370,16 @@ def enforce_storage_limits() -> None:
         protected = {r["build_id"] for r in con.execute(
             "SELECT build_id FROM users WHERE mode='download' AND revoked=0 AND expires_at>? AND build_id IS NOT NULL",
             (core.now(),)).fetchall()}
-        rows = con.execute("SELECT id, expires_at FROM builds WHERE status='done' ORDER BY finished_at DESC").fetchall()
+        rows = con.execute("SELECT id, expires_at, os FROM builds WHERE status='done' ORDER BY finished_at DESC").fetchall()
         rows = [r for r in rows if r["id"] not in protected]
-        for i, r in enumerate(rows):
-            if (r["expires_at"] and r["expires_at"] <= core.now()) or i >= MAX_STORED_ISOS:
+        isos = [r["id"] for r in rows if r["os"] != "windows"]  # configurações do Windows (KB) não contam no limite
+        for r in rows:
+            if (r["expires_at"] and r["expires_at"] <= core.now()) or \
+                    (r["os"] != "windows" and isos.index(r["id"]) >= MAX_STORED_ISOS):
                 delete_build_files(r["id"])
-                con.execute("UPDATE builds SET status='expired', message='ISO removida do servidor (expirou)', "
-                            "iso_path=NULL WHERE id=?", (r["id"],))
+                what = "Configuração" if r["os"] == "windows" else "ISO"
+                con.execute("UPDATE builds SET status='expired', message=?, iso_path=NULL WHERE id=?",
+                            (f"{what} removida do servidor (expirou)", r["id"]))
 
 
 def janitor() -> None:
@@ -347,7 +404,11 @@ def start() -> None:
     threading.Thread(target=janitor, daemon=True).start()
 
 
-def summary_of(cfg: dict) -> str:
+def summary_of(cfg: dict, extra: dict | None = None) -> str:
+    if cfg.get("OS") == "windows":
+        keep = ["OS", "WIN_VERSION", "WIN_EDITION", "WIN_LANG", "HOSTNAME_", "ADMIN_USER", "TIMEZONE_WIN",
+                "INPUT_LOCALE", "UI_LANG", "PANEL_ACCESS", "REMOTE_AGENT", "WIN_APPS", "DISK_MODE"]
+        return json.dumps({**{k: cfg.get(k, "") for k in keep}, **(extra or {})})
     keep = ["UBUNTU_SERIES", "HOSTNAME_", "ADMIN_USER", "TIMEZONE", "LOCALE", "KEYBOARD_LAYOUT", "NET_MODE",
             "NET_ADDRESS", "STORAGE_MATCH_TYPE", "STORAGE_MATCH_VALUE", "STORAGE_LAYOUT",
             "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "DOCKER_ENABLED", "EXTRA_PACKAGES", "SSH_AUTH", "SSH_PORT",

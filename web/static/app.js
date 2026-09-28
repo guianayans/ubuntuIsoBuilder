@@ -197,6 +197,7 @@ function renderLogin() {
 
 /* -------------------------------------------------- assistente */
 const W = {
+  sys: "ubuntu:24.04", os: "ubuntu",  // 1º passo: qual sistema (define as etapas seguintes)
   series: "24.04", hostname: "", username: "", realname: "", password: "", password2: "",
   timezone: "America/Sao_Paulo", locale: "pt_BR.UTF-8", keyboard: "br", keyboard_variant: "",
   net_mode: "dhcp", net_match_type: "mac", net_match_value: "", net_address: "", net_gateway: "", net_dns: "1.1.1.1,8.8.8.8", net_search: "",
@@ -206,14 +207,44 @@ const W = {
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
   gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
-  deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: ""
+  deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "",
+  // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
+  win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: ""
 };
 let step = 0;
 let GUEST_DOMAIN = "gvtserver.online";
 async function loadGuestDomain() { try { GUEST_DOMAIN = (await api("/api/admin/guest-domain")).domain; } catch (e) { } }
 let autoSwitched = false;  // chave deixada em branco: mudou para usuário e senha
-const STEPS = ["Sistema", "Acesso", "Rede", "Disco", "Acesso remoto", "Programas", "Revisar"];
+// Etapas de cada sistema: [chave, título]. O 1º passo (qual sistema) é comum.
+const FLOWS = {
+  ubuntu: [["os", "Sistema"], ["srv", "Servidor"], ["acc", "Acesso"], ["net", "Rede"], ["disk", "Disco"], ["remote", "Acesso remoto"], ["apps", "Programas"], ["review", "Revisar"]],
+  windows: [["os", "Sistema"], ["wid", "Identificação"], ["wreg", "Região"], ["wdisk", "Disco"], ["wacc", "Acesso"], ["wapps", "Programas"], ["wrev", "Revisar"]],
+};
+const flow = () => FLOWS[W.os] || FLOWS.ubuntu;
+const stepKey = () => flow()[step][0];
+const isWin = () => W.os === "windows";
 let FEATURES = { wireguard: false, remote_url: "", remote_embed: false };
+// sistemas oferecidos no 1º passo: [valor, logo, nome, descrição]
+const SYSTEMS = [["ubuntu:24.04", "Ubuntu", "Ubuntu Server 24.04 LTS", "Mais madura — recomendada para servidores"],
+  ["ubuntu:26.04", "Ubuntu", "Ubuntu Server 26.04 LTS", "Mais nova"],
+  ["windows:11", "Windows", "Windows 11 Pro", "Para PCs: o gravador baixa o Windows oficial da Microsoft e aplica a configuração"]];
+function applySys() {
+  const [os, ver] = String(W.sys).split(":");
+  if (os === "windows" && !FEATURES.windows) { W.sys = "ubuntu:" + W.series; return applySys(); }
+  W.os = os === "windows" ? "windows" : "ubuntu";
+  if (W.os === "ubuntu") W.series = ver === "26.04" ? "26.04" : "24.04";
+}
+const sysName = b => b.os === "windows" ? `Windows ${b.series} Pro` : `Ubuntu ${b.series}`;
+const sysLogo = (b, cls = "xs") => osLogo(b.os === "windows" ? "Windows" : "Ubuntu", cls);
+// Catálogo de apps do Windows e opções de região (vêm do painel: windows/apps.json)
+let WINCAT = null;
+async function loadWinCat() {
+  if (WINCAT || loadWinCat.busy) return;
+  loadWinCat.busy = true;
+  try { WINCAT = await api("/api/windows/apps"); } catch (e) { WINCAT = { available: false, apps: [], timezones: {}, keyboards: {}, error: e.message }; }
+  loadWinCat.busy = false;
+  if ($("#wf") && ["wreg", "wapps", "wrev"].includes(stepKey())) { collect(); renderWizard(); }
+}
 
 const field = (name, label, attrs = "", help = "") =>
   `<label class="f"><span>${label}</span><input name="${name}" value="${esc(W[name])}" ${attrs}>${help ? `<small>${help}</small>` : ""}</label>`;
@@ -223,14 +254,21 @@ const toggle = (name, text, desc) =>
   `<label class="switch"><input type="checkbox" name="${name}" ${W[name] ? "checked" : ""}><span><b>${text}</b><br><span class="muted small">${desc}</span></span></label>`;
 
 function stepHTML() {
-  switch (step) {
-    case 0: return `<h2>Sistema</h2>
-      ${radio("series", [["24.04", "Ubuntu 24.04 LTS", "Mais madura — recomendada"], ["26.04", "Ubuntu 26.04 LTS", "Mais nova"]])}
+  switch (stepKey()) {
+    case "os": return `<h2>Qual sistema?</h2>
+      <p class="muted">Define as próximas perguntas e o que o gravador coloca no pendrive.</p>
+      <div class="syspick">${SYSTEMS.map(([v, logo, name, desc]) => {
+        const off = v.startsWith("windows") && !FEATURES.windows;
+        return `<label class="syscard ${off ? "off" : ""}"><input type="radio" name="sys" value="${v}" ${W.sys === v ? "checked" : ""} ${off ? "disabled" : ""}>
+          ${osLogo(logo, "lg")}<span class="systxt"><b>${esc(name)}</b><small>${off ? "Gerador do Windows indisponível neste painel" : esc(desc)}</small></span></label>`;
+      }).join("")}</div>`;
+    case "srv": return `<h2>Servidor</h2>
+      <p class="muted">Ubuntu Server ${esc(W.series)} LTS.</p>
       <div class="grid">${field("hostname", "Nome do servidor (hostname)", 'placeholder="ex.: srv-arquivos-01" autocapitalize="off" required', "Minúsculas, números e hífen.")}
       ${field("username", "Usuário administrador", 'placeholder="ex.: operador" autocapitalize="off" required')}</div>
       ${field("realname", "Nome completo (opcional)", 'placeholder="ex.: Equipe de TI"')}
       <div class="grid">${field("timezone", "Fuso horário")}${field("locale", "Idioma (locale)")}${field("keyboard", "Teclado")}</div>`;
-    case 1: {
+    case "acc": {
       const pwMode = W.ssh_auth === "password";
       return `<h2>Acesso</h2>
       ${radio("ssh_auth", [
@@ -252,7 +290,7 @@ function stepHTML() {
         <p class="small">Aperte Enter nas perguntas. Depois carregue o arquivo <code>id_ed25519.pub</code> da pasta <code>.ssh</code> da sua pasta de usuário (no Mac: <code>cat ~/.ssh/id_ed25519.pub</code>; no Windows: <code>type $env:USERPROFILE\\.ssh\\id_ed25519.pub</code>) e cole acima.</p>
       </details>`;
     }
-    case 2: return `<h2>Rede</h2>
+    case "net": return `<h2>Rede</h2>
       <p class="muted">Use cabo de rede. Wi-Fi não é configurado.</p>
       ${radio("net_mode", [["dhcp", "DHCP (automático)", "Recomendado: o roteador entrega o IP"], ["static", "IP fixo", "Você informa IP, gateway e DNS"]])}
       <div id="static" class="${W.net_mode === "static" ? "" : "hidden"}">
@@ -261,7 +299,7 @@ function stepHTML() {
         ${field("net_address", "IP/prefixo", 'placeholder="ex.: 10.20.30.40/24"')}${field("net_gateway", "Gateway", 'placeholder="ex.: 10.20.30.1"')}
         ${field("net_dns", "DNS (vírgula)")}${field("net_search", "Domínio de busca (opcional)", 'placeholder="ex.: escritorio.local"')}</div>
       </div>`;
-    case 3: return `<h2>Disco de instalação</h2>
+    case "disk": return `<h2>Disco de instalação</h2>
       <div class="note warn"><b>O disco escolhido será totalmente apagado</b> no computador onde o pendrive for usado.</div>
       ${radio("storage_type", [
         ["single", "Único disco interno", "Não precisa saber nada do disco. Se a máquina tiver mais de um disco interno, a instalação para sem apagar nada e mostra a lista."],
@@ -272,7 +310,7 @@ function stepHTML() {
         <label class="switch"><input type="checkbox" name="storage_allow_usb" ${W.storage_allow_usb ? "checked" : ""}><span>O disco de destino é externo/USB (normalmente não)</span></label></div>
       <div class="grid">${field("storage_min_gb", "Tamanho mínimo esperado (GB)", 'type="number" min="8"', "Proteção: aborta se o disco for menor.")}
       <label class="f"><span>Particionamento</span><select name="storage_layout"><option value="lvm" ${W.storage_layout === "lvm" ? "selected" : ""}>LVM usando o disco inteiro (recomendado)</option><option value="direct" ${W.storage_layout === "direct" ? "selected" : ""}>ext4 simples</option></select></label></div>`;
-    case 4: return `<h2>Acesso remoto</h2>
+    case "remote": return `<h2>Acesso remoto</h2>
       <p class="muted">Como você vai alcançar este servidor de longe. Os dois juntos = um é reserva do outro (recomendado para máquinas distantes).</p>
       ${FEATURES.wireguard ? toggle("wireguard", "WireGuard pelo seu servidor", "O servidor conecta para fora até o seu servidor (funciona atrás de qualquer roteador/CGNAT do cliente). Em Máquinas você gera o QR code para o seu Mac/celular e acessa a máquina, e opcionalmente a rede local do cliente.")
         : `<div class="note">WireGuard pelo seu servidor: desligado neste painel (defina <code>HUB_ENDPOINT</code> no Coolify).</div>`}
@@ -282,7 +320,7 @@ function stepHTML() {
         <small>Gere em <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noopener">login.tailscale.com → Settings → Keys</a>: <b>Reusable desligado</b>, <b>Ephemeral desligado</b>, <b>Pre-approved ligado</b>, tag <code>tag:server</code> (recomendado). A chave vai dentro da ISO e é apagada do servidor após o uso.</small></label>
         <div class="grid">${field("tailscale_hostname", "Nome na Tailnet", `placeholder="${esc(W.hostname || "igual ao hostname")}"`)}${field("tailscale_extra", "Argumentos extras (opcional)", 'placeholder="--advertise-tags=tag:server"')}</div>
       </div>`;
-    case 5: return `<h2>Programas</h2>
+    case "apps": return `<h2>Programas</h2>
       ${radio("apps", [
         ["none", "Nenhum programa extra", "Só o sistema, SSH, Tailscale e os pacotes básicos."],
         ["docker", "Docker + Docker Compose", "Repositório oficial da Docker, habilitado no boot, usuário no grupo docker."],
@@ -311,7 +349,7 @@ function stepHTML() {
       <div id="virtBox" class="${W.virt ? "" : "hidden"}">${toggle("virt_bridge", "Ponte de rede br0", "As VMs recebem IP do seu roteador, como os outros aparelhos da rede. Aplicada com proteção: se a rede não voltar, é desfeita sozinha.")}</div>
       ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto", "Instala o agente do Remoto (MeshCentral) no primeiro boot: o servidor aparece sozinho em Acesso remoto, com tela, terminal e arquivos pelo navegador. É a 2ª rota, além de Máquinas.") : ""}
       ${toggle("tweaks", "Ajustes de servidor", "Verifica e repara o disco sozinho no boot (após queda de energia), console sem apagar a tela e, com virtualização, IOMMU ligado.")}`;
-    case 6: {
+    case "review": {
       const disk = { single: "Único disco interno", serial: "Serial " + W.storage_value, path: W.storage_value, model: "Modelo " + W.storage_value }[W.storage_type];
       return `<h2>Revisar e gerar</h2>
       <div class="table-wrap"><table>
@@ -328,19 +366,86 @@ function stepHTML() {
           W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
-      ${ME.role === "admin" ? `<div class="card u-mt16">
-        <label class="switch"><input type="checkbox" name="deliver_on" ${W.deliver_on ? "checked" : ""}><span><b>Entregar esta ISO para uma pessoa</b><br><span class="muted small">Cria agora um acesso temporário “somente download” já vinculado a esta ISO: a pessoa entra, baixa o gravador e grava o pendrive. A máquina aparece em “Máquinas” com esse e-mail.</span></span></label>
-        <div id="deliverBox" class="${W.deliver_on ? "" : "hidden"}">
-          <div class="grid">
-            <label class="f"><span>E-mail de acesso</span><div class="suffix"><input name="deliver_prefix" value="${esc(W.deliver_prefix)}" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small>Vazio = prefixo aleatório. A senha é gerada automaticamente.</small></label>
-            <label class="f"><span>Validade do acesso</span><select name="deliver_duration">${[["24h", "24 horas"], ["3d", "3 dias"], ["7d", "7 dias"], ["30d", "30 dias"]].map(([v, t]) => `<option value="${v}" ${W.deliver_duration === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-            ${field("deliver_label", "Para quem (opcional)", 'placeholder="ex.: Suporte da filial Centro"')}
-          </div></div></div>` : ""}
+      ${deliverHTML("ISO")}
       <div class="note warn u-mt16"><b>Atenção:</b> ao dar boot com o pendrive, o disco de destino da máquina será <b>completamente apagado</b>.</div>
       <label class="f"><span>Digite APAGAR para confirmar</span><input name="confirm_erase" value="${esc(W.confirm_erase)}" autocomplete="off" placeholder="APAGAR"></label>
       <div id="werr"></div>`;
     }
+    /* ---------- Windows 11 Pro */
+    case "wid": return `<h2>Identificação</h2>
+      <p class="muted">Windows 11 Pro, em português do Brasil. Sem conta Microsoft: o usuário abaixo é local e administrador.</p>
+      <div class="grid">${field("hostname", "Nome do computador", 'placeholder="ex.: recepcao-01" maxlength="15" autocapitalize="off" spellcheck="false" required', "1 a 15 caracteres: minúsculas, números e hífen (limite do Windows).")}
+      ${field("username", "Usuário local (administrador)", 'placeholder="ex.: suporte" maxlength="20" autocapitalize="off" spellcheck="false" required', "Minúsculas, números, _ ou -. Diferente do nome do computador.")}</div>
+      ${field("realname", "Nome completo (opcional)", 'placeholder="ex.: Suporte de TI" maxlength="60"')}
+      <div class="grid">
+        <label class="f"><span>Senha do usuário</span><input type="password" name="password" value="${esc(W.password)}" autocomplete="new-password"><small>Mínimo 10 caracteres. Vai dentro da configuração do pendrive: guarde o pendrive com cuidado.</small></label>
+        <label class="f"><span>Repita a senha</span><input type="password" name="password2" value="${esc(W.password2)}" autocomplete="new-password"></label>
+      </div>
+      <label class="f"><span>Chave do Windows <span class="muted small">(opcional)</span></span><input name="win_key" value="${esc(W.win_key)}" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" maxlength="29" autocapitalize="characters" autocomplete="off" spellcheck="false" class="mono u-keyinput">
+        <small>Em branco = instala o Windows 11 Pro <b>sem ativar</b> (dá para ativar depois em Configurações → Sistema → Ativação). Com chave, o Windows ativa sozinho quando tiver internet.</small></label>`;
+    case "wreg": {
+      if (!WINCAT) { loadWinCat(); return `<h2>Região</h2><p class="muted">Carregando…</p>`; }
+      const opts = (obj, cur) => Object.entries(obj || {}).map(([v, t]) => `<option value="${esc(v)}" ${cur === v ? "selected" : ""}>${esc(t)}</option>`).join("");
+      return `<h2>Região</h2>
+      <p class="muted">Idioma, teclado e fuso já ficam definidos: nenhuma tela de configuração aparece na instalação.</p>
+      <div class="grid">
+        <label class="f"><span>Idioma do Windows</span><select disabled><option>Português (Brasil) — pt-BR</option></select><small>O gravador baixa o Windows 11 em português do Brasil.</small></label>
+        <label class="f"><span>Teclado</span><select name="win_keyboard">${opts(WINCAT.keyboards, W.win_keyboard)}</select></label>
+        <label class="f"><span>Fuso horário</span><select name="win_timezone">${opts(WINCAT.timezones, W.win_timezone)}</select></label>
+      </div>`;
+    }
+    case "wdisk": return `<h2>Disco de instalação</h2>
+      <div class="note warn"><b>O maior disco interno do computador será totalmente apagado</b> e o Windows instalado nele.</div>
+      <ul class="plain">
+        <li><b>Nunca o pendrive:</b> discos USB ficam de fora da escolha.</li>
+        <li><b>Mais de um disco interno?</b> Vai no maior. Se não houver nenhum disco elegível, a instalação para com uma mensagem, sem apagar nada.</li>
+        <li><b>PCs antigos:</b> as exigências de TPM 2.0, Secure Boot e memória do Windows 11 são contornadas. O computador precisa inicializar em modo UEFI.</li>
+      </ul>`;
+    case "wacc": return `<h2>Acesso</h2>
+      <p class="muted">O computador aparece em “Máquinas” (com o logo do Windows) alguns minutos depois de instalado, e se reporta a cada 10 minutos.</p>
+      ${toggle("panel_access", "Terminal pelo painel (OpenSSH)", "Instala o OpenSSH Server do Windows (shell PowerShell) com a chave do painel: o terminal abre no navegador, sem senha. Nesta versão o Windows não tem túnel próprio: o painel precisa alcançar o endereço da máquina (definido em Máquinas → Configurações); se não alcançar, use o Remoto.")}
+      ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto (MeshCentral)", "Instala o agente do Remoto: tela, terminal e arquivos pelo navegador, de qualquer lugar, sem abrir portas no roteador. Recomendado.")
+        : `<div class="note">Remoto (MeshCentral): indisponível neste painel agora; o computador aparece só em Máquinas.</div>`}`;
+    case "wapps": {
+      if (!WINCAT) { loadWinCat(); return `<h2>Programas</h2><p class="muted">Carregando o catálogo…</p>`; }
+      return `<h2>Programas</h2>
+      <p class="muted">Marque o que instalar. Tudo vem do <b>winget</b> (fontes oficiais), sozinho, depois da instalação do Windows e com internet; um programa que falhar não trava os outros.</p>
+      ${winCatalog()}
+      <details class="u-mt12" ${W.win_apps.split(/\s+/).some(i => i && !WINCAT.apps.some(a => a.id === i)) ? "open" : ""}><summary>Avançado: outros programas (ID do winget)</summary>
+        ${field("win_apps", "IDs do winget (separados por espaço)", 'placeholder="ex.: Mozilla.Firefox Notepad++.Notepad++" autocapitalize="off" spellcheck="false"', "Marcar acima escreve aqui. Procure IDs com <code>winget search nome</code> ou em winget.run.")}</details>`;
+    }
+    case "wrev": {
+      const ids = W.win_apps.split(/\s+/).filter(Boolean), names = ids.map(i => ((WINCAT && WINCAT.apps.find(a => a.id === i)) || { name: i }).name);
+      const key = W.win_key.replace(/[^A-Z0-9]/gi, "");
+      return `<h2>Revisar e gerar</h2>
+      <div class="table-wrap"><table>
+        <tr><th>Sistema</th><td>${osLogo("Windows", "xs")} Windows 11 Pro · pt-BR · 64 bits</td></tr>
+        <tr><th>Computador</th><td>${esc(W.hostname)} · usuário local ${esc(W.username)}</td></tr>
+        <tr><th>Ativação</th><td>${key ? `chave informada (termina em <span class="mono">${esc(key.slice(-5).toUpperCase())}</span>)` : "sem chave: instala sem ativar"}</td></tr>
+        <tr><th>Região</th><td>${esc((WINCAT && WINCAT.timezones[W.win_timezone]) || W.win_timezone)} · teclado ${esc((WINCAT && WINCAT.keyboards[W.win_keyboard]) || W.win_keyboard)}</td></tr>
+        <tr><th>Disco</th><td>maior disco interno (nunca USB)</td></tr>
+        <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : ""].filter(Boolean).join(" · ") || "só aparece em Máquinas"}</td></tr>
+        <tr><th>Programas</th><td>${names.length ? esc(names.join(", ")) : "nenhum"}</td></tr>
+      </table></div>
+      <div class="note u-mt16">O painel gera só a <b>configuração</b> (alguns KB). O gravador isoBuilder baixa o Windows 11 oficial direto da Microsoft no computador de quem grava o pendrive e aplica esta configuração.</div>
+      ${deliverHTML("instalação")}
+      <div class="note warn u-mt16"><b>Atenção:</b> ao dar boot com o pendrive, o <b>maior disco interno</b> da máquina será <b>completamente apagado</b>.</div>
+      <label class="f"><span>Digite APAGAR para confirmar</span><input name="confirm_erase" value="${esc(W.confirm_erase)}" autocomplete="off" placeholder="APAGAR"></label>`;
+    }
   }
+}
+
+// "Entregar para uma pessoa" (só admin), no último passo dos dois sistemas
+function deliverHTML(what) {
+  if (ME.role !== "admin") return "";
+  return `<div class="card u-mt16">
+    <label class="switch"><input type="checkbox" name="deliver_on" ${W.deliver_on ? "checked" : ""}><span><b>Entregar esta ${what} para uma pessoa</b><br><span class="muted small">Cria agora um acesso temporário “somente download” já vinculado a ela: a pessoa entra, baixa o gravador e grava o pendrive. A máquina aparece em “Máquinas” com esse e-mail.</span></span></label>
+    <div id="deliverBox" class="${W.deliver_on ? "" : "hidden"}">
+      <div class="grid">
+        <label class="f"><span>E-mail de acesso</span><div class="suffix"><input name="deliver_prefix" value="${esc(W.deliver_prefix)}" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small>Vazio = prefixo aleatório. A senha é gerada automaticamente.</small></label>
+        <label class="f"><span>Validade do acesso</span><select name="deliver_duration">${[["24h", "24 horas"], ["3d", "3 dias"], ["7d", "7 dias"], ["30d", "30 dias"]].map(([v, t]) => `<option value="${v}" ${W.deliver_duration === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        ${field("deliver_label", "Para quem (opcional)", 'placeholder="ex.: Suporte da filial Centro"')}
+      </div></div></div>`;
 }
 
 /* -------------------------------------------------- catálogo de pacotes (estilo Ninite)
@@ -373,11 +478,11 @@ const PKG_NAMES = { "p7zip-full": "7-Zip", "mariadb-server": "MariaDB", postgres
   smartmontools: "SMART", "unattended-upgrades": "Atualizações automáticas", "nfs-common": "NFS", "cifs-utils": "Pastas do Windows",
   samba: "Samba", "ntfs-3g": "NTFS", exfatprogs: "exFAT", "nvme-cli": "NVMe", dnsutils: "dig e nslookup", pciutils: "lspci", usbutils: "lsusb",
   borgbackup: "Borg", "mtr-tiny": "mtr", rclone: "Rclone", vim: "Vim", tmux: "tmux", jq: "jq", ufw: "UFW", lynis: "Lynis", nvtop: "nvtop" };
-function pkgIcon(p) {
-  const ic = (window.PKG_ICONS || {})[p];
+function pkgIcon(p, icons = window.PKG_ICONS, label = p) {
+  const ic = (icons || {})[p];
   const svg = !ic ? "" : ic.t === "b" ? `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ic.d}</svg>`
     : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ic.d}</svg>`;
-  return `<span class="pkgico" style="--c:${ic ? ic.c : "#64748b"}">${svg || esc(p.slice(0, 2))}<i class="pkgchk" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></i></span>`;
+  return `<span class="pkgico" style="--c:${ic ? ic.c : "#64748b"}">${svg || esc(String(label).slice(0, 2))}<i class="pkgchk" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></i></span>`;
 }
 function pkgCatalog() {
   return `<details class="pkgcat" id="pkgcat"><summary>Escolher da lista <span class="muted small" id="pkgcount"></span></summary>
@@ -410,6 +515,45 @@ function wirePkgCatalog() {
   if (f.value.trim()) $("#pkgcat").open = true;
 }
 
+/* -------------------------------------------------- catálogo de apps do Windows (winget, estilo Ninite)
+   Vem de windows/apps.json; ícones em window.WIN_ICONS (gerados por make-pkg-icons.py).
+   Marcar escreve o ID no campo "IDs do winget" (avançado); digitar lá marca/desmarca. */
+function winCatalog() {
+  const apps = (WINCAT && WINCAT.apps) || [];
+  if (!apps.length) return `<div class="note warn">${esc(WINCAT && WINCAT.error ? WINCAT.error : "Catálogo de programas do Windows indisponível neste painel.")} Dá para informar IDs do winget em “Avançado”.</div>`;
+  const cats = [];
+  apps.forEach(a => { const c = a.cat || "Outros"; let g = cats.find(x => x[0] === c); if (!g) cats.push(g = [c, []]); g[1].push(a); });
+  return `<div id="wincat"><p class="muted small u-mt0" id="wincount"></p>${cats.map(([g, items]) => `<fieldset class="pkggrp"><legend>${esc(g)}</legend><div class="pkgitems">${items.map(a =>
+    `<label class="pkgitem" title="${esc(a.id)}: ${esc(a.desc)}"><input type="checkbox" data-wapp="${esc(a.id)}">${pkgIcon(a.id, window.WIN_ICONS, a.name)}
+      <span class="pkgtxt"><b>${esc(a.name)}</b><small>${esc(a.desc)}</small></span></label>`).join("")}</div></fieldset>`).join("")}</div>`;
+}
+function syncWinApps() {
+  const f = $('input[name="win_apps"]'); if (!f) return;
+  const set = new Set(f.value.split(/\s+/).filter(Boolean));
+  let n = 0;
+  $$("#wincat [data-wapp]").forEach(c => { c.checked = set.has(c.dataset.wapp); if (c.checked) n++; c.closest(".pkgitem").classList.toggle("on", c.checked); });
+  const cnt = $("#wincount"); if (cnt) cnt.textContent = set.size ? `${set.size} programa${set.size > 1 ? "s" : ""} marcado${set.size > 1 ? "s" : ""}${set.size > n ? ` (${set.size - n} pelo ID)` : ""}.` : "Nenhum programa marcado.";
+}
+function wireWinCatalog() {
+  const f = $('input[name="win_apps"]'); if (!f) return;
+  $$("#wincat [data-wapp]").forEach(c => c.onchange = () => {
+    const list = f.value.split(/\s+/).filter(Boolean).filter(i => i !== c.dataset.wapp);
+    if (c.checked) list.push(c.dataset.wapp);
+    f.value = list.join(" ");
+    syncWinApps();
+  });
+  f.addEventListener("input", syncWinApps);
+  syncWinApps();
+}
+// chave do Windows: maiúsculas e hífen a cada 5 caracteres enquanto digita
+function wireWinKey() {
+  const k = $('input[name="win_key"]'); if (!k) return;
+  k.addEventListener("input", () => {
+    const raw = k.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 25);
+    k.value = raw.replace(/(.{5})(?=.)/g, "$1-");
+  });
+}
+
 function collect() {
   $$("input,select,textarea", view).forEach(el => {
     if (!el.name || !(el.name in W)) return;
@@ -420,12 +564,23 @@ function collect() {
 }
 
 function checkStep() {
-  const e = [];
-  if (step === 0) {
+  const e = [], k = stepKey();
+  if (k === "wid") {
+    if (!/^[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?$/.test(W.hostname) || /^\d+$/.test(W.hostname)) e.push("Nome do computador: 1 a 15 caracteres, minúsculas, números e hífen (não só números).");
+    if (!/^[a-z_][a-z0-9_-]{0,19}$/.test(W.username)) e.push("Usuário: minúsculas, números, _ ou - (até 20), começando com letra.");
+    else if (W.username === W.hostname) e.push("O usuário não pode ter o mesmo nome do computador.");
+    if (W.password.length < 10) e.push("A senha precisa de ao menos 10 caracteres.");
+    else if (W.password !== W.password2) e.push("As senhas não conferem.");
+    const key = W.win_key.replace(/[^A-Z0-9]/gi, "");
+    if (key && !/^[BCDFGHJKMNPQRTVWXY2346789]{25}$/i.test(key)) e.push("Chave do Windows: 25 caracteres (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX) ou deixe em branco.");
+  }
+  if (k === "wapps" && W.win_apps.split(/\s+/).some(i => i && !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$/.test(i))) e.push("ID do winget inválido em “Avançado”.");
+  if (k === "wrev" && W.deliver_on && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
+  if (k === "srv") {
     if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(W.hostname)) e.push("Nome do servidor: use minúsculas, números e hífen.");
     if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(W.username)) e.push("Usuário: minúsculas, números, _ ou -.");
   }
-  if (step === 1) {
+  if (k === "acc") {
     const hasKey = W.ssh_keys.split("\n").some(l => /^(ssh-|ecdsa-|sk-)/.test(l.trim()));
     if (W.ssh_auth === "key" && !hasKey && !/PRIVATE KEY|-----BEGIN/.test(W.ssh_keys)) {
       // Chave é opcional: sem chave, o acesso passa a ser por usuário e senha
@@ -442,30 +597,37 @@ function checkStep() {
       e.push("Porta SSH: use 22 (padrão) ou de 1024 a 65535 (exceto 6001, 6002, 8000, 8080 e 9090, usadas pelos programas).");
 
   }
-  if (step === 2 && W.net_mode === "static" && (!W.net_address.includes("/") || !W.net_gateway)) e.push("Informe IP/prefixo e gateway.");
-  if (step === 3 && W.storage_type !== "single" && W.storage_value.length < 3) e.push("Informe o valor do critério do disco.");
-  if (step === 4 && W.tailscale && !/^tskey-/.test(W.tailscale_key.trim())) e.push("Cole a auth key do Tailscale (tskey-auth-…) ou desligue o Tailscale.");
-  if (step === 4 && !W.tailscale && !W.wireguard && !confirm("Sem WireGuard e sem Tailscale, o acesso será só pela rede local do cliente. Continuar?")) e.push("Escolha pelo menos uma forma de acesso remoto.");
-  if (step === 5 && W.ddns) {
+  if (k === "net" && W.net_mode === "static" && (!W.net_address.includes("/") || !W.net_gateway)) e.push("Informe IP/prefixo e gateway.");
+  if (k === "disk" && W.storage_type !== "single" && W.storage_value.length < 3) e.push("Informe o valor do critério do disco.");
+  if (k === "remote" && W.tailscale && !/^tskey-/.test(W.tailscale_key.trim())) e.push("Cole a auth key do Tailscale (tskey-auth-…) ou desligue o Tailscale.");
+  if (k === "remote" && !W.tailscale && !W.wireguard && !confirm("Sem WireGuard e sem Tailscale, o acesso será só pela rede local do cliente. Continuar?")) e.push("Escolha pelo menos uma forma de acesso remoto.");
+  if (k === "apps" && W.ddns) {
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(W.ddns_hostname.toLowerCase())) e.push("DDNS: informe o hostname do No-IP (ex.: meuservidor.ddns.net).");
     if (!W.ddns_login) e.push("DDNS: informe o usuário do No-IP.");
     if (!W.ddns_password || /['\\]/.test(W.ddns_password)) e.push("DDNS: informe a senha do No-IP (sem aspas simples nem barra invertida).");
   }
-  if (step === 5 && W.cloudflare && !/[A-Za-z0-9_=+\/-]{80,}/.test(W.cloudflare_token)) e.push("Cloudflare: cole o token do túnel.");
-  if (step === 5 && W.apps.startsWith("coolify")) {
+  if (k === "apps" && W.cloudflare && !/[A-Za-z0-9_=+\/-]{80,}/.test(W.cloudflare_token)) e.push("Cloudflare: cole o token do túnel.");
+  if (k === "apps" && W.apps.startsWith("coolify")) {
     const p = W.coolify_password;
     if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(W.coolify_email)) e.push("Informe o e-mail do admin do Coolify.");
     if (p.length < 12 || !/[a-z]/.test(p) || !/[A-Z]/.test(p) || !/\d/.test(p) || !/[^A-Za-z0-9]/.test(p)) e.push("Senha do Coolify: 12+ caracteres com maiúscula, minúscula, número e símbolo.");
     else if (p !== W.coolify_password2) e.push("As senhas do Coolify não conferem.");
     if (p.includes("'")) e.push("A senha do Coolify não pode ter aspas simples.");
   }
-  if (step === 6 && W.deliver_on && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
+  if (k === "review" && W.deliver_on && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
   return e;
 }
 
 function renderWizard() {
+  applySys();
+  const STEPS = flow().map(x => x[1]);
+  step = Math.min(step, STEPS.length - 1);
+  const last = step === STEPS.length - 1, genTxt = isWin() ? "Gerar configuração" : "Gerar ISO";
+  if (FEATURES.windows && !WINCAT) loadWinCat();  // catálogo do Windows pronto antes de chegar lá
   view.innerHTML = `
-  <h1>Nova ISO</h1><p class="muted">Responda às perguntas; no final o servidor gera a ISO e você baixa com o gravador de pendrive.</p>
+  <h1>Nova ISO</h1><p class="muted">${isWin()
+    ? "Responda às perguntas; no final o painel gera a configuração e o gravador de pendrive baixa o Windows oficial da Microsoft e aplica."
+    : "Responda às perguntas; no final o servidor gera a ISO e você baixa com o gravador de pendrive."}</p>
   <div class="wizard">
     <div class="steps-m"><div class="spread"><b>${STEPS[step]}</b><span class="muted small">Passo ${step + 1} de ${STEPS.length}</span></div>
       <div class="bar"><i id="stepbar"></i></div></div>
@@ -473,10 +635,14 @@ function renderWizard() {
     <div class="card"><form id="wf" autocomplete="off">${stepHTML()}
       <div id="serr"></div>
       <div class="nav-btns"><button type="button" class="btn" id="back" ${step === 0 ? "disabled" : ""}>Voltar</button>
-      <button type="submit" class="btn primary">${step === STEPS.length - 1 ? "Gerar ISO" : "Continuar"}</button></div>
+      <button type="submit" class="btn primary">${last ? genTxt : "Continuar"}</button></div>
     </form></div>
   </div>`;
   $("#stepbar").style.width = ((step + 1) / STEPS.length) * 100 + "%";  // via CSSOM (a CSP barra style inline)
+  // trocar o sistema troca as etapas: redesenha na hora (a lista da esquerda muda)
+  $$('input[name="sys"]').forEach(r => r.onchange = () => { collect(); renderWizard(); });
+  wireWinCatalog();
+  wireWinKey();
   $$(".steps li").forEach(li => li.onclick = () => { collect(); const i = +li.dataset.i; if (i < step) { step = i; renderWizard(); } });
   $("#back").onclick = () => { collect(); step = Math.max(0, step - 1); renderWizard(); };
   $$('input[name="net_mode"]').forEach(r => r.onchange = () => $("#static").classList.toggle("hidden", r.value !== "static"));
@@ -516,18 +682,25 @@ function renderWizard() {
       toast("Sem chave SSH: acesso por usuário e senha.");
     }
     if (errs.length) { $("#serr").innerHTML = `<div class="note err">${errs.map(esc).join("<br>")}</div>`; return; }
-    if (step < STEPS.length - 1) { step++; return renderWizard(); }
+    if (!last) { step++; return renderWizard(); }
     if (W.confirm_erase !== "APAGAR") { $("#serr").innerHTML = `<div class="note err">Digite APAGAR para confirmar.</div>`; return; }
     const btn = $('#wf button[type="submit"]'); btn.disabled = true; btn.textContent = "Enviando…";
     try {
-      const body = { ...W, storage_min_gb: +W.storage_min_gb, remote_agent: !!(W.remote_agent && FEATURES.remote_agent) };
+      const remote_agent = !!(W.remote_agent && FEATURES.remote_agent);
+      // Windows: só os campos dele (nada do Ubuntu vai junto); Ubuntu: como sempre
+      const body = isWin()
+        ? { os: "windows", hostname: W.hostname, username: W.username, realname: W.realname, password: W.password, win_key: W.win_key,
+            win_timezone: W.win_timezone, win_keyboard: W.win_keyboard, panel_access: W.panel_access, remote_agent, win_apps: W.win_apps,
+            confirm_erase: W.confirm_erase }
+        : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent };
+      if (!isWin()) delete body.win_key;
       if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label };
       const r = await api("/api/builds", { method: "POST", body });
       if (r.delivery) { try { sessionStorage.setItem("uab-delivery-" + r.id, JSON.stringify(r.delivery)); } catch (e) { } }
-      W.password = W.password2 = W.tailscale_key = W.confirm_erase = W.coolify_password = W.coolify_password2 = W.ddns_password = W.cloudflare_token = ""; step = 0;
+      W.password = W.password2 = W.tailscale_key = W.confirm_erase = W.coolify_password = W.coolify_password2 = W.ddns_password = W.cloudflare_token = W.win_key = ""; step = 0;
       W.deliver_on = false; W.deliver_prefix = W.deliver_label = "";
       go("#/iso/" + r.id);
-    } catch (e) { $("#serr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; btn.disabled = false; btn.textContent = "Gerar ISO"; }
+    } catch (e) { $("#serr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; btn.disabled = false; btn.textContent = genTxt; }
   };
 }
 
@@ -537,8 +710,8 @@ async function renderBuilds() {
   view.innerHTML = `<h1>Minhas ISOs</h1><div id="bl" class="card">Carregando…</div>`;
   const d = await api("/api/builds");
   const q = d.quota ? `<p class="muted small">Você usou ${d.quota.used} de ${d.quota.max} ISOs deste acesso.</p>` : "";
-  $("#bl").innerHTML = q + (d.builds.length ? `<div class="table-wrap"><table class="rtable"><tr><th>Servidor</th><th>Ubuntu</th><th>Status</th><th>Criada</th>${ME.role === "admin" ? "<th>Conta</th>" : ""}<th></th></tr>
-    ${d.builds.map(b => `<tr><td class="rt-title"><b>${esc(b.hostname)}</b></td><td data-label="Ubuntu">${esc(b.series)}</td><td data-label="Status"><span class="pill ${b.status}">${STATUS[b.status] || esc(b.status)}</span></td>
+  $("#bl").innerHTML = q + (d.builds.length ? `<div class="table-wrap"><table class="rtable"><tr><th>Nome</th><th>Sistema</th><th>Status</th><th>Criada</th>${ME.role === "admin" ? "<th>Conta</th>" : ""}<th></th></tr>
+    ${d.builds.map(b => `<tr><td class="rt-title"><div class="mname">${sysLogo(b, "")}<div><b>${esc(b.hostname)}</b>${b.os === "windows" ? `<br><span class="muted small">configuração do Windows</span>` : ""}</div></div></td><td data-label="Sistema" class="nowrap">${esc(sysName(b))}</td><td data-label="Status"><span class="pill ${b.status}">${STATUS[b.status] || esc(b.status)}</span></td>
       <td data-label="Criada" class="nowrap">${fmtDate(b.created_at)}</td>${ME.role === "admin" ? `<td class="small" data-label="Conta">${esc(b.owner)}</td>` : ""}<td class="rt-actions"><div class="row"><a class="btn sm" href="#/iso/${b.id}">Abrir</a>${ME.mode === "download" || ["queued", "running"].includes(b.status) ? "" : `<button class="btn sm danger" data-del="${b.id}">Excluir</button>`}</div></td></tr>`).join("")}
     </table></div>` : `<p class="muted">Nenhuma ISO ainda.</p><a class="btn primary" href="#/">Criar a primeira</a>`);
   $$("#bl [data-del]").forEach(b => b.onclick = () => delBuild(b.dataset.del, renderBuilds));
@@ -564,10 +737,13 @@ function wireDelivery(id) {
 async function renderBuild(id) {
   let b;
   try { b = (await api("/api/builds/" + id)).build; } catch (e) { view.innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
+  const win = b.os === "windows";
   if (b.status === "queued" || b.status === "running") {
-    view.innerHTML = deliveryCard(id) + `<div class="card narrow"><h1>Gerando a ISO de ${esc(b.hostname)}</h1>
+    view.innerHTML = deliveryCard(id) + (win ? `<div class="card narrow"><h1>Gerando a configuração de ${esc(b.hostname)}</h1>
+      <p class="muted">Leva poucos segundos.</p><div class="bar"><i id="pb"></i></div><p id="pm"><b>${Math.round(b.progress)}%</b> · ${esc(b.message)}</p></div>`
+      : `<div class="card narrow"><h1>Gerando a ISO de ${esc(b.hostname)}</h1>
       <p class="muted">Pode levar alguns minutos (na primeira vez, o servidor também baixa o Ubuntu oficial, ~3–4 GB). Você pode sair desta página: a geração continua.</p>
-      <div class="bar"><i id="pb"></i></div><p id="pm"><b>${Math.round(b.progress)}%</b> · ${esc(b.message)}</p></div>`;
+      <div class="bar"><i id="pb"></i></div><p id="pm"><b>${Math.round(b.progress)}%</b> · ${esc(b.message)}</p></div>`);
     $("#pb").style.width = b.progress + "%";
     wireDelivery(id);
     timer = setInterval(async () => {
@@ -581,17 +757,17 @@ async function renderBuild(id) {
     return;
   }
   if (b.status === "error") {
-    view.innerHTML = `<div class="card"><h1>Não foi possível gerar a ISO</h1><div class="note err">${esc(b.message)}</div>
+    view.innerHTML = `<div class="card"><h1>Não foi possível gerar ${win ? "a configuração" : "a ISO"}</h1><div class="note err">${esc(b.message)}</div>
       <div class="row"><a class="btn primary" href="#/">Tentar de novo</a><button class="btn" id="showlog">Ver detalhes técnicos</button><button class="btn danger" id="del">Excluir</button></div><pre class="log hidden" id="log"></pre></div>`;
     $("#showlog").onclick = async () => { $("#log").textContent = await api(`/api/builds/${id}/log`); $("#log").classList.remove("hidden"); };
     $("#del").onclick = () => delBuild(id);
     return;
   }
   if (b.status === "expired") {
-    view.innerHTML = `<div class="card"><h1>ISO expirada</h1><p class="muted">${esc(b.message)}. Gere novamente se precisar.</p><a class="btn primary" href="#/">Nova ISO</a></div>`;
+    view.innerHTML = `<div class="card"><h1>${win ? "Configuração expirada" : "ISO expirada"}</h1><p class="muted">${esc(b.message)}. Gere novamente se precisar.</p><a class="btn primary" href="#/">Nova ISO</a></div>`;
     return;
   }
-  renderDownload(b);
+  win ? renderWinDownload(b) : renderDownload(b);
 }
 
 async function delBuild(id, after) {
@@ -680,6 +856,62 @@ function renderDownload(b) {
   wireDelivery(b.id);
 }
 
+/* ---------- build do Windows: o gravador baixa o Windows da Microsoft e aplica a configuração */
+function winTutorial(os) {
+  const exe = { windows: "isoBuilder-Windows.exe", "windows-arm64": "isoBuilder-Windows-ARM64.exe", macos: "isoBuilder-macOS.zip", linux: "isobuilder-linux-amd64" }[os];
+  const open = os === "macos" ? `<li>Abra o <b>${exe}</b> (vira o app <b>isoBuilder</b>). Na primeira vez: <b>botão direito → Abrir → Abrir</b> (no macOS 15 ou mais novo, libere em <b>Ajustes do Sistema → Privacidade e Segurança → Abrir Mesmo Assim</b>). O Mac pede a sua senha para gravar no pendrive.</li>`
+    : os === "linux" ? `<li>Dê permissão e rode com sudo: <code>chmod +x ${exe} && sudo ./${exe}</code></li>`
+    : `<li>Abra o <b>${exe}</b>. Se aparecer <i>“O Windows protegeu o computador”</i>: <b>Mais informações</b> → <b>Executar assim mesmo</b>, e clique <b>Sim</b> na permissão de administrador.</li>`;
+  return `<ol>
+      <li>Conecte o pendrive (<b>16 GB ou mais</b>; <b>tudo nele será apagado</b>).</li>
+      ${open}
+      <li>O gravador abre no navegador, <b>baixa o Windows 11 oficial direto da Microsoft</b> (~8 GB, português do Brasil) e confere a configuração deste painel. Se o download da Microsoft for bloqueado, ele deixa escolher uma ISO do Windows 11 já baixada.</li>
+      <li>Escolha o pendrive, confirme e clique <b>Gravar pendrive</b>. Ao ver <b>“Pendrive pronto!”</b>, pode removê-lo.</li>
+    </ol>`;
+}
+
+function renderWinDownload(b) {
+  const os = detectOS(), s = b.summary, apps = (s.WIN_APPS || "").split(" ").filter(Boolean);
+  const until = fmtDate(Math.min(b.expires_at, Date.now() / 1000 + 7 * 86400));
+  view.innerHTML = deliveryCard(b.id) + `
+  <div class="spread"><div class="mname">${osLogo("Windows", "lg")}<div><h1>Configuração pronta: ${esc(b.hostname)}</h1>
+    <p class="muted">Windows ${esc(s.WIN_VERSION || b.series)} ${esc(s.WIN_EDITION || "Pro")} · ${esc(s.WIN_LANG || "pt-BR")} · disponível até ${fmtDate(b.expires_at)}</p></div></div>
+    <span class="pill done">Pronta</span></div>
+  <div class="note"><b>O gravador baixa o Windows oficial da Microsoft e aplica esta configuração.</b> O painel gera só a configuração (${fmtBytes(b.iso_size)}): usuário, região, disco, acesso e programas. Nenhuma ISO do Windows passa por aqui.</div>
+  <div class="note warn">A configuração contém a senha do usuário${s.WIN_ACTIVATION === "key" ? " e a chave do Windows" : ""}: guarde o pendrive com cuidado.</div>
+  <div class="dl">
+    ${os !== "mobile" ? `<div class="stepbox"><span class="n">1</span><div><h2>Baixe o isoBuilder (gravador de pendrive)</h2>
+      <div class="row"><a class="btn primary big-dl" href="/download/bundle/${b.id}/${os}" download>⬇ Baixar para ${OS_NAME[os]}</a></div>
+      <p class="muted small u-mt8">Um arquivo pequeno que já vem com esta configuração. Link válido até ${until}.</p></div></div>
+      <div class="stepbox"><span class="n">2</span><div><h2>Grave o pendrive</h2>${winTutorial(os)}</div></div>`
+    : `<div class="stepbox"><span class="n">1</span><div><h2>Abra este site no computador</h2>
+      <p>Para gravar o pendrive, acesse este endereço num computador Windows, Mac ou Linux com o pendrive conectado.</p></div></div>`}
+    <div class="stepbox"><span class="n">${os !== "mobile" ? 3 : 2}</span><div><h2>No computador que vai receber o Windows</h2>
+      <ol><li>Conecte o pendrive (e, se possível, o <b>cabo de rede</b>: os programas e o OpenSSH precisam de internet).</li>
+      <li>Ligue e abra o menu de boot (<b>F12</b>, F11, F8 ou Esc, conforme a marca) e escolha o pendrive (modo <b>UEFI</b>).</li>
+      <li>Não precisa fazer mais nada: o <b>maior disco interno é apagado</b>, o Windows se instala sozinho (~20–40 min) e reinicia algumas vezes. Entra direto com o usuário <b class="mono">${esc(s.ADMIN_USER)}</b>.</li>
+      <li>Com internet, ele aparece em <b>Máquinas</b> com o nome <b>${esc(b.hostname)}</b>${s.REMOTE_AGENT === "yes" ? " e no <b>Remoto</b>" : ""}${apps.length ? `, e instala ${apps.length === 1 ? "o programa escolhido" : `os ${apps.length} programas escolhidos`} (acompanhe em Máquinas → Resumo)` : ""}.</li>
+      <li>Retire o pendrive quando a instalação começar a reiniciar${s.WIN_ACTIVATION === "key" ? "" : ". Sem chave, o Windows fica sem ativar (ative depois em Configurações → Sistema → Ativação)"}.</li></ol></div></div>
+  </div>
+  <details><summary>Avançado: gravar com Ventoy ou Rufus / outros sistemas</summary>
+    <h3>Gravador para outro sistema</h3>
+    <div class="row">
+      <a class="btn sm" href="/download/bundle/${b.id}/windows" download>Windows (x64)</a>
+      <a class="btn sm" href="/download/bundle/${b.id}/windows-arm64" download>Windows (ARM)</a>
+      <a class="btn sm" href="/download/bundle/${b.id}/macos" download>Mac (Intel e Apple Silicon)</a>
+      <a class="btn sm" href="/download/bundle/${b.id}/linux" download>Linux</a></div>
+    <h3>Só a configuração</h3>
+    <div class="row"><a class="btn sm" href="/download/config/${b.id}" download>⬇ Baixar autounattend.xml</a>
+      <a class="btn sm" href="/download/sha256/${b.id}" download>.sha256</a></div>
+    <p class="small u-mt8"><b>Ventoy:</b> copie a ISO do Windows 11 para o pendrive e, no plugin <i>auto_install</i> (<code>ventoy/ventoy.json</code>), associe a ISO a este arquivo.<br>
+    <b>Rufus</b> (<a href="https://rufus.ie" target="_blank" rel="noopener">rufus.ie</a>): grave a ISO do Windows 11 normalmente, <b>desmarcando</b> as opções de personalização do Rufus, e depois copie o <code>autounattend.xml</code> para a raiz do pendrive.</p>
+    <p class="small muted">SHA256 da configuração: <span class="mono">${esc(b.sha256)}</span></p>
+  </details>
+  ${ME.mode === "download" ? "" : `<div class="row u-mt16"><a class="btn" href="#/isos">Voltar</a><button class="btn danger" id="del">Excluir do servidor</button></div>`}`;
+  const del = $("#del"); if (del) del.onclick = () => delBuild(b.id);
+  wireDelivery(b.id);
+}
+
 /* -------------------------------------------------- admin: acessos */
 function credText(c) {
   const extra = c.mode === "download" && c.iso ? `\nISO:      ${c.iso} (entre e siga os passos para gravar o pendrive)` : "";
@@ -717,7 +949,7 @@ async function renderUsers() {
   <div class="card"><h2>Acessos criados</h2><div id="ul">Carregando…</div></div>`;
   const mine = (await api("/api/builds")).builds.filter(b => b.status === "done");
   $('select[name="build_id"]').innerHTML = mine.length
-    ? mine.map(b => `<option value="${b.id}">${esc(b.hostname)} · Ubuntu ${esc(b.series)} · ${fmtDate(b.created_at)}</option>`).join("")
+    ? mine.map(b => `<option value="${b.id}">${esc(b.hostname)} · ${esc(sysName(b))} · ${fmtDate(b.created_at)}</option>`).join("")
     : `<option value="">Nenhuma ISO pronta: gere uma em “Nova ISO”</option>`;
   $$('#uf input[name="mode"]').forEach(r => r.onchange = () => {
     const m = $('#uf input[name="mode"]:checked').value, dl = m === "download", pt = m === "partner";
@@ -737,7 +969,7 @@ async function loadUsers() {
   const [d, bl] = await Promise.all([api("/api/admin/users"), api("/api/builds")]);
   const ready = bl.builds.filter(b => b.status === "done");
   const isoOptions = cur => ready.length
-    ? ready.map(b => `<option value="${b.id}" ${b.id === cur ? "selected" : ""}>${esc(b.hostname)} · Ubuntu ${esc(b.series)} · ${fmtDate(b.created_at)}</option>`).join("")
+    ? ready.map(b => `<option value="${b.id}" ${b.id === cur ? "selected" : ""}>${esc(b.hostname)} · ${esc(sysName(b))} · ${fmtDate(b.created_at)}</option>`).join("")
     : `<option value="">Nenhuma ISO pronta: gere uma em “Nova ISO”</option>`;
   if (!d.users.length) { $("#ul").innerHTML = `<p class="muted">Nenhum acesso criado.</p>`; return; }
   $("#ul").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th>Login</th><th>Situação</th><th>Validade</th><th>Último acesso</th><th>Tipo / ISOs</th><th></th></tr>
@@ -974,7 +1206,7 @@ async function loadMachines() {
   $("#ml").innerHTML = (active.length ? `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
     ${active.map(m => `<tr class="clickable" data-m="${m.id}">
       <td class="rt-dot">${dot(m.online, mstate(m))}</td>
-      <td class="rt-title"><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</td>
+      <td class="rt-title"><div class="mname">${osLogo(m.os)}<div><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</div></div></td>
       <td class="small" data-label="Conta">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
       <td data-label="VPN">${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span>${m.wg && !m.wg.connected && m.online ? (String(m.wg_reason).startsWith("Conectando") ? ` <span class="muted small">conectando…</span>` : ` <span class="err small" title="${esc(m.wg_reason)}">sem conexão</span>`) : ""}<br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
       <td class="small" data-label="Rede local">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
@@ -986,7 +1218,7 @@ async function loadMachines() {
       <p class="muted small">Fora da lista principal. Se ligarem, os relatórios continuam chegando, mas terminal, VPN (túnel pausado) e acesso de sócios ficam bloqueados até restaurar.</p>
       <div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Arquivada</th><th>Visto</th><th></th></tr>
       ${arch.map(m => `<tr class="clickable" data-m="${m.id}"><td class="rt-dot">${dot(m.online, mstate(m))}</td>
-        <td class="rt-title"><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span></td>
+        <td class="rt-title"><div class="mname">${osLogo(m.os)}<div><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span></div></div></td>
         <td class="small nowrap" data-label="Arquivada">${fmtDate(m.archived_at)}</td>
         <td class="small" data-label="Visto">${m.online ? `<span class="ok">ligada agora</span>` : fmtAgo(m.last_seen)}</td>
         <td class="rt-actions"><div class="row"><button class="btn sm" data-restore="${m.id}">Restaurar</button>
@@ -1028,7 +1260,17 @@ async function remoteDevices(force) {
   RDEV = { at: Date.now(), list: (await api("/api/remoto/devices")).devices };
   return RDEV.list;
 }
-const osIcon = o => /windows/i.test(o) ? "🪟" : /mac|darwin/i.test(o) ? "" : /linux|ubuntu|debian/i.test(o) ? "🐧" : "💻";
+// Logo do sistema pelo nome que a máquina informa ("Ubuntu 24.04.5 LTS", "Microsoft Windows 11 Pro"…).
+const OS_MATCH = [[/windows/i, "windows"], [/mint/i, "mint"], [/kali/i, "kali"], [/raspbian|raspberry/i, "raspberry"], [/proxmox/i, "proxmox"],
+  [/ubuntu/i, "ubuntu"], [/debian/i, "debian"], [/fedora/i, "fedora"], [/centos/i, "centos"], [/rocky/i, "rocky"], [/alma/i, "alma"],
+  [/red ?hat|rhel/i, "redhat"], [/suse/i, "suse"], [/arch/i, "arch"], [/truenas/i, "truenas"], [/freebsd/i, "freebsd"],
+  [/mac|darwin/i, "macos"], [/linux/i, "linux"]];
+function osLogo(os, cls = "") {
+  const key = (OS_MATCH.find(([re]) => re.test(os || "")) || [])[1], ic = key && (window.OS_ICONS || {})[key];
+  const svg = ic ? `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ic.d}</svg>`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>`;
+  return `<span class="oslogo ${cls}" style="--c:${ic ? ic.c : "#64748b"}" title="${esc(os || "sistema desconhecido")}">${svg}</span>`;
+}
 
 async function renderRemote() {
   if (!FEATURES.remote_sso) return renderRemoteFrame();  // outro remote (REMOTE_URL): página dele inteira
@@ -1055,7 +1297,7 @@ async function loadRemote(force) {
   }
   $("#rList").innerHTML = `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Computador</th><th>Grupo</th><th>IP</th><th>Visto</th><th></th></tr>
     ${shown.map(d => `<tr><td class="rt-dot">${dot(d.online, d.online ? "online" : "offline")}</td>
-      <td class="rt-title"><b>${osIcon(d.os)} ${esc(d.name)}</b><br><span class="muted small">${esc(d.os || "—")}</span></td>
+      <td class="rt-title"><div class="mname">${osLogo(d.os)}<div><b>${esc(d.name)}</b><br><span class="muted small">${esc(d.os || "—")}</span></div></div></td>
       <td class="small" data-label="Grupo">${esc(d.group)}</td><td class="small mono" data-label="IP">${esc(d.ip || "—")}</td>
       <td class="small" data-label="Visto">${d.online ? "agora" : d.last ? fmtAgo(Math.floor(d.last / 1000)) : "—"}</td>
       <td class="rt-actions"><div class="row">${RMODES.map(([m, t]) => `<button class="btn sm ${m === "desktop" ? "primary" : ""}" data-rv="${esc(d.id)}" data-m="${m}" ${d.online ? "" : "disabled"}>${t}</button>`).join("")}</div></td></tr>`).join("")}
@@ -1084,7 +1326,7 @@ function openRemoteView(d, mode) {
   const el = document.createElement("div");
   el.id = "ovl";
   el.innerHTML = `<div class="ovl-bg"></div><aside class="ovl ovl-wide" role="dialog" aria-modal="true">
-    <header class="ovl-h"><div>${dot(d.online)} <b>${esc(d.name)}</b> <span class="muted small">${esc(d.os || "")}</span></div>
+    <header class="ovl-h"><div>${osLogo(d.os, "sm")} ${dot(d.online)} <b>${esc(d.name)}</b> <span class="muted small">${esc(d.os || "")}</span></div>
       <div class="row"><button class="btn sm" id="rvNew" title="Abrir em nova aba">↗</button><button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></div></header>
     <nav class="tabs" id="ovlTabs">${RMODES.map(([m, t]) => `<button data-t="${m}">${t}</button>`).join("")}</nav>
     <div class="ovl-b rv-body"><div class="rframe rv-frame"><div class="muted rload">Conectando…</div><iframe title="Remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div></aside>`;
@@ -1151,6 +1393,7 @@ async function openMachine(id, tab = "resumo") {
   // só as abas que a conta pode usar (o admin pode tudo; o sócio, o que foi liberado)
   const P = OVL.m.perms ?? 63, need = { terminal: 2, vpn: 16, config: 32 };
   $$("#ovlTabs button").forEach(b => { const n = need[b.dataset.t]; if (n && !(P & n)) b.remove(); });
+  if (OVL.m.platform === "windows") { $("#ovlTabs button[data-t=vpn]")?.remove(); if (tab === "vpn") tab = "resumo"; }  // Windows: sem WireGuard nesta fase
   if (need[tab] && !(P & need[tab])) tab = "resumo";
   // com o agente do Remoto no servidor: aba "Tela" (mesmo nome de computador)
   if (FEATURES.remote_sso && (P & 14)) {
@@ -1174,7 +1417,7 @@ async function refreshMachine() {
   const d = await api("/api/machines/" + OVL.id);
   OVL.m = d.machine; OVL.panel = d.panel;
   const m = OVL.m;
-  $("#ovlTitle").innerHTML = `${dot(m.online, mstate(m))} <b>${esc(m.label || m.hostname)}</b> <span class="muted small">${mstate(m)} · ${m.off_at ? "avisou " + fmtAgo(m.off_at) : "visto " + fmtAgo(m.last_seen)}</span>${m.archived_at ? ` <span class="pill">arquivada</span>` : ""}`;
+  $("#ovlTitle").innerHTML = `${osLogo(m.os, "sm")} ${dot(m.online, mstate(m))} <b>${esc(m.label || m.hostname)}</b> <span class="muted small">${mstate(m)} · ${m.off_at ? "avisou " + fmtAgo(m.off_at) : "visto " + fmtAgo(m.last_seen)}</span>${m.archived_at ? ` <span class="pill">arquivada</span>` : ""}`;
 }
 
 function showTab(t) {
@@ -1203,6 +1446,7 @@ function tabResumo() {
   const m = OVL.m, r = m.resources || {}, sv = m.services || {};
   const gb = n => n ? (n / 1e9).toFixed(1) + " GB" : "—";
   const svc = (n, on) => `<span class="pill ${on ? "done" : "error"}">${n} ${on ? "ativo" : "inativo"}</span>`;
+  if (m.platform === "windows") return tabResumoWin(m, r, sv, gb, svc);
   $("#ovlBody").innerHTML = `${provBanner(m)}
     ${appLinks(m)}
     <div class="grid2">
@@ -1210,7 +1454,7 @@ function tabResumo() {
       ${kv("Hostname", esc(m.hostname))}${kv("Usuário admin", `<span class="mono">${esc(m.admin_user)}</span>`)}
       ${kv("IP Tailscale", m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span>` : "—")}${kv("Nome Tailscale", esc(m.tailscale_dns || "—"))}
       ${kv("Rede local", esc(m.local_ips.map(x => x.split(" ").pop()).join(", ") || "—"))}${kv("Gateway", esc(m.report.gateway || "—"))}
-      ${kv("Sistema", esc(m.os))}${kv("Kernel", esc(m.kernel))}
+      ${kv("Sistema", `${osLogo(m.os, "xs")} ${esc(m.os)}`)}${kv("Kernel", esc(m.kernel))}
       ${kv("Ligado há", fmtUptime(m.uptime))}${kv("Acesso SSH", (m.ssh_auth === "password" ? "usuário e senha (rede local/Tailscale)" : "chave SSH") + " · porta " + (m.ssh_port_real || 22))}
       ${kv("CPU", `${r.cpus || "—"} núcleos · carga ${r.load1 ?? "—"}`)}${kv("Memória", `${gb(r.mem_available)} livres de ${gb(r.mem_total)}`)}
       ${kv("Disco /", `${gb(r.disk_free)} livres de ${gb(r.disk_total)}`)}${kv("Primeiro contato", fmtDate(m.first_seen))}
@@ -1225,6 +1469,31 @@ function tabResumo() {
   $("#goTerm").onclick = () => showTab("terminal");
   $("#goConn").onclick = () => showTab("conectar");
 }
+
+// Resumo de uma máquina Windows: sem kernel, Tailscale, Docker e afins (só o que faz sentido lá)
+function tabResumoWin(m, r, sv, gb, svc) {
+  $("#ovlBody").innerHTML = `${provBanner(m)}
+    <div class="grid2">
+      ${kv("Conta", esc(m.account || "—"))}${kv("Configuração gerada por", esc(m.owner_email || "—"))}
+      ${kv("Nome do computador", esc(m.hostname))}${kv("Usuário admin", `<span class="mono">${esc(m.admin_user)}</span>`)}
+      ${kv("Sistema", `${osLogo(m.os, "xs")} ${esc(m.os || "Windows")}`)}${kv("Versão", esc(m.kernel || "—"))}
+      ${kv("Rede local", esc(m.local_ips.map(x => x.split(" ").pop()).join(", ") || "—"))}${kv("IP de origem", `<span class="mono">${esc(m.source_ip || "—")}</span>`)}
+      ${kv("Ligado há", fmtUptime(m.uptime))}${kv("OpenSSH", m.panel_access ? `chave do painel · porta ${m.ssh_port_real || 22} · PowerShell` : "sem acesso pelo painel")}
+      ${kv("CPU", `${r.cpus || "—"} núcleos`)}${kv("Memória", `${gb(r.mem_available)} livres de ${gb(r.mem_total)}`)}
+      ${kv("Disco C:", `${gb(r.disk_free)} livres de ${gb(r.disk_total)}`)}${kv("Primeiro contato", fmtDate(m.first_seen))}
+    </div>
+    <h3>Serviços</h3><div class="row">${"ssh" in sv || m.panel_access ? svc("OpenSSH", sv.ssh) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}${"tailscaled" in sv ? svc("Tailscale", sv.tailscaled) : ""}</div>
+    <h3>Provisionamento</h3>
+    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(WIN_STEP[k] || k)}</td><td>${String(v).startsWith("ok") ? `<span class="ok">${esc(v)}</span>` : String(v).startsWith("falhou") ? `<span class="err">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
+      <tr><td><b>geral</b></td><td>${esc(m.provisioned || "—")}</td></tr></table></div>
+    ${m.downloads && m.downloads.length ? `<h3>Quem baixou</h3><div class="table-wrap"><table>${m.downloads.slice().reverse().map(x => `<tr><td>${esc(x.email)}</td><td class="small">${esc(x.kind === "config" ? "autounattend.xml" : "gravador " + x.kind.replace("gravador-", ""))}</td><td class="small">${fmtDate(x.at)}</td></tr>`).join("")}</table></div>` : ""}
+    <div class="row u-mt16">${OVL.rdev ? `<button class="btn primary" id="goTela">Abrir tela (Remoto)</button>` : ""}<button class="btn ${OVL.rdev ? "" : "primary"}" id="goTerm">Abrir terminal</button><button class="btn" id="goConn">Conectar do meu computador</button></div>`;
+  const gt = $("#goTela"); if (gt) gt.onclick = () => showTab("tela");
+  $("#goTerm").onclick = () => showTab("terminal");
+  $("#goConn").onclick = () => showTab("conectar");
+}
+// nomes das etapas do provisionamento do Windows (docs/windows/CONTRACT.md §4)
+const WIN_STEP = { openssh: "OpenSSH (terminal pelo painel)", remote_agent: "Agente do Remoto", apps: "Programas (winget)", report: "Relatório ao painel" };
 
 function appLinks(m) {
   const ip = m.tailscale_ip || sshTarget(m);
@@ -1253,16 +1522,18 @@ function stopTerminal() {
 }
 
 function tabTerminal() {
-  const m = OVL.m, p = OVL.panel;
+  const m = OVL.m, p = OVL.panel, win = m.platform === "windows";
   const viaWg = m.wg && m.wg.connected;
   const viaTs = p.state === "Running" && m.tailscale_ip;
-  const reason = !m.panel_access ? "Esta ISO foi gerada sem “acesso pelo painel”: a chave do painel não está no servidor. Use “Conectar do meu computador”."
+  const reason = !m.panel_access ? (win ? "Esta configuração foi gerada sem “terminal pelo painel”: o OpenSSH não recebeu a chave do painel." + (OVL.rdev ? " Use a aba Tela (Remoto), que também tem terminal." : "")
+      : "Esta ISO foi gerada sem “acesso pelo painel”: a chave do painel não está no servidor. Use “Conectar do meu computador”.")
     : m.ssh_host || viaWg || viaTs ? ""
+    : win ? "O Windows ainda não tem túnel próprio (Tailscale/WireGuard) nesta versão: em Configurações, informe um endereço que o painel alcance (ex.: o IP da rede local, se o painel estiver na mesma rede)." + (OVL.rdev ? " Ou use a aba Tela (Remoto), que também tem terminal." : "")
     : m.wg ? (m.wg_reason || "O túnel WireGuard desta máquina está desconectado agora.")
     : !m.tailscale_ip ? "A máquina ainda não informou IP do Tailscale nem se conectou ao hub WireGuard. Aguarde ou defina um endereço em Configurações."
     : (p.message || "O painel não está na Tailnet.");
   $("#ovlBody").innerHTML = `${provBanner(m)}
-    <div class="spread"><p class="muted small">Entra como <b class="mono">${esc(m.admin_user)}</b> em <b class="mono">${esc(sshTarget(m))}</b> usando a chave do painel (sem digitar IP, usuário ou senha). Para comandos de administrador: <code>sudo</code> (pede a senha do servidor).</p>
+    <div class="spread"><p class="muted small">Entra como <b class="mono">${esc(m.admin_user)}</b> em <b class="mono">${esc(sshTarget(m))}</b> usando a chave do painel (sem digitar IP, usuário ou senha). ${win ? "Abre o <b>PowerShell</b> do Windows, já como administrador." : "Para comandos de administrador: <code>sudo</code> (pede a senha do servidor)."}</p>
       <div class="row"><button class="btn primary sm" id="tConn" ${reason && !m.ssh_host ? "disabled" : ""}>Conectar</button><button class="btn sm" id="tDisc" disabled>Desconectar</button></div></div>
     ${reason ? `<div class="note warn">${esc(reason)}</div>` : ""}
     <div id="term" class="term"></div><div id="tStat" class="muted small u-mt8"></div>`;
@@ -1364,6 +1635,7 @@ async function tabVpn() {
 /* ---------- conectar do próprio computador */
 function tabConectar() {
   const m = OVL.m, os = detectOS();
+  if (m.platform === "windows") return tabConectarWin(m, os);
   const host = sshTarget(m), user = m.admin_user;
   const port = m.ssh_host ? +m.ssh_port || 22 : m.ssh_port_real || 22;
   const cmd = `ssh ${port !== 22 ? `-p ${port} ` : ""}${user}@${host}`;
@@ -1397,6 +1669,29 @@ function tabConectar() {
   const gv = $("#goVpn"); if (gv) gv.onclick = () => showTab("vpn");
 }
 
+// Windows: SSH (OpenSSH, PowerShell) pela rede local ou endereço definido; Remoto para tela
+function tabConectarWin(m, os) {
+  const host = sshTarget(m) || "IP-DO-PC", user = m.admin_user, port = m.ssh_host ? +m.ssh_port || 22 : m.ssh_port_real || 22;
+  const cmd = `ssh ${port !== 22 ? `-p ${port} ` : ""}${user}@${host}`;
+  $("#ovlBody").innerHTML = `
+    <div class="dl">
+      ${OVL.rdev ? `<div class="stepbox"><span class="n">1</span><div><h2>Pelo Remoto (de qualquer lugar)</h2>
+        <p class="small">Tela, terminal e arquivos pelo navegador, sem instalar nada e sem abrir portas.</p>
+        <button class="btn primary" id="goTela">Abrir tela</button></div></div>` : ""}
+      <div class="stepbox"><span class="n">${OVL.rdev ? 2 : 1}</span><div><h2>SSH pela rede local</h2>
+        <p class="small">Com o seu computador na mesma rede do PC (ou com um endereço que alcance ele), no ${os.startsWith("windows") ? "PowerShell" : "terminal"}:</p>
+        <div class="row"><button class="btn" data-copy="${esc(cmd)}">Copiar comando</button></div>
+        <pre class="log u-mt8">${esc(cmd)}</pre>
+        <p class="muted small">Pede a senha do usuário <b class="mono">${esc(user)}</b> definida ao gerar a configuração (o painel não guarda senhas). Abre o PowerShell do Windows.</p></div></div>
+      <div class="stepbox"><span class="n">${OVL.rdev ? 3 : 2}</span><div><h2>Terminal no navegador</h2>
+        <p class="small">O painel entra pela chave dele, se alcançar o endereço da máquina (defina em Configurações).</p>
+        <button class="btn" id="goT">Abrir terminal no navegador</button></div></div>
+    </div>`;
+  $$("#ovlBody [data-copy]").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copiado!"); } catch (e) { toast(b.dataset.copy); } });
+  $("#goT").onclick = () => showTab("terminal");
+  const gt = $("#goTela"); if (gt) gt.onclick = () => showTab("tela");
+}
+
 /* ---------- configurações */
 function tabConfig() {
   const m = OVL.m;
@@ -1404,14 +1699,14 @@ function tabConfig() {
     <label class="f"><span>Apelido</span><input name="label" value="${esc(m.label)}" placeholder="ex.: Servidor da filial Centro"></label>
     <label class="f"><span>Notas</span><textarea name="notes" placeholder="ex.: rack 2, nobreak 1, responsável: suporte">${esc(m.notes)}</textarea></label>
     <div class="grid">
-      <label class="f"><span>Endereço SSH manual (opcional)</span><input name="ssh_host" value="${esc(m.ssh_host)}" placeholder="vazio = IP do Tailscale (${esc(m.tailscale_ip || "ainda não informado")})"><small>Use se quiser conectar por outro IP/nome.</small></label>
+      <label class="f"><span>Endereço SSH manual (opcional)</span><input name="ssh_host" value="${esc(m.ssh_host)}" placeholder="${m.platform === "windows" ? `ex.: ${esc(((m.local_ips[0] || "").split(" ").pop() || "192.168.0.50").split("/")[0])}` : `vazio = IP do Tailscale (${esc(m.tailscale_ip || "ainda não informado")})`}"><small>${m.platform === "windows" ? "Endereço que o painel alcance para o terminal (OpenSSH do Windows)." : "Use se quiser conectar por outro IP/nome."}</small></label>
       <label class="f"><span>Porta SSH</span><input name="ssh_port" type="number" min="1" max="65535" value="${esc(m.ssh_host ? m.ssh_port : m.ssh_port_real || 22)}"></label>
     </div>
     <div id="merr"></div>
     <div class="row"><button class="btn primary" type="submit">Salvar</button></div></form>
     <h3>Detalhes técnicos</h3>
-    <div class="grid2">${kv("ID da máquina", `<span class="mono small">${esc(m.id)}</span>`)}${kv("ISO de origem", m.build_hostname ? `<a href="#/iso/${esc(m.build_id)}">${esc(m.build_hostname)}</a>` : esc(m.build_id))}
-      ${kv("Acesso pelo painel", m.panel_access ? "sim (chave do painel na ISO)" : "não")}${kv("Último IP de origem", `<span class="mono">${esc(m.source_ip)}</span>`)}</div>
+    <div class="grid2">${kv("ID da máquina", `<span class="mono small">${esc(m.id)}</span>`)}${kv(m.build_os === "windows" ? "Configuração de origem" : "ISO de origem", m.build_hostname ? `<a href="#/iso/${esc(m.build_id)}">${esc(m.build_hostname)}</a>` : esc(m.build_id))}
+      ${kv("Acesso pelo painel", m.panel_access ? (m.platform === "windows" ? "sim (chave do painel no OpenSSH)" : "sim (chave do painel na ISO)") : "não")}${kv("Último IP de origem", `<span class="mono">${esc(m.source_ip)}</span>`)}</div>
     <details><summary>Relatório completo (JSON)</summary><pre class="log">${esc(JSON.stringify(m.report, null, 2))}</pre></details>
     ${ME.role !== "admin" ? "" : m.archived_at
       ? `<h3>Máquina arquivada</h3><p class="muted small">Arquivada em ${fmtDate(m.archived_at)}. Terminal, VPN e acesso de sócios estão pausados.</p>

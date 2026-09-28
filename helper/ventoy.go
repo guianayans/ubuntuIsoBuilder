@@ -79,7 +79,7 @@ func ventoyTarget(mount, folder string) (string, error) {
 }
 
 // copyToVentoy copia a ISO (e os programas "Instalar-no-...") e confere o SHA256 relendo do pendrive.
-func copyToVentoy(isoPath, wantHash string, v *VentoyInfo, folder, toolsDir string, p *progress) {
+func copyToVentoy(isoPath, wantHash string, v *VentoyInfo, folder, toolsDir string, win *ventoyWin, p *progress) {
 	dst, err := ventoyTarget(v.Mount, folder)
 	if err != nil {
 		p.finish("error", err.Error(), "")
@@ -103,6 +103,10 @@ func copyToVentoy(isoPath, wantHash string, v *VentoyInfo, folder, toolsDir stri
 		return
 	}
 	target := filepath.Join(dst, filepath.Base(isoPath))
+	if win != nil && !strings.HasPrefix(filepath.Base(isoPath), win.Host+"-") {
+		// no menu do Ventoy fica claro para qual computador é (e cada um tem a sua configuração)
+		target = filepath.Join(dst, win.Host+"-"+filepath.Base(isoPath))
+	}
 	tmp := target + ".copiando"
 	src, err := os.Open(isoPath)
 	if err != nil {
@@ -116,6 +120,7 @@ func copyToVentoy(isoPath, wantHash string, v *VentoyInfo, folder, toolsDir stri
 		return
 	}
 	p.set("writing", "Copiando a ISO para o Ventoy…", fi.Size())
+	isoName := filepath.Base(target)
 	buf := make([]byte, chunkSize)
 	for {
 		n, rerr := src.Read(buf)
@@ -173,6 +178,9 @@ func copyToVentoy(isoPath, wantHash string, v *VentoyInfo, folder, toolsDir stri
 	extra := ""
 	if toolsDir != "" {
 		host := strings.TrimSuffix(filepath.Base(isoPath), "-autoinstall.iso")
+		if win != nil {
+			host = win.Host
+		}
 		td := filepath.Join(dst, "Instalar-"+host)
 		if files, err := readToolsDir(toolsDir); err == nil {
 			ok := true
@@ -194,12 +202,20 @@ func copyToVentoy(isoPath, wantHash string, v *VentoyInfo, folder, toolsDir stri
 			}
 		}
 	}
+	if win != nil {
+		rel, _ := filepath.Rel(v.Mount, target)
+		if err := ventoyAutoInstall(v.Mount, "/"+filepath.ToSlash(rel), win); err != nil {
+			p.finish("error", "ISO copiada, mas não foi possível configurar a instalação automática no Ventoy: "+err.Error(), "")
+			return
+		}
+		extra = " A instalação automática (autounattend.xml) foi configurada no ventoy/ventoy.json." + extra
+	}
 	where := "na raiz"
 	if f := strings.Trim(folder, "/ "); f != "" {
 		where = `na pasta "` + f + `"`
 	}
 	p.finish("done", fmt.Sprintf("ISO copiada para o Ventoy %s e conferida. No boot pelo pendrive, escolha %s no menu do Ventoy.%s",
-		where, filepath.Base(isoPath), extra), got)
+		where, isoName, extra), got)
 }
 
 type progressWriter struct{ p *progress }
@@ -242,6 +258,15 @@ func (a *app) ventoyCopyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	iso, hash := a.isoPath, a.isoHash
+	var win *ventoyWin
+	if a.bundle.isWindows() {
+		if a.unattend == nil || a.winInfo == nil {
+			a.mu.Unlock()
+			writeJSON(w, 400, map[string]string{"error": "aguarde a configuração e a conferência da ISO do Windows"})
+			return
+		}
+		win = &ventoyWin{Host: a.bundle.Hostname, ConfigName: a.bundle.ConfigName, Unattend: a.unattend}
+	}
 	a.mu.Unlock()
 	d, err := findDisk(req.Disk, req.Key)
 	if err != nil {
@@ -273,7 +298,7 @@ func (a *app) ventoyCopyHandler(w http.ResponseWriter, r *http.Request) {
 		if tools != "" {
 			defer os.RemoveAll(tools)
 		}
-		copyToVentoy(iso, hash, v, req.Folder, tools, p)
+		copyToVentoy(iso, hash, v, req.Folder, tools, win, p)
 	}()
 	writeJSON(w, 200, map[string]string{"ok": "1"})
 }

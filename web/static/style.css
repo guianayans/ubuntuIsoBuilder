@@ -277,3 +277,30 @@ header.top.compact .menu-btn{display:inline-flex;margin-left:auto}
 .pkgitem.on .pkgchk{box-shadow:0 0 0 2px var(--accent-soft)}
 .pkgwarn{display:none;font-style:normal;font-size:11px;color:var(--warn);margin-top:3px}
 .pkgitem.warn .pkgwarn{display:block}
+
+/* ---- logo do sistema operacional (Máquinas, Remoto) */
+.mname{display:flex;gap:12px;align-items:center}
+.oslogo{flex:none;display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--c);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);vertical-align:middle}
+.oslogo svg{width:20px;height:20px}
+.oslogo.sm{width:24px;height:24px;border-radius:7px}
+.oslogo.sm svg{width:14px;height:14px}
+.oslogo.xs{width:20px;height:20px;border-radius:6px;margin-right:4px}
+.oslogo.xs svg{width:12px;height:12px}
+.oslogo.lg{width:46px;height:46px;border-radius:13px}
+.oslogo.lg svg{width:26px;height:26px}
+
+/* ---- assistente: qual sistema (1º passo) */
+.syspick{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-bottom:6px}
+.syscard{position:relative;display:flex;gap:14px;align-items:center;padding:16px;border:1px solid var(--line);border-radius:14px;cursor:pointer;background:var(--card);transition:border-color .12s,background .12s,transform .12s}
+.syscard:hover{border-color:var(--muted);transform:translateY(-1px)}
+.syscard input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:0;pointer-events:none}
+.syscard:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.syscard:has(input:checked){border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+.syscard.off{opacity:.55;cursor:not-allowed;transform:none}
+.systxt{display:flex;flex-direction:column;min-width:0;line-height:1.35}
+.systxt b{font-size:15px}
+.systxt small{color:var(--muted);font-size:12.5px;margin-top:3px}
+.u-keyinput{letter-spacing:.06em;text-transform:uppercase}
+.u-mt0{margin-top:0}
+ul.plain{margin:0 0 6px;padding-left:20px}
+ul.plain li{margin:6px 0}

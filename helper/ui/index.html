@@ -51,7 +51,7 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
 <body>
 <main>
   <h1 class="brand"><img src="icon.png" alt="" width="40" height="40">isoBuilder</h1>
-  <p class="sub">Grava a ISO do instalador automático do Ubuntu Server no seu pendrive.</p>
+  <p class="sub" id="subtitle">Grava a ISO do instalador automático do Ubuntu Server no seu pendrive.</p>
 
   <section class="card" id="s1">
     <div class="step"><span class="num">1</span><h2 id="s1title">Escolha a ISO baixada</h2></div>
@@ -75,7 +75,7 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
     <div id="job"></div>
   </section>
 
-  <footer>Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio. <button class="btn" id="quit" style="margin-left:8px">Fechar o isoBuilder</button></footer>
+  <footer><span id="foot">Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio.</span> <button class="btn" id="quit" style="margin-left:8px">Fechar o isoBuilder</button></footer>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -83,6 +83,9 @@ const fmt = n => { const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1000&&i<
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let S = {}, selDisk = null, selKey = null, confirmed = false;
 let VT = {}, vtMode = 'copy', vtFolder = '', vtNew = '';  // Ventoy: info por pendrive e escolhas
+let showManual = false;  // Windows: "Já tenho a ISO"
+const isWin = () => !!((S.bundle && S.bundle.kind === 'windows') || (S.stick && S.stick.os === 'windows'));
+const osName = () => isWin() ? 'o Windows 11' : 'o Ubuntu Server';
 
 async function api(path, body){
   const r = await fetch('api/'+path, body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {});
@@ -97,9 +100,9 @@ function renderStick(){
   if(document.getElementById('stickBox')){ const re=document.getElementById('rbErr'); if(re && S.reboot_error) re.textContent='✖ '+S.reboot_error; return; }
   const K=S.stick, R=S.reboot||{};
   document.querySelector('main').innerHTML = `<h1 class="brand"><img src="icon.png" alt="" width="40" height="40">isoBuilder</h1>
-  <p class="sub">Pendrive de instalação do Ubuntu Server — servidor <b>${esc(K.hostname)}</b></p>
+  <p class="sub">${isWin() ? 'Pendrive de instalação do Windows 11 — computador' : 'Pendrive de instalação do Ubuntu Server — servidor'} <b>${esc(K.hostname)}</b></p>
   <section class="card" id="stickBox">
-    ${R.available ? `<div class="warn"><b>⚠ Este computador será FORMATADO.</b> Ao reiniciar, o instalador apaga todo o disco interno e instala o Ubuntu Server:
+    ${R.available ? `<div class="warn"><b>⚠ Este computador será FORMATADO.</b> Ao reiniciar, o instalador apaga ${isWin() ? 'o maior disco interno' : 'todo o disco interno'} e instala ${osName()}:
       arquivos, programas e o sistema atual (Windows/macOS) serão perdidos, sem volta. Salve o que precisar antes. Deixe o pendrive conectado.</div>
       <p class="small" style="margin:12px 0 4px"><b>O que acontece:</b> ${esc(R.how)} ${esc(R.note)} A instalação é automática: não é preciso responder nada.${K.ventoy ? ` <b>Este pendrive usa o Ventoy:</b> no menu dele, escolha <b>${esc(K.iso_name)}</b>.` : ''}</p>
       <label class="chk"><span>Para confirmar, digite <b>FORMATAR</b>:</span></label>
@@ -118,7 +121,7 @@ function wireReboot(boxId){
   if(!rt || !rg) return;
   rt.oninput = () => { rg.disabled = rt.value.trim().toUpperCase() !== 'FORMATAR'; };
   rg.onclick = async () => {
-    if(!confirm('Último aviso: reiniciar AGORA e APAGAR o disco deste computador para instalar o Ubuntu Server?')) return;
+    if(!confirm('Último aviso: reiniciar AGORA e APAGAR o disco deste computador para instalar '+osName()+'?')) return;
     rg.disabled = true;
     try{
       const r = await api('reboot',{confirm: rt.value.trim().toUpperCase()});
@@ -131,7 +134,9 @@ function render(){
   if(S.stick) return renderStick();
   // 1. ISO — gravador personalizado: baixa a ISO sozinho
   const B = S.bundle, F = S.fetch;
-  if (B) {
+  if (B && B.kind === 'windows') {
+    renderWinFetch(B, F);
+  } else if (B) {
     $('#s1title').textContent = 'ISO do servidor “' + B.hostname + '”';
     let f = '';
     if (!F || F.phase === 'downloading' || F.phase === 'hashing') {
@@ -154,9 +159,10 @@ function render(){
   document.querySelectorAll('[data-iso]').forEach(b=>b.onclick=()=>selectIso(b.dataset.iso));
   const hs = S.hash_status;
   let h = '';
-  const fetching = B && (!F || F.phase !== 'done');  // enquanto baixa, o status aparece acima
+  const fetching = B && B.kind !== 'windows' && (!F || F.phase !== 'done');  // enquanto baixa, o status aparece acima
   if(!fetching && S.iso && hs){
     if(hs.phase==='hashing') h = `Conferindo a ISO… ${hs.percent.toFixed(0)}%`;
+    else if(hs.phase==='checking') h = esc(hs.message);
     else if(hs.phase==='done') h = `<span class="ok">✔ ${esc(hs.message)}</span><br><small>SHA256 ${esc(hs.sha256)}</small>`;
     else if(hs.phase==='error') h = `<span class="err">✖ ${esc(hs.message)}</span>`;
   }
@@ -194,11 +200,11 @@ function render(){
       if(document.getElementById('doneBox')){ const re=document.getElementById('rbErr'); if(re && S.reboot_error) re.textContent='✖ '+S.reboot_error; stepClass('#s3','done'); return; }
       const R = S.reboot || {};
       html = `<div id="doneBox"><div class="ok" style="font-size:18px">✔ ${esc(job.message)}</div>
-        <p class="muted">Próximo passo: conecte o pendrive no servidor, ligue e escolha o boot pelo pendrive (F12, F11, F8 ou Esc). A instalação é automática.</p>
+        <p class="muted">${isWin() ? 'Próximo passo: conecte o pendrive no computador, ligue e escolha o boot pelo pendrive (F12, F11, F8 ou Esc; escolha a opção <b>UEFI</b>). A instalação do Windows 11 é automática e <b>apaga o maior disco interno</b> do computador.' : 'Próximo passo: conecte o pendrive no servidor, ligue e escolha o boot pelo pendrive (F12, F11, F8 ou Esc). A instalação é automática.'}</p>
         <div class="row"><button class="btn danger big" id="fmtOpen" type="button">FORMATAR ESTA MÁQUINA</button></div>
-        <p class="muted small" style="margin:6px 0 0">Para instalar o servidor <b>neste</b> computador: ele reinicia pelo pendrive e o disco é apagado.</p>
+        <p class="muted small" style="margin:6px 0 0">Para instalar ${isWin() ? 'o Windows 11' : 'o servidor'} <b>neste</b> computador: ele reinicia pelo pendrive e o disco é apagado.</p>
         <div class="rb hidden" id="fmtBox">
-        ${R.available ? `<div class="warn" style="margin-top:12px"><b>⚠ O disco deste computador será APAGADO.</b> Depois de reiniciar, o instalador formata o disco interno e instala o Ubuntu Server:
+        ${R.available ? `<div class="warn" style="margin-top:12px"><b>⚠ O disco deste computador será APAGADO.</b> Depois de reiniciar, o instalador formata ${isWin() ? 'o maior disco interno' : 'o disco interno'} e instala ${osName()}:
           todos os arquivos, programas e o sistema atual (Windows/macOS) serão perdidos, sem volta. Salve o que precisar antes.</div>
           <p class="small" style="margin:10px 0 4px"><b>O que acontece:</b> ${esc(R.how)} ${esc(R.note)}</p>
           <label class="chk"><span>Para confirmar, digite <b>FORMATAR</b>:</span></label>
@@ -224,7 +230,7 @@ function render(){
   if(!isoOk || !d){ $('#confirmBox').innerHTML='<div class="muted">Escolha a ISO e o pendrive acima.</div>'; stepClass('#s3',''); return; }
   stepClass('#s3','active');
   const iso = (S.isos||[]).find(i=>i.path===S.iso);
-  const small = iso && iso.size > d.size;
+  const small = isWin() ? (S.win && S.win.min_size > d.size) : (iso && iso.size > d.size);
   const V = VT[selDisk];
   const sig = [selDisk, confirmed, small, vtMode, V===undefined?'?':(V?'v':'-')].join('|');
   if($('#confirmBox').dataset.sig === sig) return;  // não redesenha (preserva o que foi digitado)
@@ -256,7 +262,7 @@ function render(){
   $('#confirmBox').innerHTML = (V ? `<div class="radio" style="margin-bottom:10px"><label class="chk"><input type="radio" name="vtm" value="copy"> <span><b>Copiar a ISO para o Ventoy</b> (mantém o que está no pendrive)</span></label>
       <label class="chk"><input type="radio" name="vtm" value="erase" checked> <span>Apagar tudo (inclusive o Ventoy) e gravar só esta ISO.</span></label></div>` : '') + `
     <div class="warn"><b>Todo o conteúdo de “${esc(d.name||'Pendrive')}” (${fmt(d.size)}) será apagado.</b></div>
-    ${small?'<div class="err" style="margin-top:10px">Este pendrive é menor que a ISO. Use um de 8 GB ou mais.</div>':''}
+    ${small?`<div class="err" style="margin-top:10px">Este pendrive é pequeno demais. Use um de ${isWin()?'16':'8'} GB ou mais.</div>`:''}
     <label class="chk"><input type="checkbox" id="ck" ${confirmed?'checked':''}> <span>Entendo que os arquivos deste pendrive serão perdidos.</span></label>
     <div class="row"><button class="btn primary" id="go" ${(!confirmed||small)?'disabled':''}>Gravar pendrive</button></div>`;
   document.querySelectorAll('input[name=vtm]').forEach(x=>x.onchange=()=>{ vtMode=x.value; confirmed=false; render(); });
@@ -266,6 +272,48 @@ function render(){
     try { await api('write', {disk: selDisk, key: selKey, confirm: true}); } catch(e){ alert(e.message); }
     poll();
   };
+}
+
+// Windows: configuração do painel + ISO direto da Microsoft (ou "Já tenho a ISO")
+function renderWinFetch(B, F){
+  const W = B.windows || {};
+  $('#s1title').textContent = 'Windows 11 ' + (W.edition||'Pro') + ' para “' + B.hostname + '”';
+  $('#subtitle').textContent = 'Grava o pendrive de instalação automática do Windows 11 ' + (W.edition||'Pro') + '. O Windows vem direto do site da Microsoft.';
+  $('#foot').textContent = 'Nenhum dado seu é enviado; o gravador só baixa a configuração do painel e o Windows do site da Microsoft.';
+  const ph = F ? F.phase : 'config';
+  const lang = W.lang ? ' (' + esc(W.lang) + ', ' + esc(W.arch||'x64') + ')' : '';
+  let f = '';
+  if (S.win && S.win.config_error) {
+    f = `<div class="err">✖ ${esc(S.win.config_error)}</div><div class="row"><button class="btn" id="retry">Tentar de novo</button></div>`;
+  } else if (ph === 'config') {
+    f = '<div>Baixando a configuração do painel…</div>';
+  } else if (ph === 'connecting') {
+    f = `<div>${esc(F.message)}</div><small class="muted">Windows 11${lang}, direto da Microsoft.</small>`;
+  } else if (ph === 'downloading' || ph === 'hashing') {
+    const pct = F.percent || 0;
+    const label = ph === 'hashing' ? 'Conferindo o Windows baixado (SHA256)…' : 'Baixando o Windows 11 da Microsoft' + lang + ' — ' + fmt(F.total) + '…';
+    const eta = F.speed > 0 ? ' · ' + fmt(F.speed) + '/s · ~' + Math.ceil(Math.max(0, (F.total - F.done) / F.speed) / 60) + ' min' : '';
+    const note = ph === 'downloading' && F.message && !F.message.startsWith('Baixando') ? ' · ' + esc(F.message) : '';
+    f = `<div>${label}</div><div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div><small class="muted">${pct.toFixed(0)}%${eta}${note}. Pode deixar esta janela aberta; o download continua se a internet cair.</small>`;
+  } else if (ph === 'checking') {
+    f = `<div>${esc(F.message)}</div>`;
+  } else if (ph === 'error' && S.iso_sha256) {
+    showManual = true;
+    f = '<div class="muted">O download automático da Microsoft não funcionou; usando a ISO escolhida abaixo.</div>';
+  } else if (ph === 'error') {
+    showManual = true;
+    f = `<div class="err">✖ ${esc(F.message)}</div>
+      <p class="muted" style="margin:8px 0 0">Você pode tentar de novo mais tarde ou usar uma ISO do Windows 11${lang} que já tenha baixado
+      (em <b>microsoft.com/software-download/windows11</b>, “Baixar imagem de disco (ISO)”): escolha abaixo.</p>
+      <div class="row"><button class="btn" id="retry">Tentar de novo</button></div>`;
+  }
+  const busyFetch = ['config','connecting','downloading','hashing','checking'].includes(ph) && !(S.win && S.win.config_error);
+  if (busyFetch && !showManual) f += `<div class="row"><button class="btn" id="haveIso">Já tenho a ISO do Windows 11</button></div>`;
+  $('#fetch').innerHTML = f;
+  const rb = document.getElementById('retry'); if (rb) rb.onclick = async () => { try { await api('fetch', {}); } catch (e) { alert(e.message); } poll(); };
+  const hb = document.getElementById('haveIso'); if (hb) hb.onclick = () => { showManual = true; render(); };
+  $('#manual').style.display = showManual ? '' : 'none';
+  if (showManual) $('#isoPath').placeholder = '…ou cole o caminho completo do arquivo .iso do Windows 11';
 }
 
 async function checkVentoy(id, key){

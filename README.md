@@ -772,6 +772,18 @@ antigo (dados próprios, começa vazio).
 - **Visual:** `remote/web/public/styles/isobuilder.css` (claro/escuro, laranja do painel),
   sobre a interface moderna do MeshCentral (`siteStyle: 3`).
 
+## Windows 11 Pro (instalação automática)
+
+No assistente, o 1º passo é **Qual sistema?**. Com **Windows 11 Pro**, o painel gera só a
+**configuração** (`autounattend.xml`, ~50 KB: nome do PC, usuário local, chave, região,
+disco, acesso e programas via winget). O gravador **isoBuilder baixa o Windows 11 oficial
+direto da Microsoft** no computador de quem grava (ou usa uma ISO já baixada), divide o
+`install.wim` para caber no FAT32 e grava o pendrive (UEFI) — o painel nunca hospeda o
+Windows. No PC, a instalação apaga o **maior disco interno** (nunca USB), pula todas as telas,
+instala OpenSSH (chave do painel), o agente do **Remoto** e os programas, e a máquina aparece
+em **Máquinas** com o logo do Windows. Detalhes: `docs/windows/` (contrato, gerador,
+gravador e painel).
+
 ## Sócios (acesso a máquinas escolhidas)
 
 Em **Acessos → Sócio (permanente)** você cria uma conta sem prazo (prefixo ou e-mail completo

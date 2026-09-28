@@ -204,7 +204,17 @@ def me(u: core.User = Depends(current_user)):
                          "remote_url": (REMOTE_URL if (u.is_admin and (not REMOTE_LOCAL or remoto.available())) or remote_ok else ""),
                          "remote_embed": REMOTE_EMBED and (u.is_admin or remote_ok),
                          "remote_sso": remote_ok,
-                         "remote_agent": bool(remoto.mesh_id())}}
+                         "remote_agent": bool(remoto.mesh_id()),
+                         "windows": bool(core.winconfig())}}
+
+
+@app.get("/api/windows/apps")
+def windows_apps(u: core.User = Depends(current_user)):
+    """Catálogo de apps do Windows (winget) para o assistente, com as opções de região."""
+    if u.download_only or u.is_partner:
+        raise HTTPException(403, "sem acesso")
+    return {"available": bool(core.winconfig()), "apps": core.win_apps(),
+            "timezones": core.WIN_TIMEZONES, "keyboards": core.WIN_KEYBOARDS}
 
 
 # ------------------------------------------------------------------ contas temporárias (admin)
@@ -547,13 +557,23 @@ def base_delete(series: str, _: core.User = Depends(admin_user)):
 
 
 # ------------------------------------------------------------------ builds
+def _is_win(r) -> bool:
+    return (r["os"] or "ubuntu") == "windows"
+
+
+def _file_name(r) -> str:
+    """Nome do arquivo do build: a ISO do Ubuntu ou o autounattend.xml do Windows."""
+    return builder.win_config_name(r["hostname"]) if _is_win(r) else f"{r['hostname']}-autoinstall.iso"
+
+
 def _build_row(r, u: core.User) -> dict:
     return {"id": r["id"], "hostname": r["hostname"], "series": r["series"], "status": r["status"],
+            "os": r["os"] or "ubuntu",
             "step": r["step"], "progress": r["progress"], "message": r["message"],
             "summary": json.loads(r["summary"] or "{}"), "iso_size": r["iso_size"], "sha256": r["sha256"],
             "created_at": r["created_at"], "finished_at": r["finished_at"], "expires_at": r["expires_at"],
             "owner": r["owner_email"] if u.is_admin else None,
-            "iso_name": f"{r['hostname']}-autoinstall.iso"}
+            "iso_name": _file_name(r)}
 
 
 def _get_build(bid: str, u: core.User):
@@ -599,6 +619,8 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
     if busy >= 5:
         raise HTTPException(429, "Muitas ISOs na fila. Tente em alguns minutos.")
     data = core.validate_build(d)
+    if data["os"] == "windows":
+        return _create_windows(d, data, u)
     if data["config"].get("WG_ENABLED") == "yes" and not wg.enabled():
         raise core.Invalid("WireGuard escolhido, mas o hub não está configurado (defina HUB_ENDPOINT no Coolify).")
     bid = secrets.token_hex(8)
@@ -630,6 +652,45 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
         data["password"] = data["ts_key"] = data["report_token"] = data["coolify_password"] = ""
         data["ddns_password"] = data["cloudflare_token"] = ""
     builder.enqueue(bid)
+    return {"id": bid, "delivery": delivery}
+
+
+def _create_windows(d: dict, data: dict, u: core.User) -> dict:
+    """Build Windows: gera o autounattend.xml na hora (sem fila). Mesmo esquema de
+    relatório do Ubuntu: token novo, só o hash no banco."""
+    cfg = data["config"]
+    if cfg["REMOTE_AGENT"] == "yes" and not remoto.mesh_id():
+        raise core.Invalid("O Remoto ainda não está pronto (grupo de servidores não criado): desligue "
+                           "“Aparecer no Remoto” ou tente mais tarde.")
+    bid = secrets.token_hex(8)
+    data["report_token"] = secrets.token_urlsafe(32)
+    deliver = d.get("deliver") if isinstance(d.get("deliver"), dict) else None
+    if deliver and not u.is_admin:
+        raise HTTPException(403, "Só o administrador pode entregar uma instalação para outra conta.")
+    delivery = None
+    with core.db() as con:  # uma transação: se a conta falhar, o build não é criado
+        con.execute("INSERT INTO builds (id,user_id,owner_email,hostname,series,status,message,summary,created_at,"
+                    "report_token_hash,panel_access,os) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (bid, u.id, u.email, cfg["HOSTNAME_"], cfg["WIN_VERSION"], "queued", "Gerando a configuração",
+                     builder.summary_of(cfg, {"WIN_ACTIVATION": "key" if data["win_key_set"] else "generic"}),
+                     core.now(), core.token_hash(data["report_token"]), 1 if data["panel_access"] else 0, "windows"))
+        if deliver:
+            delivery = create_temp_user(con, prefix=str(deliver.get("prefix") or ""),
+                                        label=str(deliver.get("label") or cfg["HOSTNAME_"]).strip()[:60],
+                                        duration=str(deliver.get("duration") or "7d"), mode="download",
+                                        build_id=bid, max_builds=0, allow_pending=True)
+    try:
+        builder.make_windows(bid, data)
+    except Exception as exc:  # noqa: BLE001
+        # RuntimeError do builder tem texto próprio (sem segredos); o resto, só o tipo
+        why = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+        builder.delete_build_files(bid)
+        builder.update(bid, status="error", message=f"Falha ao gerar a configuração do Windows: {why}."[:500],
+                       finished_at=core.now())
+        raise HTTPException(500, f"Falha ao gerar a configuração do Windows: {why}.")
+    finally:
+        data["secrets"] = {}
+        data["report_token"] = ""
     return {"id": bid, "delivery": delivery}
 
 
@@ -666,11 +727,26 @@ def delete_build(bid: str, u: core.User = Depends(current_user)):
 @app.get("/download/iso/{bid}")
 def download_iso(bid: str, u: core.User = Depends(current_user)):
     r = _get_build(bid, u)
+    if _is_win(r):
+        raise HTTPException(404, "Build do Windows: o painel não guarda a ISO (baixe o gravador ou o autounattend.xml)")
     if r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
         raise HTTPException(404, "ISO indisponível (expirou ou ainda não está pronta)")
     _record_download(bid, u.email, "iso")
     return FileResponse(r["iso_path"], media_type="application/octet-stream",
                         filename=f"{r['hostname']}-autoinstall.iso")
+
+
+@app.get("/download/config/{bid}")
+def download_config(bid: str, u: core.User = Depends(current_user)):
+    """autounattend.xml do build Windows (avançado: Ventoy, Rufus)."""
+    r = _get_build(bid, u)
+    if not _is_win(r):
+        raise HTTPException(404, "só builds do Windows têm autounattend.xml")
+    if r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
+        raise HTTPException(404, "Configuração indisponível (expirou ou ainda não está pronta)")
+    _record_download(bid, u.email, "config")
+    return FileResponse(r["iso_path"], media_type="application/xml", filename=_file_name(r),
+                        headers={"Cache-Control": "no-store"})
 
 
 def _record_download(bid: str, email: str, kind: str) -> None:
@@ -683,7 +759,7 @@ def download_sha(bid: str, u: core.User = Depends(current_user)):
     r = _get_build(bid, u)
     if not r["sha256"]:
         raise HTTPException(404, "indisponível")
-    name = f"{r['hostname']}-autoinstall.iso"
+    name = _file_name(r)
     return PlainTextResponse(f"{r['sha256']}  {name}\n", headers={
         "Content-Disposition": f'attachment; filename="{name}.sha256"'})
 
@@ -717,7 +793,7 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
     baixa sozinho. Um único download para o usuário."""
     r = _get_build(bid, u)
     if r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
-        raise HTTPException(404, "ISO indisponível (expirou ou ainda não está pronta)")
+        raise HTTPException(404, ("Configuração" if _is_win(r) else "ISO") + " indisponível (expirou ou ainda não está pronta)")
     if platform not in HELPERS:
         raise HTTPException(404, "plataforma desconhecida")
     name, mt = HELPERS[platform]
@@ -727,9 +803,16 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
     exp = min(r["expires_at"] or core.now() + 86400, core.now() + DL_TOKEN_DAYS * 86400)
     token = core.create_dl_token(bid, exp, u.id)
     _record_download(bid, u.email, f"gravador-{platform}")
-    cfg = json.dumps({"server": PUBLIC_URL, "token": token, "iso_name": f"{r['hostname']}-autoinstall.iso",
-                      "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"],
-                      "expires_at": exp}, separators=(",", ":")).encode()
+    if _is_win(r):  # o gravador baixa o Windows da Microsoft e aplica esta configuração
+        summ = json.loads(r["summary"] or "{}")
+        info = {"kind": "windows", "server": PUBLIC_URL, "token": token, "config_name": _file_name(r),
+                "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp,
+                "windows": {"version": summ.get("WIN_VERSION") or "11", "edition": summ.get("WIN_EDITION") or "Pro",
+                            "lang": summ.get("WIN_LANG") or "pt-BR", "arch": "x64"}}
+    else:
+        info = {"kind": "ubuntu", "server": PUBLIC_URL, "token": token, "iso_name": _file_name(r),
+                "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp}
+    cfg = json.dumps(info, separators=(",", ":")).encode()
     headers = {"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"}
     if platform == "macos":
         buf = io.BytesIO()
@@ -761,10 +844,28 @@ def token_iso(token: str):
         raise HTTPException(410, "link expirado ou inválido")
     with core.db() as con:
         r = con.execute("SELECT * FROM builds WHERE id=?", (bid,)).fetchone()
+    if r and _is_win(r):
+        raise HTTPException(404, "build do Windows: use /config (a ISO vem da Microsoft)")
     if not r or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
         raise HTTPException(410, "ISO removida do servidor")
     return FileResponse(r["iso_path"], media_type="application/octet-stream",
-                        filename=f"{r['hostname']}-autoinstall.iso", headers={"Cache-Control": "no-store"})
+                        filename=_file_name(r), headers={"Cache-Control": "no-store"})
+
+
+@app.api_route("/t/{token}/config", methods=["GET", "HEAD"])
+def token_config(token: str):
+    """autounattend.xml do build Windows para o gravador (mesmo link temporário)."""
+    bid = core.dl_token_build(token)
+    if not bid:
+        raise HTTPException(410, "link expirado ou inválido")
+    with core.db() as con:
+        r = con.execute("SELECT * FROM builds WHERE id=?", (bid,)).fetchone()
+    if r and not _is_win(r):
+        raise HTTPException(404, "só builds do Windows têm configuração")
+    if not r or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
+        raise HTTPException(410, "configuração removida do servidor")
+    return FileResponse(r["iso_path"], media_type="application/xml", filename=_file_name(r),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/t/{token}/tool/{platform}")
@@ -1003,7 +1104,7 @@ def _machines(where: str = "", args: tuple = ()) -> list[dict]:
     with core.db() as con:
         rows = con.execute(f"SELECT * FROM machines {where} ORDER BY last_seen DESC", args).fetchall()
         builds = {r["id"]: dict(r) for r in con.execute(
-            "SELECT id, hostname, panel_access, owner_email, summary FROM builds").fetchall()}
+            "SELECT id, hostname, panel_access, owner_email, summary, os FROM builds").fetchall()}
         linked: dict[str, list] = {}
         for r in con.execute("SELECT email, build_id, expires_at, revoked FROM users WHERE mode='download'"):
             linked.setdefault(r["build_id"], []).append(r["email"])
