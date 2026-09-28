@@ -48,6 +48,9 @@ h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
 .nav nav{display:flex;gap:20px;margin-left:auto}
 .nav nav a{text-decoration:none;color:var(--muted);transition:color .2s}
 .nav nav a:hover{color:var(--fg)}
+.navlink{background:none;border:0;padding:0;font:inherit;font-size:13px;color:var(--muted);cursor:pointer;transition:color .2s}
+.navlink:hover{color:var(--fg)}
+@media (max-width:640px){.navlink{margin-left:auto}.navlink+.pill{margin-left:0}}
 .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:999px;background:var(--fg);color:var(--bg);font-weight:600;font-size:13px;text-decoration:none;border:0;cursor:pointer;transition:transform .2s,background .2s}
 .pill:hover{transform:scale(1.04)}
 .pill:focus-visible,.ghost:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
@@ -200,7 +203,8 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
       <a href="#recursos">Recursos</a>
       <a href="#sistemas">Sistemas</a>
     </nav>
-    <a class="pill" href="/login">Entrar</a>
+    <button class="navlink" id="lgOut" type="button" hidden>Sair</button>
+    <a class="pill" id="lgMain" href="/login">Entrar</a>
   </div>
 </header>
 
@@ -212,7 +216,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
         <h1 id="h1" style="margin-top:14px">Um pendrive.<br><span class="grad">Um PC pronto.</span></h1>
         <p class="sub">Configure no painel, grave o pendrive e deixe a máquina se instalar sozinha — Ubuntu Server ou Windows 11.</p>
         <div class="ctas">
-          <a class="pill big" href="/login">Gerar minha instalação</a>
+          <a class="pill big" data-auth="Abrir o painel" href="/login">Gerar minha instalação</a>
           <a class="ghost" href="#como">Ver como funciona</a>
         </div>
       </div>
@@ -342,7 +346,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
   <section class="final wrap" id="comecar" aria-labelledby="h-final">
     <h2 id="h-final">Formate menos.<br><span class="grad">Entregue mais.</span></h2>
     <p>Gere a configuração no painel, mande o gravador para o cliente e acompanhe a máquina aparecer sozinha.</p>
-    <a class="pill big" href="/login">Abrir o painel</a>
+    <a class="pill big" data-auth="Abrir o painel" href="/login">Abrir o painel</a>
   </section>
 </main>
 

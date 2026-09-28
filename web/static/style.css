@@ -216,7 +216,10 @@ html,body{overscroll-behavior-y:contain}
 }
 /* acima de 900px, se os itens não couberem (e-mail, Remoto, "Instalar app"…),
    o app.js marca .compact e o topo usa o mesmo botão de menu, sem cortar item */
-header.top.fit-noemail .who .email{display:none}
+.who-about{color:var(--muted);text-decoration:none;font-size:13px}
+.who-about:hover{color:var(--text)}
+.mnav-about{display:block;padding:12px 26px;color:var(--muted);text-decoration:none;border-top:1px solid var(--line)}
+header.top.fit-noemail .who .email,header.top.fit-noemail .who .who-about{display:none}
 header.top.fit-nolabel .who .rlabel{display:none}
 header.top.compact nav#nav,header.top.compact .who{display:none}
 header.top.compact .menu-btn{display:inline-flex;margin-left:auto}

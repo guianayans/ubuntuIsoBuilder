@@ -85,6 +85,7 @@ function shell() {
   $("#mnav").innerHTML = `<nav class="mnav-links">${links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("")}
     ${installEvt ? `<a href="#" class="mnav-remote" id="mInstall">Instalar app</a>` : ""}
     ${ru ? `<a href="${esc(rb.getAttribute("href"))}" ${FEATURES.remote_embed ? "" : 'target="_blank" rel="noopener noreferrer"'} class="mnav-remote">Acesso remoto${FEATURES.remote_embed ? "" : " ↗"}</a>` : ""}</nav>
+    <a href="/sobre" class="mnav-about">Página inicial</a>
     <div class="mnav-foot"><span class="muted small">${esc(ME.email)}${ME.role === "admin" ? " · admin" : ""}</span><button class="btn sm" id="mLogout">Sair</button></div>`;
   $("#mLogout").onclick = () => $("#logout").click();
   const mi = $("#mInstall"); if (mi) mi.onclick = e => { e.preventDefault(); setMenu(false); installApp(); };
@@ -120,7 +121,8 @@ $("#menuBtn").onclick = e => { e.stopPropagation(); setMenu($("#mnav").classList
 // tocar fora fecha o menu SEM acionar o que está embaixo (o fundo recebe o toque)
 $("#mnavBg").onclick = () => setMenu(false);
 document.addEventListener("keydown", e => { if (e.key === "Escape") setMenu(false); });
-$("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) { } ME = null; route.featLoaded = false; go("#/login"); };
+// Sair volta para a página inicial pública (sem sessão, "/" é a landing)
+$("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) { } ME = null; route.featLoaded = false; location.href = "/"; };
 
 async function route() {
   clearInterval(timer); timer = null;
@@ -166,7 +168,7 @@ function renderLogin() {
   view.innerHTML = `
   <div class="login-wrap"><div class="card narrow u-w100">
     <div class="center"><div class="logo u-logo-lg">◎</div>
-    <h1>ISO Builder</h1><p class="muted">Instalador automático do Ubuntu Server</p></div>
+    <h1>ISO Builder</h1><p class="muted">Instalação automática do Ubuntu Server e do Windows 11</p></div>
     <form id="lf">
       <label class="f"><span>Usuário</span>
         <div class="suffix" id="lsuf"><input name="email" type="text" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="username" required placeholder="seu-prefixo"><span id="ldom">@${esc(GUEST_DOMAIN)}</span></div>
@@ -176,6 +178,7 @@ function renderLogin() {
       <button class="btn primary big" type="submit">Entrar</button>
     </form>
     <p class="muted small center u-mt14">Acesso somente por convite do administrador.</p>
+    <p class="small center u-mt8"><a href="/">← Página inicial</a></p>
   </div></div>`;
   // Só o prefixo; com "@" digitado (ex.: conta do administrador), vale o e-mail completo.
   const em = $('#lf input[name="email"]');

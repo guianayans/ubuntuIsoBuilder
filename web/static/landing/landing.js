@@ -110,3 +110,22 @@
     m1.style.width = m2.style.width = "100%"; m1t.textContent = m2t.textContent = "100%"; sha.textContent = "✔ confere";
   }
 })();
+
+// Botões conforme a sessão: logado vê "Abrir painel" e "Sair"; visitante vê "Entrar".
+(async () => {
+  const main = document.getElementById("lgMain"), out = document.getElementById("lgOut");
+  let me = null;
+  try {
+    const r = await fetch("/api/me", { headers: { "X-Requested-With": "uab" }, credentials: "same-origin" });
+    if (r.ok) me = await r.json();
+  } catch (e) { /* sem rede: fica como visitante */ }
+  if (!me) return;
+  main.textContent = "Abrir painel"; main.href = "/";
+  document.querySelectorAll("[data-auth]").forEach(a => { a.textContent = a.dataset.auth; a.href = "/"; });
+  out.hidden = false;
+  out.onclick = async () => {
+    out.disabled = true;
+    try { await fetch("/api/logout", { method: "POST", headers: { "X-Requested-With": "uab" }, credentials: "same-origin" }); } catch (e) { }
+    location.href = "/";          // sem sessão, "/" é a página inicial
+  };
+})();
