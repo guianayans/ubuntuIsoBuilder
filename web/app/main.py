@@ -1390,6 +1390,9 @@ _INDEX_HTML = open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8").rea
     .replace("/static/app.js", f"/static/app.js?v={_asset_version('app.js')}") \
     .replace("/static/pkgicons.js", f"/static/pkgicons.js?v={_asset_version('pkgicons.js')}") \
     .replace("/static/style.css", f"/static/style.css?v={_asset_version('style.css')}")
+# página inicial pública (visitantes): animação 3D + como funciona; o script é externo (CSP)
+_LANDING_HTML = open(os.path.join(STATIC_DIR, "landing", "index.html"), encoding="utf-8").read() \
+    .replace("/static/landing/landing.js", f"/static/landing/landing.js?v={_asset_version('landing/landing.js')}")
 
 
 # ------------------------------------------------------------------ PWA (instalar como app)
@@ -1418,7 +1421,6 @@ def service_worker():
                         headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
-@app.get("/")
 @app.get("/login")
 @app.get("/isos")
 @app.get("/iso")
@@ -1432,3 +1434,19 @@ def index(bid: str = ""):
     # olha o caminho e mostra a tela certa (F5 e links diretos funcionam)
     from fastapi.responses import HTMLResponse
     return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+@app.get("/")
+def home(request: Request):
+    """Quem já está logado cai direto no painel; visitante vê a página inicial pública."""
+    from fastapi.responses import HTMLResponse
+    if core.session_user(request.cookies.get(COOKIE)):
+        return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    return HTMLResponse(_LANDING_HTML, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/sobre")
+def about():
+    """Página inicial pública, também para quem está logado."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_LANDING_HTML, headers={"Cache-Control": "no-cache"})
