@@ -48,7 +48,7 @@
   const scenes = [...document.querySelectorAll(".scene")], rail = [...document.querySelectorAll("#rail i")];
   const m1 = document.getElementById("m1"), m1t = document.getElementById("m1t"), sha = document.getElementById("sha");
   const m2 = document.getElementById("m2"), m2t = document.getElementById("m2t"), newpc = document.getElementById("newpc");
-  const titles = ["iso.gvtserver.online / nova-iso", "isoBuilder · download", "isoBuilder · gravação", "iso.gvtserver.online / maquinas"];
+  const titles = ["Painel · nova instalação", "isoBuilder · baixando", "isoBuilder · gravando", "Painel · seus computadores"];
   const title = document.getElementById("scrtitle");
   let cur = 0, ticking = false;
   const clamp = v => Math.max(0, Math.min(1, v));
@@ -79,7 +79,7 @@
     const a = step > 1 ? 1 : step === 1 ? local : 0;
     m1.parentNode.style.setProperty("--m", a); m1.style.width = (a * 100) + "%";
     m1t.textContent = Math.round(a * 100) + "%";
-    sha.textContent = a >= .98 ? "✔ confere" : "conferindo…";
+    sha.textContent = a >= .98 ? "✔ tudo certo" : "conferindo…";
     const b = step > 2 ? 1 : step === 2 ? local : 0;
     m2.style.width = (b * 100) + "%"; m2t.textContent = Math.round(b * 100) + "%";
   }
@@ -107,7 +107,7 @@
     target = shown = N - 1; lastKey = ""; paint(shown);
     caps.forEach(c => c.classList.add("on"));
     beats.forEach(b => b.classList.add("on")); scenes.forEach(s => s.classList.add("on"));
-    m1.style.width = m2.style.width = "100%"; m1t.textContent = m2t.textContent = "100%"; sha.textContent = "✔ confere";
+    m1.style.width = m2.style.width = "100%"; m1t.textContent = m2t.textContent = "100%"; sha.textContent = "✔ tudo certo";
   }
 })();
 

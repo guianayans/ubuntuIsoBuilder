@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>isoBuilder — um pendrive, um PC pronto</title>
-<meta name="description" content="Configure no painel, grave o pendrive e deixe a máquina se instalar sozinha: Ubuntu Server ou Windows 11, com acesso remoto desde o primeiro boot.">
+<meta name="description" content="Prepare um computador com poucas perguntas, grave um pendrive e deixe ele se instalar sozinho, com Linux ou Windows, já pronto para você acessar de onde estiver.">
 <meta name="theme-color" content="#07080a">
 <link rel="icon" href="/static/pwa/icon-192.png">
 <link rel="preload" href="/static/landing/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
@@ -165,6 +165,10 @@ button.os:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .term{margin-top:auto;background:#07080a;border:1px solid var(--line);border-radius:14px;padding:14px;font:12.5px/1.7 var(--mono);color:var(--muted);display:grid;gap:2px;min-width:0}
 .tr{display:grid;grid-template-columns:1.2em 16ch 2.5ch minmax(0,1fr);column-gap:10px;align-items:baseline}
 .tr em{font-style:normal;overflow-wrap:anywhere}
+.term.check{font:15px/1.8 var(--body);color:var(--fg)}
+.scene .mono{font-family:var(--body);font-size:14px}
+.term.check .tr{grid-template-columns:1.4em minmax(0,1fr)}
+.term.check .tr b{color:var(--ok)}
 @media (max-width:640px){.tr{grid-template-columns:1.2em minmax(0,1fr) auto}.tr em{grid-column:2/-1}.tr em:empty{display:none}}
 .term b{color:var(--ok);font-weight:500}.term u{text-decoration:none;color:var(--accent)}
 .big-n{font:800 clamp(56px,8vw,88px)/.95 var(--display);letter-spacing:-.06em}
@@ -224,28 +228,28 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
       <div class="head">
         <p class="eyebrow">Instalação automática de sistemas</p>
         <h1 id="h1" style="margin-top:14px">Um pendrive.<br><span class="grad">Um PC pronto.</span></h1>
-        <p class="sub">Configure no painel, grave o pendrive e deixe a máquina se instalar sozinha — Ubuntu Server ou Windows 11.</p>
+        <p class="sub">Responda algumas perguntas, grave um pendrive e deixe o computador se instalar sozinho, com Linux ou Windows, já pronto para você acessar de onde estiver.</p>
         <div class="ctas">
           <a class="pill big" data-auth="Abrir o painel" href="/login">Gerar minha instalação</a>
           <a class="ghost" href="#como">Ver como funciona</a>
         </div>
       </div>
-      <canvas id="frames" width="1280" height="800" role="img" aria-label="Pendrive do isoBuilder em alumínio girando e depois encaixando na porta USB-C de um notebook, que mostra Pendrive pronto"></canvas>
+      <canvas id="frames" width="1280" height="800" role="img" aria-label="Pendrive do isoBuilder girando e depois encaixando num notebook, que mostra a mensagem Pendrive pronto"></canvas>
       <div class="caps" aria-live="off">
-        <p class="cap" data-a=".16" data-b=".40">Configure no painel.<small>Sete perguntas. Sai uma configuração de 54 KB.</small></p>
-        <p class="cap" data-a=".40" data-b=".64">Qualquer pendrive serve.<small>O Windows vem direto da Microsoft, conferido pelo SHA256.</small></p>
-        <p class="cap" data-a=".64" data-b=".88">Espete no computador.<small>O gravador reconhece o pendrive e grava sozinho.</small></p>
-        <p class="cap" data-a=".88" data-b="1.01"><span class="grad">Pronto.</span><small>UEFI ou BIOS antiga. A máquina aparece sozinha no painel.</small></p>
+        <p class="cap" data-a=".16" data-b=".40">Configure no painel.<small>Algumas perguntas e a instalação está pronta.</small></p>
+        <p class="cap" data-a=".40" data-b=".64">Qualquer pendrive serve.<small>O Windows vem do site oficial da Microsoft, conferido para não ter erro.</small></p>
+        <p class="cap" data-a=".64" data-b=".88">Espete no computador.<small>O isoBuilder reconhece o pendrive e grava tudo sozinho.</small></p>
+        <p class="cap" data-a=".88" data-b="1.01"><span class="grad">Pronto.</span><small>Funciona em computadores novos e antigos. Ele aparece sozinho no seu painel.</small></p>
       </div>
     </div>
   </section>
 
   <section class="wrap" aria-label="Números">
     <div class="facts">
-      <div class="fact"><b>54 KB</b><span>de configuração saem do painel</span></div>
-      <div class="fact"><b>8,2 GB</b><span>do Windows direto da Microsoft</span></div>
-      <div class="fact"><b>~16 min</b><span>do boot ao PC em Máquinas</span></div>
-      <div class="fact"><b>0</b><span>telas para clicar na instalação</span></div>
+      <div class="fact"><b>7</b><span>perguntas para preparar tudo</span></div>
+      <div class="fact"><b>1</b><span>pendrive leva tudo o que o computador precisa</span></div>
+      <div class="fact"><b>~20 min</b><span>do pendrive ao computador pronto</span></div>
+      <div class="fact"><b>0</b><span>cliques durante a instalação</span></div>
     </div>
   </section>
 
@@ -257,29 +261,29 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
           <article class="beat on" data-i="0">
             <span class="n">ETAPA 1 DE 4</span>
             <h2>Responda <span class="grad">sete perguntas.</span></h2>
-            <p>Sistema, nome do PC, usuário, região, disco, acesso e programas. O painel gera só a configuração, em segundos.</p>
+            <p>Qual sistema, o nome do computador, quem vai usar, o idioma e os programas. O painel prepara tudo em segundos.</p>
           </article>
           <article class="beat" data-i="1">
             <span class="n">ETAPA 2 DE 4</span>
             <h2>O Windows vem <span class="grad">da Microsoft.</span></h2>
-            <p>O gravador baixa a ISO oficial no computador de quem grava e confere o SHA256 publicado. Nenhum Windows passa pelo seu servidor.</p>
+            <p>O isoBuilder baixa o Windows do site oficial da Microsoft, no computador de quem grava o pendrive, e confere se ele veio completo e sem alterações.</p>
           </article>
           <article class="beat" data-i="2">
             <span class="n">ETAPA 3 DE 4</span>
             <h2>Grave. <span class="grad">Espete. Ligue.</span></h2>
-            <p>O pendrive inicia em UEFI e em BIOS antiga. No PC, ele escolhe o maior disco interno e nunca toca no pendrive.</p>
+            <p>Funciona em computadores novos e antigos. O isoBuilder encontra sozinho o disco certo e nunca apaga o pendrive nem outros discos.</p>
           </article>
           <article class="beat" data-i="3">
             <span class="n">ETAPA 4 DE 4</span>
             <h2>Pronto. <span class="grad">Já está online.</span></h2>
-            <p>Com OpenSSH, VPN e o agente do Remoto instalados, a máquina aparece em Máquinas com o terminal a um clique.</p>
+            <p>O computador já sai da instalação com o acesso remoto pronto: ele aparece no seu painel e você consegue entrar nele de onde estiver.</p>
           </article>
         </div>
         <div class="rail" id="rail"><i></i><i></i><i></i><i></i></div>
       </div>
 
       <div class="screen" id="screen">
-        <div class="bar"><i></i><i></i><i></i><span id="scrtitle">iso.gvtserver.online / nova-iso</span></div>
+        <div class="bar"><i></i><i></i><i></i><span id="scrtitle">Painel · nova instalação</span></div>
         <div class="scene on" data-i="0">
           <div class="bigtitle">Qual sistema?</div>
           <div class="osrow" role="tablist" aria-label="Sistema">
@@ -288,40 +292,39 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
           </div>
           <div class="ospanel" data-panel="linux">
             <dl class="kv">
-              <dt>Servidor</dt><dd>srv-coolify-01</dd>
+              <dt>Nome</dt><dd>servidor-da-loja</dd>
               <dt>Usuário</dt><dd>operador</dd>
-              <dt>Sistema</dt><dd>Ubuntu Server 24.04 LTS</dd>
+              <dt>Sistema</dt><dd>Ubuntu (Linux)</dd>
             </dl>
-            <div class="chips"><span class="chip">Coolify</span><span class="chip">Docker</span><span class="chip">Cockpit</span><span class="chip">WireGuard</span><span class="chip">btop</span></div>
+            <div class="chips"><span class="chip">Sites e sistemas</span><span class="chip">Painel pelo navegador</span><span class="chip">Conexão segura</span><span class="chip">Acesso remoto</span></div>
           </div>
           <div class="ospanel" data-panel="windows" hidden>
             <dl class="kv">
-              <dt>Nome do PC</dt><dd>recepcao-01</dd>
+              <dt>Nome</dt><dd>pc-da-recepcao</dd>
               <dt>Usuário</dt><dd>suporte</dd>
-              <dt>Região</dt><dd>Brasília · ABNT2</dd>
+              <dt>Idioma</dt><dd>Português do Brasil</dd>
             </dl>
             <div class="chips"><span class="chip">Chrome</span><span class="chip">7-Zip</span><span class="chip">VLC</span><span class="chip">AnyDesk</span><span class="chip">Notepad++</span></div>
           </div>
         </div>
         <div class="scene" data-i="1" aria-hidden="true">
-          <div class="bigtitle">Baixando o Windows 11 da Microsoft</div>
-          <div class="mono fname">Win11_25H2_BrazilianPortuguese_x64_v2.iso</div>
+          <div class="bigtitle">Baixando o Windows do site da Microsoft</div>
           <div class="meter"><i id="m1"></i></div>
-          <div class="mono"><b id="m1t">0%</b> · 8,2 GB · 88 MB/s</div>
-          <div class="mono">SHA256 50fe4703cf0d…5ef10107 <span class="ok" id="sha">conferindo…</span></div>
+          <div class="mono"><b id="m1t">0%</b> concluído</div>
+          <div class="mono">Conferindo se veio completo: <span class="ok" id="sha">conferindo…</span></div>
         </div>
         <div class="scene" data-i="2" aria-hidden="true">
           <div class="bigtitle">Gravando o pendrive</div>
-          <div class="mono">install.wim 7,2 GB → <b>install.swm</b> + <b>install2.swm</b></div>
+          <div class="mono">Colocando o Windows e a instalação automática no pendrive</div>
           <div class="meter"><i id="m2"></i></div>
-          <div class="mono"><b id="m2t">0%</b> · FAT32 · UEFI + BIOS · autounattend.xml</div>
-          <div class="chips"><span class="chip">INSTALAR/</span><span class="chip">Instalar-no-Windows.exe</span><span class="chip">LEIA-ME.txt</span></div>
+          <div class="mono"><b id="m2t">0%</b> concluído</div>
+          <div class="chips"><span class="chip">Computadores novos e antigos</span><span class="chip">Seus programas junto</span><span class="chip">Instruções no pendrive</span></div>
         </div>
         <div class="scene" data-i="3" aria-hidden="true">
-          <div class="bigtitle">Máquinas</div>
-          <div class="machine"><span class="dot"></span><div class="t"><b>hotelpensilvania</b><small>Ubuntu 24.04.5 LTS · Coolify, Docker</small></div><span class="ip">10.77.2.1</span></div>
-          <div class="machine new" id="newpc"><span class="dot"></span><div class="t"><b>recepcao-01</b><small>Windows 11 Pro · ativado · 5 programas</small></div><span class="ip">10.77.3.1</span></div>
-          <div class="mono">provisionamento <span class="ok">ok</span> · túnel <span class="ok">conectado</span> · terminal pronto</div>
+          <div class="bigtitle">Seus computadores</div>
+          <div class="machine"><span class="dot"></span><div class="t"><b>servidor-da-loja</b><small>Linux · ligado</small></div><span class="ip">online</span></div>
+          <div class="machine new" id="newpc"><span class="dot"></span><div class="t"><b>pc-da-recepcao</b><small>Windows ativado · 5 programas instalados</small></div><span class="ip">online</span></div>
+          <div class="mono">Instalação <span class="ok">concluída</span> · acesso remoto <span class="ok">pronto</span></div>
         </div>
       </div>
     </div>
@@ -331,43 +334,43 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
     <div class="bento">
       <article class="tile t-a rise" id="sistemas">
         <span class="eyebrow">Dois mundos</span>
-        <h3>Servidores Ubuntu com Coolify. <span class="muted">PCs Windows 11 com os seus programas.</span></h3>
-        <p>O mesmo assistente, o mesmo gravador, a mesma lista de máquinas. Escolha Linux ou Windows no primeiro passo.</p>
-        <div class="term" role="list" aria-label="Etapas da instalação">
-          <div class="tr" role="listitem"><b>✔</b><span>base_packages</span><span>ok</span><em></em></div>
-          <div class="tr" role="listitem"><b>✔</b><span>docker_install</span><span>ok</span><em></em></div>
-          <div class="tr" role="listitem"><b>✔</b><span>coolify_install</span><span>ok</span><em><u>http://10.77.2.1:8000</u></em></div>
-          <div class="tr" role="listitem"><b>✔</b><span>apps</span><span>ok</span><em>7-Zip, Notepad++, VLC</em></div>
-          <div class="tr" role="listitem"><b>✔</b><span>activation</span><span>ok</span><em>Windows ativado</em></div>
+        <h3>Servidores para empresas. <span class="muted">Computadores com os seus programas.</span></h3>
+        <p>O mesmo passo a passo para preparar um servidor Linux ou um computador com Windows. Todos aparecem na mesma lista.</p>
+        <div class="term check" role="list" aria-label="O que fica pronto">
+          <div class="tr" role="listitem"><b>✔</b><span>Sistema instalado</span></div>
+          <div class="tr" role="listitem"><b>✔</b><span>Programas escolhidos instalados</span></div>
+          <div class="tr" role="listitem"><b>✔</b><span>Windows ativado com a sua chave</span></div>
+          <div class="tr" role="listitem"><b>✔</b><span>Acesso remoto pronto</span></div>
+          <div class="tr" role="listitem"><b>✔</b><span>Aparece no seu painel</span></div>
         </div>
       </article>
       <article class="tile t-b rise">
-        <span class="eyebrow">VPN própria</span>
-        <h3>Um túnel para cada máquina.</h3>
-        <p>WireGuard pelo seu servidor. Sobe antes do login e mantém o IP depois de reinstalar.</p>
-        <div class="wg"><span class="node">seu servidor</span><span class="wire"></span><span class="node">10.77.3.1</span></div>
+        <span class="eyebrow">Conexão segura</span>
+        <h3>Cada computador com a sua conexão protegida.</h3>
+        <p>Você entra de onde estiver, mesmo com o computador em outra cidade. A conexão volta sozinha quando ele reinicia.</p>
+        <div class="wg"><span class="node">você</span><span class="wire"></span><span class="node">computador</span></div>
       </article>
       <article class="tile t-c rise">
-        <span class="eyebrow">Remoto</span>
-        <h3>Tela, terminal e arquivos no navegador.</h3>
-        <p>O agente do Remoto é instalado junto. Dá para liberar máquinas escolhidas para sócios.</p>
+        <span class="eyebrow">Acesso remoto</span>
+        <h3>Veja a tela e ajude na hora.</h3>
+        <p>Tela, arquivos e comandos pelo navegador. Você pode liberar só alguns computadores para quem trabalha com você.</p>
       </article>
       <article class="tile t-d rise">
-        <span class="eyebrow">Reinstalação</span>
-        <h3>O mesmo PC nunca duplica.</h3>
-        <p>O hardware é reconhecido. Apelido, notas, permissões e túnel passam para a instalação nova.</p>
+        <span class="eyebrow">Formatou de novo?</span>
+        <h3>Nada se perde.</h3>
+        <p>O isoBuilder reconhece o mesmo computador e mantém o nome, as anotações e os acessos que você já tinha.</p>
       </article>
       <article class="tile t-e rise">
-        <span class="eyebrow">Disco certo</span>
+        <span class="eyebrow">Com segurança</span>
         <div class="big-n grad">1 disco</div>
-        <p>Apaga só o maior disco interno. Pendrive e discos menores ficam intactos — testado em VM.</p>
+        <p>Apaga só o disco principal do computador. O pendrive e os outros discos ficam intactos.</p>
       </article>
     </div>
   </section>
 
   <section class="final wrap" id="comecar" aria-labelledby="h-final">
     <h2 id="h-final">Formate menos.<br><span class="grad">Entregue mais.</span></h2>
-    <p>Gere a configuração no painel, mande o gravador para o cliente e acompanhe a máquina aparecer sozinha.</p>
+    <p>Prepare a instalação no painel, mande o isoBuilder para o cliente e acompanhe o computador ficar pronto sozinho.</p>
     <a class="pill big" data-auth="Abrir o painel" href="/login">Abrir o painel</a>
   </section>
 </main>
