@@ -1065,10 +1065,30 @@ async def format_start(request: Request, u: core.User = Depends(admin_user)):
 def format_cancel(jid: str, _: core.User = Depends(admin_user)):
     with core.db() as con:
         n = con.execute("UPDATE format_jobs SET cancel=1, state='cancelado', message='Cancelado pelo painel.', "
-                        "updated_at=? WHERE id=? AND state IN ('enviado','aguardando','encontrado')",
+                        "updated_at=? WHERE id=? AND state IN " + str(FORMAT_LIVE),
                         (core.now(), jid)).rowcount
     if not n:
         raise core.Invalid("Esse pedido já terminou.")
+    return {"ok": True}
+
+
+@app.post("/api/admin/format/{jid}/dismiss")
+def format_dismiss(jid: str, _: core.User = Depends(admin_user)):
+    """Remove um aviso de formatação já terminada (erro, BIOS antiga, concluída…)."""
+    with core.db() as con:
+        r = con.execute("SELECT state, expires_at FROM format_jobs WHERE id=?", (jid,)).fetchone()
+        if r and (r["state"] not in FORMAT_LIVE or core.now() > r["expires_at"]):
+            con.execute("DELETE FROM format_jobs WHERE id=?", (jid,))
+        elif r:
+            raise core.Invalid("Esse pedido ainda está em andamento; use Cancelar.")
+    return {"ok": True}
+
+
+@app.post("/api/admin/format/clear")
+def format_clear(_: core.User = Depends(admin_user)):
+    """Remove todos os avisos de formatações já terminadas."""
+    with core.db() as con:
+        con.execute("DELETE FROM format_jobs WHERE state NOT IN " + str(FORMAT_LIVE) + " OR expires_at<?", (core.now(),))
     return {"ok": True}
 
 

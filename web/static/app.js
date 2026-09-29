@@ -1483,7 +1483,8 @@ const fmtPill = j => { const [c, t] = FMT_ST[j.state] || ["", j.state]; return `
 function fmtJobHTML(j) {
   return `<div class="fmt-job" data-fj="${esc(j.id)}"><div class="spread"><div>${fmtPill(j)} <b>${esc(j.name)}</b>
       <span class="muted small">· pedido ${fmtAgo(j.created_at)}${j.live ? ` · espera até ${fmtDate(j.expires_at)}` : ""}</span></div>
-      ${j.live ? `<button class="btn sm danger" data-fcancel="${esc(j.id)}" type="button">Cancelar</button>` : ""}</div>
+      ${j.live ? `<button class="btn sm danger" data-fcancel="${esc(j.id)}" type="button">Cancelar</button>`
+        : `<button class="btn sm" data-fdismiss="${esc(j.id)}" type="button" title="Remover este aviso">✕</button>`}</div>
     ${j.message ? `<p class="small u-mt8 ${j.state === "erro" || j.state === "bios" ? "err" : ""}">${esc(j.message)}</p>` : ""}
     ${j.stick ? `<p class="muted small">${esc(j.stick)}</p>` : ""}</div>`;
 }
@@ -1491,12 +1492,22 @@ function fmtJobHTML(j) {
 function fmtCard() {
   const recent = FMT.jobs.filter(j => j.live || Date.now() / 1000 - j.updated_at < 3600);
   if (!recent.length) return "";
-  return `<div class="card fmt-card"><b>Formatações à distância</b>${recent.map(fmtJobHTML).join("")}</div>`;
+  const done = recent.filter(j => !j.live);
+  return `<div class="card fmt-card"><div class="spread"><b>Formatações à distância</b>${done.length > 1
+    ? `<button class="btn sm" data-fclear="1" type="button">Limpar terminadas</button>` : ""}</div>${recent.map(fmtJobHTML).join("")}</div>`;
 }
 function wireFmt(root = document) {
   $$("[data-fcancel]", root).forEach(b => b.onclick = async () => {
     if (!confirm("Cancelar? O PC para de esperar / preparar e não reinicia.")) return;
     try { await api(`/api/admin/format/${b.dataset.fcancel}/cancel`, { method: "POST" }); toast("Cancelado."); } catch (e) { toast(e.message); }
+    fmtLoad();
+  });
+  $$("[data-fdismiss]", root).forEach(b => b.onclick = async () => {
+    try { await api(`/api/admin/format/${b.dataset.fdismiss}/dismiss`, { method: "POST" }); } catch (e) { toast(e.message); }
+    fmtLoad();
+  });
+  $$("[data-fclear]", root).forEach(b => b.onclick = async () => {
+    try { await api("/api/admin/format/clear", { method: "POST" }); } catch (e) { toast(e.message); }
     fmtLoad();
   });
 }
@@ -1653,7 +1664,7 @@ function openRemoteView(d, mode) {
   el.id = "ovl";
   el.innerHTML = `<div class="ovl-bg"></div><aside class="ovl ovl-wide" role="dialog" aria-modal="true">
     <header class="ovl-h"><div>${osLogo(d.os, "sm")} ${dot(d.online)} <b>${esc(d.name)}</b> <span class="muted small">${esc(d.os || "")}</span></div>
-      <div class="row"><button class="btn sm" id="rvNew" title="Abrir em nova aba">↗</button><button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></div></header>
+      <div class="row"><button class="btn sm" data-rvfull type="button" title="Tela cheia">⛶</button><button class="btn sm" id="rvNew" title="Abrir em nova aba">↗</button><button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></div></header>
     <nav class="tabs" id="ovlTabs">${RMODES.map(([m, t]) => `<button data-t="${m}">${t}</button>`).join("")}</nav>
     <div class="ovl-b rv-body"><div class="rframe rv-frame"><div class="muted rload">Conectando…</div><iframe title="Remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div></aside>`;
   document.body.appendChild(el);
@@ -1662,6 +1673,8 @@ function openRemoteView(d, mode) {
   $(".ovl-bg", el).onclick = close; $("#ovlClose").onclick = close;
   $$("#ovlTabs button", el).forEach(b => b.onclick = () => remoteMode(d, b.dataset.t));
   $("#rvNew").onclick = () => { const f = $(".rv-frame iframe"); if (f && f.src) window.open(f.src, "_blank", "noopener"); };
+  wireFull(el);
+  ovlResizable($(".ovl", el));
   remoteMode(d, mode);
 }
 
@@ -1682,10 +1695,11 @@ function tabTela() {
   const d = OVL.rdev, P = OVL.m.perms ?? 63, bit = { desktop: 4, terminal: 2, files: 8 };
   const modes = RMODES.filter(([m]) => P & bit[m]);
   $("#ovlBody").innerHTML = `<div class="spread"><div class="row">${modes.map(([m, t]) => `<button class="btn sm" data-rm="${m}">${t}</button>`).join("")}</div>
-      <span class="muted small">pelo Remoto (MeshCentral)</span></div>
+      <div class="row"><span class="muted small">pelo Remoto (MeshCentral)</span><button class="btn sm" data-rvfull type="button" title="Tela cheia">⛶ Tela cheia</button></div></div>
     <div class="rframe rv-frame u-mt12"><div class="muted rload">Conectando…</div><iframe title="Remoto" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>`;
   const pick = m => { $$("#ovlBody [data-rm]").forEach(b => b.classList.toggle("primary", b.dataset.rm === m)); remoteMode(d, m, $("#ovlBody")); };
   $$("#ovlBody [data-rm]").forEach(b => b.onclick = () => pick(b.dataset.rm));
+  wireFull($("#ovlBody"));
   pick(modes[0][0]);
 }
 
@@ -1697,7 +1711,40 @@ function closeOverlay() {
   document.body.classList.remove("noscroll");
   OVL = null;
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && OVL && !OVL.ws) closeOverlay(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && OVL && !OVL.ws && !document.fullscreenElement) closeOverlay(); });
+
+// Tela cheia do visualizador do Remoto (Esc sai).
+function wireFull(root) {
+  $$("[data-rvfull]", root).forEach(b => b.onclick = () => {
+    const fr = $(".rv-frame", $("#ovl") || document);
+    if (!fr) return;
+    if (document.fullscreenElement) return document.exitFullscreen();
+    (fr.requestFullscreen || fr.webkitRequestFullscreen || (() => toast("Este navegador não permite tela cheia."))).call(fr);
+  });
+}
+
+// Largura da janela lateral: arrastando a borda esquerda. Fica salva neste navegador;
+// dois cliques na borda voltam ao tamanho padrão.
+function ovlResizable(aside) {
+  if (!aside) return;
+  const key = "uab.ovlw" + (aside.classList.contains("ovl-wide") ? ".wide" : "");
+  try { const w = +localStorage.getItem(key); if (w >= 360) aside.style.width = Math.min(w, innerWidth) + "px"; } catch (e) { }
+  const g = document.createElement("div");
+  g.className = "ovl-grip"; g.title = "Arraste para mudar a largura (dois cliques: tamanho padrão)";
+  aside.appendChild(g);
+  g.onpointerdown = e => {
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    document.body.classList.add("ovl-dragging");
+    g.onpointermove = ev => { aside.style.width = Math.max(360, Math.min(innerWidth, innerWidth - ev.clientX)) + "px"; };
+    g.onpointerup = g.onpointercancel = () => {
+      g.onpointermove = g.onpointerup = g.onpointercancel = null;
+      document.body.classList.remove("ovl-dragging");
+      try { localStorage.setItem(key, String(parseInt(aside.style.width, 10))); } catch (e) { }
+    };
+  };
+  g.ondblclick = () => { aside.style.width = ""; try { localStorage.removeItem(key); } catch (e) { } };
+}
 
 async function openMachine(id, tab = "resumo") {
   closeOverlay();
@@ -1712,6 +1759,7 @@ async function openMachine(id, tab = "resumo") {
     <div class="ovl-b" id="ovlBody"></div></aside>`;
   document.body.appendChild(el);
   document.body.classList.add("noscroll");
+  ovlResizable($(".ovl", el));
   $(".ovl-bg", el).onclick = () => { if (!OVL.ws || confirm("Fechar e encerrar o terminal?")) closeOverlay(); };
   $("#ovlClose").onclick = () => { if (!OVL.ws || confirm("Fechar e encerrar o terminal?")) closeOverlay(); };
   $$("#ovlTabs button").forEach(b => b.onclick = () => { if (OVL.tab === "terminal" && b.dataset.t !== "terminal" && OVL.ws && !confirm("Sair do terminal encerra a sessão. Continuar?")) return; showTab(b.dataset.t); });
@@ -1749,6 +1797,7 @@ function showTab(t) {
   if (OVL.tab === "terminal" && t !== "terminal") stopTerminal();
   OVL.tab = t;
   $$("#ovlTabs button").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  $("#ovlBody").classList.toggle("rv-body", t === "tela");  // tela: ocupa a altura que sobra
   ({ tela: tabTela, resumo: tabResumo, terminal: tabTerminal, vpn: tabVpn, conectar: tabConectar, config: tabConfig })[t]();
 }
 
