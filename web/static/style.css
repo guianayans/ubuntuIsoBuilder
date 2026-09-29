@@ -323,3 +323,38 @@ ul.plain li{margin:6px 0}
 .inv-pc{display:flex;gap:12px;align-items:center}
 .inv-pct{flex:1;min-width:0;display:flex;flex-direction:column}
 @media (max-width:640px){.inv-go{flex-wrap:wrap;width:100%}.inv-go .btn{flex:1}}
+
+/* atalho do TerminalSec no header: verde conectado, vermelho sem conexão */
+.who .tsec-btn.on { color: #16a34a; border-color: currentColor; }
+.who .tsec-btn.off { color: #dc2626; border-color: currentColor; }
+.who .tsec-btn svg { flex: none; }
+
+/* overlay do TerminalSec: vidro fosco sobre a página, painel quase em tela cheia */
+.tsec-ov { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, .28); backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+  animation: tsecFade .18s ease-out; }
+.tsec-ov.hidden { display: none; }
+.tsec-ov-panel { width: calc(100vw - 48px); height: calc(100dvh - 48px); display: flex; flex-direction: column;
+  border-radius: 14px; overflow: hidden; background: #06110c; border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 24px 80px rgba(0,0,0,.45); }
+.tsec-ov-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; background: rgba(6,17,12,.92);
+  border-bottom: 1px solid rgba(77,255,154,.18); color: #cfe6da; }
+.tsec-ov-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; margin-right: auto; color: #4dff9a;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; }
+.tsec-ov-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.tsec-ov-dot.on { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+.tsec-ov-dot.off { background: #ef4444; }
+.tsec-ov-bar .btn { background: transparent; color: #cfe6da; border-color: rgba(207,230,218,.3); display: inline-flex; align-items: center; gap: 6px; }
+.tsec-ov-bar .btn:hover { border-color: #4dff9a; color: #4dff9a; }
+.tsec-ov-body { position: relative; flex: 1; background: #06110c; }
+.tsec-ov-body iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.tsec-ov-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; text-align: center; color: #7c9c8c; padding: 24px; }
+.tsec-ov-msg.hidden { display: none; }
+body.tsec-ov-open { overflow: hidden; }
+@keyframes tsecFade { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 600px) {
+  .tsec-ov-panel { width: 100vw; height: 100dvh; border-radius: 0; border: 0; }
+  .tsec-ov-bar .btn span, .tsec-ov-bar #tsecOvNew { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .tsec-ov { animation: none; } }

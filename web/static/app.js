@@ -61,6 +61,91 @@ function detectOS() {
 }
 const OS_NAME = { windows: "Windows", "windows-arm64": "Windows (ARM)", macos: "Mac", linux: "Linux", mobile: "celular" };
 
+/* -------------------------------------------------- atalho do TerminalSec (header) */
+// Só aparece para admin e com TERMINALSEC_CODE configurado; verde = o painel respondeu à chave da
+// integração, vermelho = sem conexão (fora do ar, chave revogada ou rede). Confere a cada minuto.
+let tsecTimer = null, tsecState = null;
+async function tsecHeader() {
+  const b = $("#tsecBtn");
+  if (!b) return;
+  if (!(ME && ME.role === "admin" && FEATURES.terminalsec)) { b.classList.add("hidden"); return; }
+  const check = async () => {
+    let st = null;
+    try { st = await api("/api/terminalsec/status"); } catch (e) { st = null; }
+    const wasHidden = b.classList.contains("hidden");
+    if (!st || !st.configured) { b.classList.add("hidden"); if (!wasHidden) fitHeader(); return; }
+    b.classList.remove("hidden");
+    if (wasHidden) fitHeader();  // o atalho aparece depois do encaixe inicial: reencaixa o menu
+    b.href = st.url;
+    b.classList.toggle("on", !!st.connected);
+    b.classList.toggle("off", !st.connected);
+    b.title = st.connected ? "TerminalSec conectado — abrir o painel" : "TerminalSec sem conexão (painel fora do ar ou chave revogada) — abrir o painel";
+    tsecState = st;
+    tsecMobile();
+  };
+  check();
+  if (!tsecTimer) tsecTimer = setInterval(check, 60000);
+}
+
+// overlay: o TerminalSec aberto por dentro do ISO Builder (clique normal). Ctrl/⌘+clique ou botão do meio
+// continuam abrindo em nova aba. O iframe é criado na 1ª abertura e fica vivo: reabrir é instantâneo.
+function tsecOpen(e) {
+  if (e && (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1)) return;  // deixa o navegador abrir a aba
+  if (!tsecState || !tsecState.url) return;
+  if (e) e.preventDefault();
+  setMenu(false);
+  const ov = $("#tsecOv"), body = $("#tsecOvBody");
+  $("#tsecOvNew").href = tsecState.url;
+  $("#tsecOvDot").className = "tsec-ov-dot " + (tsecState.connected ? "on" : "off");
+  $("#tsecOvDot").title = tsecState.connected ? "conectado" : "sem conexão";
+  let fr = $("#tsecOvFrame");
+  if (!fr || fr.dataset.src !== tsecState.url) {
+    if (fr) fr.remove();
+    $("#tsecOvMsg").classList.remove("hidden");
+    fr = document.createElement("iframe");
+    fr.id = "tsecOvFrame";
+    fr.title = "TerminalSec";
+    fr.dataset.src = tsecState.url;
+    fr.allow = "clipboard-write; fullscreen";
+    fr.referrerPolicy = "strict-origin-when-cross-origin";
+    fr.onload = () => $("#tsecOvMsg").classList.add("hidden");
+    fr.src = tsecState.url;
+    body.appendChild(fr);
+  }
+  ov.classList.remove("hidden");
+  document.body.classList.add("tsec-ov-open");
+  $("#tsecOvClose").focus();
+}
+function tsecClose() {
+  $("#tsecOv").classList.add("hidden");
+  document.body.classList.remove("tsec-ov-open");
+  const b = $("#tsecBtn"); if (b && !b.classList.contains("hidden")) b.focus();
+}
+$("#tsecBtn").addEventListener("click", tsecOpen);
+$("#tsecOvClose").addEventListener("click", tsecClose);
+$("#tsecOv").addEventListener("click", (e) => { if (e.target.id === "tsecOv") tsecClose(); });  // clicar no vidro fecha
+addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#tsecOv").classList.contains("hidden")) tsecClose(); });
+// Esc apertado com o foco dentro do TerminalSec: ele avisa por mensagem (só aceita da origem dele)
+addEventListener("message", (e) => {
+  if (!tsecState || !tsecState.url || $("#tsecOv").classList.contains("hidden")) return;
+  let origin = "";
+  try { origin = new URL(tsecState.url).origin; } catch (err) { return; }
+  if (e.origin === origin && e.data && e.data.type === "terminalsec:escape") tsecClose();
+});
+
+// mesmo atalho no menu do celular (o header vira ☰ em telas estreitas)
+function tsecMobile() {
+  const m = $("#mTsec");
+  if (!m) return;
+  const st = tsecState;
+  m.classList.toggle("hidden", !(st && st.configured && ME && ME.role === "admin"));
+  if (!st || !st.configured) return;
+  m.href = st.url;
+  m.classList.toggle("on", !!st.connected);
+  m.classList.toggle("off", !st.connected);
+  m.textContent = (st.connected ? "🟢" : "🔴") + " TerminalSec" + (st.connected ? "" : " (sem conexão)") + " ↗";
+}
+
 /* -------------------------------------------------- layout */
 function shell() {
   $("#top").classList.toggle("hidden", !ME);
@@ -72,6 +157,7 @@ function shell() {
     rb.href = FEATURES.remote_embed ? "#/remoto" : ru;
     if (FEATURES.remote_embed) rb.removeAttribute("target"); else rb.target = "_blank";
   }
+  tsecHeader();
   const dl = ME.mode === "download";
   const links = dl ? [[ME.build_id ? "#/iso/" + ME.build_id : "#/", "Minha ISO"]]
     : ME.mode === "partner" ? [["#/maquinas", "Máquinas"]] : [["#/", "Nova ISO"], ["#/isos", "Minhas ISOs"]];
@@ -84,12 +170,15 @@ function shell() {
   // menu das telas estreitas (celular, janela pequena): tudo em uma lista, sem rolagem lateral
   $("#mnav").innerHTML = `<nav class="mnav-links">${links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("")}
     ${installEvt ? `<a href="#" class="mnav-remote" id="mInstall">Instalar app</a>` : ""}
-    ${ru ? `<a href="${esc(rb.getAttribute("href"))}" ${FEATURES.remote_embed ? "" : 'target="_blank" rel="noopener noreferrer"'} class="mnav-remote">Acesso remoto${FEATURES.remote_embed ? "" : " ↗"}</a>` : ""}</nav>
+    ${ru ? `<a href="${esc(rb.getAttribute("href"))}" ${FEATURES.remote_embed ? "" : 'target="_blank" rel="noopener noreferrer"'} class="mnav-remote">Acesso remoto${FEATURES.remote_embed ? "" : " ↗"}</a>` : ""}
+    ${ME.role === "admin" && FEATURES.terminalsec ? `<a id="mTsec" class="mnav-remote hidden" target="_blank" rel="noopener noreferrer">TerminalSec ↗</a>` : ""}</nav>
     <a href="/sobre" class="mnav-about">Página inicial</a>
     <div class="mnav-foot"><span class="muted small">${esc(ME.email)}${ME.role === "admin" ? " · admin" : ""}</span><button class="btn sm" id="mLogout">Sair</button></div>`;
   $("#mLogout").onclick = () => $("#logout").click();
   const mi = $("#mInstall"); if (mi) mi.onclick = e => { e.preventDefault(); setMenu(false); installApp(); };
   $$("#mnav a").forEach(a => a.onclick = () => setMenu(false));
+  const mt = $("#mTsec"); if (mt) mt.onclick = tsecOpen;
+  tsecMobile();
   setMenu(false);
   fitHeader();
 }
@@ -208,7 +297,7 @@ const W = {
   ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "coolify_cockpit", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
-  gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true,
+  gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
@@ -362,6 +451,7 @@ function stepHTML() {
       ${toggle("virt", "Virtualização (KVM)", "libvirt/QEMU para rodar VMs" + (W.apps === "coolify_cockpit" ? ", gerenciadas pelo Cockpit (Máquinas virtuais)." : "."))}
       <div id="virtBox" class="${W.virt ? "" : "hidden"}">${toggle("virt_bridge", "Ponte de rede br0", "As VMs recebem IP do seu roteador, como os outros aparelhos da rede. Aplicada com proteção: se a rede não voltar, é desfeita sozinha.")}</div>
       ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto", "Instala o agente do Remoto (MeshCentral) no primeiro boot: o servidor aparece sozinho em Acesso remoto, com tela, terminal e arquivos pelo navegador. É a 2ª rota, além de Máquinas.") : ""}
+      ${FEATURES.terminalsec ? toggle("terminalsec", "Monitorar com TerminalSec", "Instala o agente de segurança no primeiro boot. O servidor aparece no TerminalSec aguardando a sua aprovação (nada entra sem você aceitar). Se o painel estiver fora do ar, tenta de novo sozinho.") : ""}
       ${toggle("tweaks", "Ajustes de servidor", "Verifica e repara o disco sozinho no boot (após queda de energia), console sem apagar a tela e, com virtualização, IOMMU ligado.")}`;
     case "review": {
       const disk = { single: "Único disco interno", serial: "Serial " + W.storage_value, path: W.storage_value, model: "Modelo " + W.storage_value }[W.storage_type];
@@ -377,7 +467,7 @@ function stepHTML() {
           : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
         <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "GPU NVIDIA" : "",
-          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
+          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
       ${deliverHTML("ISO")}
@@ -730,7 +820,7 @@ function renderWizard() {
             wireguard: !!(W.wireguard && FEATURES.wireguard), tailscale: W.win_tailscale,
             ...(W.win_tailscale ? { tailscale_key: W.tailscale_key, tailscale_hostname: W.tailscale_hostname } : {}),
             confirm_erase: W.confirm_erase }
-        : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent };
+        : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent, terminalsec: !!(W.terminalsec && FEATURES.terminalsec) };
       if (!isWin()) delete body.win_key;
       if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label, remote_agent: !!(W.deliver_agent && agentOK()) };
       const r = await api("/api/builds", { method: "POST", body });
@@ -1262,7 +1352,7 @@ async function loadMachines() {
   $("#ml").innerHTML = (active.length ? `<div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Conta</th><th>VPN</th><th>Rede local</th><th>Provisionamento</th><th>Visto</th><th></th></tr>
     ${active.map(m => `<tr class="clickable" data-m="${m.id}">
       <td class="rt-dot">${dot(m.online, mstate(m))}</td>
-      <td class="rt-title"><div class="mname">${osLogo(m.os)}<div><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</div></div></td>
+      <td class="rt-title"><div class="mname">${osLogo(m.os)}<div><b>${esc(m.label || m.hostname)}</b>${m.label ? `<br><span class="muted small">${esc(m.hostname)}</span>` : ""}<br><span class="muted small">${esc(m.os)}</span>${tsecBadge(m)}${m.online ? "" : `<br><span class="err small">${mstate(m)} · ${fmtAgo(m.off_at || m.last_seen)}</span>`}</div></div></td>
       <td class="small" data-label="Conta">${m.account ? esc(m.account) : `<span class="muted">—</span>`}</td>
       <td data-label="VPN">${m.wg_ip ? `<span class="mono">${esc(m.wg_ip)}</span> <span class="muted small">WG</span>${m.wg && !m.wg.connected && m.online ? (String(m.wg_reason).startsWith("Conectando") ? ` <span class="muted small">conectando…</span>` : ` <span class="err small" title="${esc(m.wg_reason)}">sem conexão</span>`) : ""}<br>` : ""}${m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span> <span class="muted small">TS</span>` : (m.wg_ip ? "" : `<span class="muted">—</span>`)}</td>
       <td class="small" data-label="Rede local">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
@@ -1565,7 +1655,7 @@ function tabResumo() {
     ${appLinks(m)}
     <div class="grid2">
       ${kv("Conta", esc(m.account || "—"))}${kv("ISO gerada por", esc(m.owner_email || "—"))}
-      ${kv("Hostname", esc(m.hostname))}${kv("Usuário admin", `<span class="mono">${esc(m.admin_user)}</span>`)}
+      ${kv("Hostname", esc(m.hostname))}${kv("Usuário admin", `<span class="mono">${esc(m.admin_user)}</span>`)}${m.terminalsec ? kv("TerminalSec", tsecBadge(m, true)) : ""}
       ${kv("IP Tailscale", m.tailscale_ip ? `<span class="mono">${esc(m.tailscale_ip)}</span>` : "—")}${kv("Nome Tailscale", esc(m.tailscale_dns || "—"))}
       ${kv("Rede local", esc(m.local_ips.map(x => x.split(" ").pop()).join(", ") || "—"))}${kv("Gateway", esc(m.report.gateway || "—"))}
       ${kv("Sistema", `${osLogo(m.os, "xs")} ${esc(m.os)}`)}${kv("Kernel", esc(m.kernel))}
@@ -1608,6 +1698,16 @@ function tabResumoWin(m, r, sv, gb, svc) {
   $("#goTerm").onclick = () => showTab("terminal");
   $("#goConn").onclick = () => showTab("conectar");
 }
+// indicador do TerminalSec (monitoramento de segurança) na lista de máquinas
+const TSEC_ST = { online: ["🟢", "protegido"], pending: ["🟡", "aguardando aprovação"], offline: ["🔴", "sem contato"], archived: ["⚪", "arquivado"] };
+function tsecBadge(m, inline) {
+  const t = m.terminalsec;
+  if (!t) return "";
+  const [ico, txt] = TSEC_ST[t.status] || ["⚪", t.status];
+  const url = /^https?:\/\//.test(t.url || "") ? t.url : "#";
+  return `${inline ? "" : "<br>"}<a class="small" href="${esc(url)}" target="_blank" rel="noopener" title="Abrir no TerminalSec">${ico} TerminalSec: ${esc(txt)}</a>`;
+}
+
 // nomes das etapas do provisionamento do Windows (docs/windows/CONTRACT.md §4)
 const WIN_STEP = { openssh: "OpenSSH (terminal pelo painel)", wireguard: "WireGuard (túnel até o seu servidor)", tailscale_install: "Tailscale (instalação)",
   tailscale_login: "Tailscale (login na Tailnet)", remote_agent: "Agente do Remoto", apps: "Programas (winget)", activation: "Ativação do Windows", report: "Relatório ao painel" };

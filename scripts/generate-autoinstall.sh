@@ -61,6 +61,10 @@ if [ "${REMOTE_AGENT:-no}" = yes ]; then
   [ -s "$REMOTE_MESHID_FILE" ] || die "Id do grupo do Remoto ausente (secrets/remote-meshid)."
   install -m 600 "$REMOTE_MESHID_FILE" "$STAGE/uab/secrets/remote-meshid"
 fi
+if [ "${TSEC_AGENT:-no}" = yes ]; then
+  [ -s "$TSEC_TOKEN_FILE" ] || die "Token do TerminalSec ausente (secrets/tsec-token)."
+  install -m 600 "$TSEC_TOKEN_FILE" "$STAGE/uab/secrets/tsec-token"
+fi
 if [ "${CLOUDFLARE_ENABLED:-no}" = yes ]; then
   [ -s "$CF_TOKEN_FILE" ] || die "Token do Cloudflare Tunnel ausente (secrets/cloudflare-token)."
   install -m 600 "$CF_TOKEN_FILE" "$STAGE/uab/secrets/cloudflare-token"

@@ -1102,3 +1102,13 @@ Logs: `/var/log/uab-provision.log`, `journalctl -u uab-provision`,
 - Testes completos em VM feitos com 24.04.5 (UEFI e BIOS) e 26.04.1 (UEFI).
   Hardware físico varia (firmware, placas de rede); faça um teste com a
   máquina real antes de levá-la para longe.
+
+## TerminalSec (monitoramento de segurança)
+
+Opcional. Com a variável `TERMINALSEC_CODE` preenchida no Coolify (o código vem do TerminalSec, em **Servidores → Integrações**), o formulário de ISOs Ubuntu ganha **"Monitorar com TerminalSec"**.
+
+- **Ao gerar a ISO:** o builder pede ao TerminalSec um token de ISO (reutilizável, com prazo e aprovação obrigatória) e grava como segredo (`secrets/tsec-token` → `/etc/uab/tsec-token`, apagado depois do uso).
+- **No primeiro boot:** a etapa `terminalsec_agent` roda o instalador do TerminalSec, e a máquina aparece lá aguardando aprovação.
+  - Token recusado (revogado): o passo desiste sem repetir.
+  - Painel fora do ar: 5 tentativas; depois `uab-tsec-retry.timer` tenta de hora em hora e se desliga ao conseguir.
+- **Na lista de Máquinas:** 🟢 protegido · 🟡 aguardando aprovação · 🔴 sem contato · ⚪ arquivado, com link para o TerminalSec.

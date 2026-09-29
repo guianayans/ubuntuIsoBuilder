@@ -236,6 +236,9 @@ def render(args) -> None:
             "UAB_REMOTE_AGENT": "yes" if cfg.get("REMOTE_AGENT") == "yes" and cfg.get("REMOTE_AGENT_URL", "").startswith(("https://", "http://")) else "no",
             "UAB_REMOTE_URL": cfg.get("REMOTE_AGENT_URL", "").rstrip("/"),
             "UAB_PANEL_URL": cfg.get("PANEL_URL", ""),
+            # TerminalSec: o token de ISO vai em secrets/tsec-token (apagado após o uso)
+            "UAB_TSEC_AGENT": "yes" if cfg.get("TSEC_AGENT") == "yes" and cfg.get("TSEC_PANEL_URL", "").startswith(("https://", "http://")) else "no",
+            "UAB_TSEC_URL": cfg.get("TSEC_PANEL_URL", "").rstrip("/"),
             # WireGuard pelo hub do painel (a configuração chega pelo relatório)
             "UAB_WG": "yes" if cfg.get("WG_ENABLED") == "yes" and cfg.get("PANEL_URL") else "no",
         }

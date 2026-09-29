@@ -185,6 +185,11 @@ def prepare_job(build_id: str, data: dict) -> str:
     cfg = data["config"]
     if cfg.get("REMOTE_AGENT") == "yes":
         cfg["REMOTE_AGENT_URL"] = PANEL_URL.rstrip("/") + "/remoto"
+    tsec_token = None
+    if cfg.get("TSEC_AGENT") == "yes":
+        from . import terminalsec
+        t = terminalsec.iso_token(f"{cfg.get('HOSTNAME_') or 'servidor'} · build {build_id[:8]}")
+        cfg["TSEC_PANEL_URL"], tsec_token = t["panel"].rstrip("/"), t["token"]
     lines = ["# Gerado pela interface web (build %s). Sem segredos." % build_id]
     lines += [f"{k}={q(v)}" for k, v in cfg.items()]
     _write(os.path.join(jd, "config", "install.env"), "\n".join(lines) + "\n")
@@ -210,6 +215,8 @@ def prepare_job(build_id: str, data: dict) -> str:
         _write(os.path.join(jd, "secrets", "remote-meshid"), mid + "\n")
     if data.get("cloudflare_token"):
         _write(os.path.join(jd, "secrets", "cloudflare-token"), data["cloudflare_token"] + "\n")
+    if tsec_token:
+        _write(os.path.join(jd, "secrets", "tsec-token"), tsec_token + "\n")
     # relatório ao painel + (opcional) chave do painel restrita ao Tailscale
     _write(os.path.join(jd, "secrets", "panel-token"), data["report_token"] + "\n")
     if data.get("panel_access"):

@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocke
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import builder, core, panel, remoto, wg
+from . import builder, core, panel, remoto, terminalsec, wg
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 HELPER_DIR = os.environ.get("HELPER_DIST", os.path.join(builder.UAB_ROOT, "helper", "dist"))
@@ -78,7 +78,7 @@ async def security(request: Request, call_next):
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     resp.headers["Content-Security-Policy"] = (
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
-        f"connect-src 'self'; frame-src 'self' {REMOTE_ORIGIN if REMOTE_EMBED else ''}; frame-ancestors 'none'; "
+        f"connect-src 'self'; frame-src 'self' {REMOTE_ORIGIN if REMOTE_EMBED else ''} {terminalsec.origin()}; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'self'")
     if request.url.path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
@@ -208,7 +208,16 @@ def me(u: core.User = Depends(current_user)):
                          "remote_embed": REMOTE_EMBED and (u.is_admin or remote_ok),
                          "remote_sso": remote_ok,
                          "remote_agent": bool(remoto.mesh_id()),
+                         "terminalsec": terminalsec.configured(),
                          "windows": bool(core.winconfig())}}
+
+
+@app.get("/api/terminalsec/status")
+def terminalsec_status(u: core.User = Depends(current_user)):
+    """Atalho do TerminalSec no header (só admin): verde conectado, vermelho sem conexão."""
+    if not u.is_admin or not terminalsec.configured():
+        raise HTTPException(404, "TerminalSec não configurado")
+    return terminalsec.status()
 
 
 @app.get("/api/windows/apps")
@@ -1236,7 +1245,11 @@ def _for_user(ms: list[dict], u: core.User) -> list[dict]:
 
 @app.get("/api/machines")
 def list_machines(u: core.User = Depends(current_user)):
-    return {"machines": _for_user(_machines(), u), "panel": panel.ts_status() if u.is_admin else None,
+    ms = _for_user(_machines(), u)
+    tsec = terminalsec.agents_status()  # {} se não configurado/indisponível (cache de 30 s)
+    for m in ms:
+        m["terminalsec"] = tsec.get(m.get("hostname") or "")
+    return {"machines": ms, "panel": panel.ts_status() if u.is_admin else None,
             "hub": wg.hub_status() if wg.enabled() else None}
 
 

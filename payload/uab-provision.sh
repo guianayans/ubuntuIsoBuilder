@@ -46,6 +46,8 @@ UAB_COOLIFY="${UAB_COOLIFY:-no}"; UAB_COCKPIT="${UAB_COCKPIT:-no}"
 UAB_DDNS="${UAB_DDNS:-no}"; UAB_CLOUDFLARE="${UAB_CLOUDFLARE:-no}"; UAB_GPU="${UAB_GPU:-no}"
 UAB_VIRT="${UAB_VIRT:-no}"; UAB_VIRT_BRIDGE="${UAB_VIRT_BRIDGE:-no}"; UAB_TWEAKS="${UAB_TWEAKS:-no}"
 UAB_REMOTE_AGENT="${UAB_REMOTE_AGENT:-no}"; UAB_REMOTE_URL="${UAB_REMOTE_URL:-}"
+UAB_TSEC_AGENT="${UAB_TSEC_AGENT:-no}"; UAB_TSEC_URL="${UAB_TSEC_URL:-}"
+UAB_HOSTNAME="${UAB_HOSTNAME:-$(hostname -s)}"
 UAB_EXTRA_PACKAGES="${UAB_EXTRA_PACKAGES:-}"
 . /etc/os-release
 CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
@@ -132,6 +134,7 @@ plan_steps() {
   [ "$UAB_GPU" = yes ] && p="$p gpu_driver gpu_toolkit"
   [ "$UAB_DDNS" = yes ] && p="$p ddns_setup"
   [ "$UAB_REMOTE_AGENT" = yes ] && [ -n "$UAB_REMOTE_URL" ] && p="$p remote_agent"
+  [ "$UAB_TSEC_AGENT" = yes ] && [ -n "$UAB_TSEC_URL" ] && p="$p terminalsec_agent"
   [ "$UAB_CLOUDFLARE" = yes ] && p="$p cloudflare_setup"
   [ "$UAB_GPU" = yes ] && p="$p gpu_check"
   echo "$p"
@@ -496,6 +499,90 @@ remote_agent() {
   log "agente do Remoto instalado: o servidor aparece em $UAB_REMOTE_URL/"
 }
 
+# ------------------------------------------------------------------ TerminalSec
+# Instala o agente de monitoramento de segurança. O servidor aparece no TerminalSec como
+# "aguardando aprovação" até alguém aceitar no painel. Códigos do install.sh:
+#   0 ok · 3 token recusado (revogado: NÃO tenta de novo) · outro = rede/painel fora do ar
+TSEC_TOKEN_FILE=/etc/uab/tsec-token
+
+tsec_forget_token() { [ -f "$TSEC_TOKEN_FILE" ] && { shred -u -z "$TSEC_TOKEN_FILE" 2>/dev/null || rm -f "$TSEC_TOKEN_FILE"; }; return 0; }
+
+tsec_try_install() {
+  local tmp rc
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL --retry 3 --max-time 120 "$UAB_TSEC_URL/install.sh" -o "$tmp/install.sh" || ! grep -q TerminalSec "$tmp/install.sh"; then
+    rm -rf "$tmp"; log "não foi possível baixar o instalador do TerminalSec de $UAB_TSEC_URL"; return 2
+  fi
+  TSEC_TOKEN="$(head -n1 "$TSEC_TOKEN_FILE")" TSEC_NAME="$UAB_HOSTNAME" \
+    bash "$tmp/install.sh" --panel "$UAB_TSEC_URL" >>"$LOG" 2>&1
+  rc=$?
+  rm -rf "$tmp"
+  return $rc
+}
+
+tsec_schedule_retry() {  # painel fora do ar por muito tempo: tenta de hora em hora, fora do provisionamento
+  cat >/usr/local/sbin/uab-tsec-retry <<'SH'
+#!/bin/bash
+# Nova tentativa de instalar o agente do TerminalSec (criado pelo uab-provision). Se remove ao terminar.
+. /etc/uab/uab.conf
+F=/etc/uab/tsec-token
+done_() { shred -u -z "$F" 2>/dev/null || rm -f "$F"; systemctl disable --now uab-tsec-retry.timer >/dev/null 2>&1; exit 0; }
+systemctl is-active --quiet tsec-agent && done_
+[ -s "$F" ] || done_
+T="$(mktemp -d)"
+curl -fsSL --retry 3 --max-time 120 "$UAB_TSEC_URL/install.sh" -o "$T/install.sh" && grep -q TerminalSec "$T/install.sh" || { rm -rf "$T"; exit 0; }
+TSEC_TOKEN="$(head -n1 "$F")" TSEC_NAME="$UAB_HOSTNAME" bash "$T/install.sh" --panel "$UAB_TSEC_URL"
+rc=$?; rm -rf "$T"
+[ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] && done_
+exit 0
+SH
+  chmod 700 /usr/local/sbin/uab-tsec-retry
+  cat >/etc/systemd/system/uab-tsec-retry.service <<'UNIT'
+[Unit]
+Description=TerminalSec: nova tentativa de instalar o agente
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/uab-tsec-retry
+UNIT
+  cat >/etc/systemd/system/uab-tsec-retry.timer <<'UNIT'
+[Unit]
+Description=TerminalSec: tenta instalar o agente de hora em hora
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload && systemctl enable --now uab-tsec-retry.timer
+}
+
+terminalsec_agent() {
+  local rc tries
+  if systemctl is-active --quiet tsec-agent 2>/dev/null; then tsec_forget_token; return 0; fi
+  if [ ! -s "$TSEC_TOKEN_FILE" ]; then
+    log "token do TerminalSec ausente: servidor segue sem o agente (instale pelo painel do TerminalSec)"
+    status_set terminalsec "sem token"; return 0
+  fi
+  tsec_try_install; rc=$?
+  case "$rc" in
+    0) tsec_forget_token
+       log "agente do TerminalSec instalado: aprove o servidor em $UAB_TSEC_URL (aba servidores)"
+       status_set terminalsec "aguardando aprovação"; return 0 ;;
+    3) tsec_forget_token
+       log "o TerminalSec recusou o token (revogado ou inválido): servidor segue sem o agente — gere um comando no painel"
+       status_set terminalsec "token recusado"; return 0 ;;
+  esac
+  tries=$(( $(cat "$STATE/tsec.tries" 2>/dev/null || echo 0) + 1 ))
+  echo "$tries" >"$STATE/tsec.tries"
+  if [ "$tries" -ge 5 ]; then
+    tsec_schedule_retry
+    log "TerminalSec inacessível após $tries tentativas: o provisionamento segue; nova tentativa de hora em hora (uab-tsec-retry.timer)"
+    status_set terminalsec "tentando de hora em hora"; return 0
+  fi
+  log "TerminalSec inacessível (tentativa $tries de 5)"; return 1
+}
+
 network_ready() {
   local i
   for i in $(seq 1 30); do
@@ -743,6 +830,7 @@ if network_ready; then
   fi
   if [ "$UAB_DDNS" = yes ]; then step ddns_setup ddns_setup; fi
   if [ "$UAB_REMOTE_AGENT" = yes ] && [ -n "$UAB_REMOTE_URL" ]; then step remote_agent remote_agent; fi
+  if [ "$UAB_TSEC_AGENT" = yes ] && [ -n "$UAB_TSEC_URL" ]; then step terminalsec_agent terminalsec_agent; fi
   if [ "$UAB_CLOUDFLARE" = yes ]; then step cloudflare_setup cloudflare_setup; fi
   if [ "$UAB_GPU" = yes ] && [ -f "$STATE/gpu_driver.done" ]; then step gpu_check gpu_check; fi
 else

@@ -44,6 +44,10 @@ services:
       WG_STATE: /data/wg
       # Remoto (MeshCentral) em /remoto/: chave de login e grupo publicados pelo serviço "remoto"
       REMOTO_SHARED: /data/remoto
+      # TerminalSec: código de conexão (TerminalSec → Servidores → Integrações). Vazio = opção escondida.
+      TERMINALSEC_CODE: ${TERMINALSEC_CODE:-}
+      # dias de validade do token de cada ISO (depois disso a máquina ainda aparece, marcada "token vencido")
+      TERMINALSEC_TOKEN_DAYS: ${TERMINALSEC_TOKEN_DAYS:-30}
       COOKIE_SECURE: "true"
     volumes:
       # Banco, ISOs geradas e cache da ISO oficial do Ubuntu
