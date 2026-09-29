@@ -102,12 +102,17 @@ def status() -> dict:
         return {"configured": False}
     if _cache.get("conn") is not None and time.time() - _cache.get("conn_at", 0) < 30:
         return _cache["conn"]
+    # o painel fica em /painel ("/" é a página pública); versões antigas do TerminalSec não mandam "app"
+    url = _cache.get("app") or c["url"].rstrip("/")
     try:
-        ok = bool(_call(_base(), "/api/integration/ping", timeout=5).get("ok"))
+        r = _call(_base(), "/api/integration/ping", timeout=5)
+        ok = bool(r.get("ok"))
+        if str(r.get("app", "")).startswith(("https://", "http://")):
+            url = _cache["app"] = r["app"]
     except Exception:  # noqa: BLE001  (chave revogada, painel fora do ar, rede)
         _cache["base"] = None
         ok = False
-    _cache["conn"], _cache["conn_at"] = {"configured": True, "connected": ok, "url": c["url"].rstrip("/")}, time.time()
+    _cache["conn"], _cache["conn_at"] = {"configured": True, "connected": ok, "url": url}, time.time()
     return _cache["conn"]
 
 
