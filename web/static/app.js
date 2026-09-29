@@ -297,7 +297,7 @@ const W = {
   ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "coolify_cockpit", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
-  gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true,
+  gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
@@ -447,7 +447,7 @@ function stepHTML() {
       ${toggle("cloudflare", "Cloudflare Tunnel", "Publica serviços pela Cloudflare sem abrir portas no roteador. Os domínios você define no painel da Cloudflare.")}
       <div id="cfBox" class="${W.cloudflare ? "" : "hidden"}"><label class="f"><span>Token do túnel</span><input type="password" name="cloudflare_token" value="${esc(W.cloudflare_token)}" autocomplete="off">
         <small>Cloudflare Zero Trust → Networks → Tunnels → crie o túnel (tipo Cloudflared) e cole o token (o texto longo que começa com <code>eyJ</code>; pode colar o comando inteiro). Fica protegido no servidor.</small></label></div>
-      ${toggle("gpu", "GPU NVIDIA", "Detecta a placa na instalação e instala o driver recomendado. Com Docker/Coolify, os containers passam a usar a GPU (sem instalar outro Docker). Reinicia uma vez sozinho para carregar o driver.")}
+      ${toggle("gpu", "Placa de vídeo (qualquer marca)", "Descobre a placa na instalação e instala o que ela precisa: NVIDIA (driver + GPU no Docker/Coolify, reinicia uma vez sozinho), AMD e Intel (vídeo por hardware, Vulkan/OpenCL, /dev/dri liberado para os containers). Sem placa, não instala nada.")}
       ${toggle("virt", "Virtualização (KVM)", "libvirt/QEMU para rodar VMs" + (W.apps === "coolify_cockpit" ? ", gerenciadas pelo Cockpit (Máquinas virtuais)." : "."))}
       <div id="virtBox" class="${W.virt ? "" : "hidden"}">${toggle("virt_bridge", "Ponte de rede br0", "As VMs recebem IP do seu roteador, como os outros aparelhos da rede. Aplicada com proteção: se a rede não voltar, é desfeita sozinha.")}</div>
       ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto", "Instala o agente do Remoto (MeshCentral) no primeiro boot: o servidor aparece sozinho em Acesso remoto, com tela, terminal e arquivos pelo navegador. É a 2ª rota, além de Máquinas.") : ""}
@@ -466,7 +466,7 @@ function stepHTML() {
           ? "Usuário e senha (só rede local e Tailscale; fail2ban)" + (W.ssh_keys.trim() ? ` + ${W.ssh_keys.split("\n").filter(l => l.trim()).length} chave(s)` : "")
           : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
-        <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "GPU NVIDIA" : "",
+        <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "Placa de vídeo" : "",
           W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
@@ -1662,6 +1662,7 @@ function tabResumo() {
       ${kv("Ligado há", fmtUptime(m.uptime))}${kv("Acesso SSH", (m.ssh_auth === "password" ? "usuário e senha (rede local/Tailscale)" : "chave SSH") + " · porta " + (m.ssh_port_real || 22))}
       ${kv("CPU", `${r.cpus || "—"} núcleos · carga ${r.load1 ?? "—"}`)}${kv("Memória", `${gb(r.mem_available)} livres de ${gb(r.mem_total)}`)}
       ${kv("Disco /", `${gb(r.disk_free)} livres de ${gb(r.disk_total)}`)}${kv("Primeiro contato", fmtDate(m.first_seen))}
+      ${(m.steps || {}).gpu_info ? kv("Placa de vídeo", esc(m.steps.gpu_info)) : ""}
     </div>
     <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}${"ddclient" in sv ? svc("DDNS", sv.ddclient) : ""}${"cloudflared" in sv ? svc("Cloudflare Tunnel", sv.cloudflared) : ""}${"libvirtd" in sv ? svc("Virtualização", sv.libvirtd) : ""}${"nvidia" in sv ? svc("GPU NVIDIA", sv.nvidia) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}
       ${m.report.docker_containers != null ? `<span class="pill">${m.report.docker_containers} container(s)</span>` : ""}</div>

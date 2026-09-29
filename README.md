@@ -741,16 +741,16 @@ Tudo é instalado pelo provisionador no primeiro boot e aparece em **Máquinas**
 |---|---|---|
 | **DDNS No-IP** | `ddclient` mantém o nome apontando para o IP público (a cada 5 min) | hostname, usuário e senha do No-IP |
 | **Cloudflare Tunnel** | `cloudflared` do repositório oficial (chave conferida) conecta o túnel; os domínios ficam no painel da Cloudflare | token do túnel (pode colar o comando inteiro) |
-| **GPU NVIDIA** | detecta a placa, instala o driver recomendado (`ubuntu-drivers`), liga a GPU no Docker/Coolify **já instalado** (`nvidia-container-toolkit`) e reinicia **uma vez** sozinho para carregar o driver | nada |
+| **Placa de vídeo (qualquer marca)** — ligado por padrão | descobre as placas pelo fabricante (PCI `10de` NVIDIA, `1002` AMD, `8086` Intel) e instala o que cada uma precisa. **NVIDIA**: driver recomendado (`ubuntu-drivers`), GPU no Docker/Coolify **já instalado** (`nvidia-container-toolkit`) e reinicia **uma vez** sozinho. **AMD**: firmware, vídeo por hardware (VA-API), Vulkan, OpenCL e `rocm-smi`; o ROCm fica nos containers (só precisam de `/dev/kfd` e `/dev/dri`). **Intel**: firmware, QuickSync (`intel-media-va-driver-non-free`, `i965`) e OpenCL. Máquina híbrida recebe as duas. O usuário admin entra nos grupos `video`/`render`. O Resumo da máquina mostra o que ficou funcionando | nada |
 | **Virtualização (KVM)** | libvirt/QEMU, UEFI e TPM para VMs, pastas `default` e `isos`; usuário nos grupos `libvirt`/`kvm`; com Cockpit, VMs pelo navegador | nada |
 | **Ponte br0** | a placa principal entra na ponte `br0` (mesmo MAC e endereço), e as VMs recebem IP do seu roteador. Se a rede não voltar em 90 s, **desfaz sozinha** | nada |
 | **Ajustes de servidor** | `fsck` automático no boot (repara após queda de energia), console sem apagar e, com virtualização, IOMMU conforme a CPU | nada |
 
 Segredos: a senha do No-IP e o token vão na pasta protegida da ISO, são gravados só
 em `/etc/ddclient.conf` e `/etc/cloudflared/token.env` (0600, root; o token nunca vai
-na linha de comando) e a cópia de `/etc/uab` é apagada. Sem GPU NVIDIA na máquina, a
-etapa só registra "nenhuma GPU encontrada". Com **Secure Boot** ligado, o driver usa
-os módulos assinados do Ubuntu. Se não houver módulo assinado para a placa, desligue
+na linha de comando) e a cópia de `/etc/uab` é apagada. Sem placa de vídeo (VM,
+servidor sem vídeo), a etapa só registra "nenhuma placa de vídeo encontrada". Com
+**Secure Boot** ligado, o driver NVIDIA usa os módulos assinados do Ubuntu. Se não houver módulo assinado para a placa, desligue
 o Secure Boot na BIOS.
 
 Não incluídos, de propósito: os scripts de backup para um 2º disco (dependem de um

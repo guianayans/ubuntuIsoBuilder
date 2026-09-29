@@ -444,21 +444,66 @@ virt_bridge() {
   log "ponte br0 ativa ($(ip -4 -o addr show br0 | awk '{print $4; exit}'))"
 }
 
-# GPU NVIDIA: driver recomendado pelo Ubuntu para a placa detectada. O driver só
-# carrega após reiniciar; o provisionador reinicia uma vez sozinho (gpu_check).
-gpu_nvidia_present() { lspci -n 2>/dev/null | awk '$2 ~ /^03/ && $3 ~ /^10de:/' | grep -q .; }
+# Placa de vídeo (qualquer marca): detecta pelo fabricante no PCI e instala o que
+# cada uma precisa. Sem placa (VM, servidor sem vídeo), não instala nada.
+#   NVIDIA (10de): driver recomendado pelo Ubuntu (ubuntu-drivers) + GPU no Docker
+#                  (nvidia-container-toolkit); o driver só carrega reiniciando, então
+#                  o provisionador reinicia UMA vez sozinho (gpu_check).
+#   AMD (1002):    driver já vem no kernel (amdgpu); instala firmware, vídeo por
+#                  hardware (VA-API) e 3D/Vulkan (Mesa). ROCm não vai no host: os
+#                  containers ROCm já trazem o seu, só precisam de /dev/kfd e /dev/dri.
+#   Intel (8086):  driver no kernel (i915/xe); instala firmware, QuickSync (VA-API)
+#                  e OpenCL (containers com /dev/dri, ex.: Jellyfin, Frigate).
+# Máquina híbrida (ex.: Intel + NVIDIA) recebe as duas coisas.
+gpu_vendors() {  # fabricantes de placas de vídeo (classe PCI 03xx), sem repetir
+  lspci -n 2>/dev/null | awk '$2 ~ /^03/ { split($3, id, ":"); v = id[1]
+    if (v == "10de") n = "nvidia"; else if (v == "1002") n = "amd"; else if (v == "8086") n = "intel"; else next
+    if (!(n in seen)) { seen[n] = 1; printf "%s ", n } }'
+}
+gpu_has() { case " $(gpu_vendors) " in *" $1 "*) return 0 ;; esac; return 1; }
+gpu_nvidia_present() { gpu_has nvidia; }
+apt_has() { [ -n "$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/{print $2}' | grep -v none)" ]; }
+apt_install_avail() {  # instala só os pacotes que existem nesta versão do Ubuntu
+  local p ok=()
+  for p in "$@"; do apt_has "$p" && ok+=("$p"); done
+  [ ${#ok[@]} -eq 0 ] || apt_install "${ok[@]}"
+}
 gpu_driver() {
   command -v lspci >/dev/null 2>&1 || apt_install pciutils || return 1
-  if ! gpu_nvidia_present; then status_set gpu_info "nenhuma GPU NVIDIA encontrada"; log "GPU: nenhuma NVIDIA encontrada; nada a instalar"; return 0; fi
-  if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
-    log "Secure Boot ligado: usando módulos assinados do Ubuntu (se não houver, desligue o Secure Boot na BIOS)"
+  local vendors info=() drv
+  vendors="$(gpu_vendors)"
+  if [ -z "$vendors" ]; then status_set gpu_info "nenhuma placa de vídeo encontrada"; log "GPU: nenhuma placa encontrada; nada a instalar"; return 0; fi
+  log "GPU: encontrada(s): $vendors"
+  if gpu_has amd || gpu_has intel; then
+    apt_install_avail linux-firmware mesa-va-drivers mesa-vulkan-drivers vainfo clinfo || return 1
   fi
-  apt_install ubuntu-drivers-common || return 1
-  ubuntu-drivers install || return 1
-  dpkg -l 'nvidia-driver-*' 2>/dev/null | grep -q '^ii' || { log "nenhum driver NVIDIA foi instalado"; return 1; }
-  status_set gpu_info "$(dpkg -l 'nvidia-driver-*' | awk '/^ii/{print $2; exit}') instalado"
+  if gpu_has intel; then
+    # QuickSync: driver completo (multiverse) com recuo para o livre; i965 cobre as gerações antigas
+    if apt_has intel-media-va-driver-non-free; then apt_install intel-media-va-driver-non-free || return 1
+    else apt_install_avail intel-media-va-driver || return 1; fi
+    apt_install_avail i965-va-driver intel-opencl-icd || return 1
+    info+=("Intel: vídeo por hardware (QuickSync) e OpenCL")
+  fi
+  if gpu_has amd; then
+    apt_install_avail mesa-opencl-icd rocm-smi rocminfo || true  # extras: nunca travam a etapa
+    info+=("AMD: vídeo por hardware (VA-API) e Vulkan")
+  fi
+  if gpu_has nvidia; then
+    if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
+      log "Secure Boot ligado: usando módulos assinados do Ubuntu (se não houver, desligue o Secure Boot na BIOS)"
+    fi
+    apt_install ubuntu-drivers-common || return 1
+    ubuntu-drivers install || return 1
+    drv="$(dpkg -l 'nvidia-driver-*' 2>/dev/null | awk '/^ii/{print $2; exit}')"
+    [ -n "$drv" ] || { log "nenhum driver NVIDIA foi instalado"; return 1; }
+    info+=("NVIDIA: $drv")
+  fi
+  # containers e o usuário admin acessam /dev/dri (e /dev/kfd da AMD) pelos grupos video/render
+  getent group render >/dev/null || groupadd -r render
+  usermod -aG video,render "$USER_NAME" 2>/dev/null || true
+  status_set gpu_info "$(IFS=';'; echo "${info[*]}" | sed 's/;/ · /g')"
 }
-gpu_toolkit() {  # GPU nos containers: usa o Docker/Coolify já instalado (não instala Docker de novo)
+gpu_toolkit() {  # GPU NVIDIA nos containers: usa o Docker/Coolify já instalado (não instala Docker de novo)
   gpu_nvidia_present || return 0
   command -v docker >/dev/null 2>&1 || return 0
   command -v gpg >/dev/null 2>&1 || apt_install gnupg || return 1
@@ -470,11 +515,24 @@ gpu_toolkit() {  # GPU nos containers: usa o Docker/Coolify já instalado (não 
   nvidia-ctk runtime configure --runtime=docker >/dev/null || return 1
   systemctl restart docker
 }
-gpu_check() {
-  gpu_nvidia_present || return 0
-  if nvidia-smi -L >/dev/null 2>&1; then status_set gpu_info "$(nvidia-smi -L | head -n1)"; return 0; fi
-  log "driver NVIDIA instalado, mas ainda não carregado (precisa reiniciar)"
-  return 1
+gpu_check() {  # o que ficou funcionando de fato (vai para o Resumo da máquina)
+  local out=()
+  if gpu_has nvidia; then
+    nvidia-smi -L >/dev/null 2>&1 || { log "driver NVIDIA instalado, mas ainda não carregado (precisa reiniciar)"; return 1; }
+    out+=("$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -n1 | sed 's/, / · driver /')")
+  fi
+  if gpu_has amd || gpu_has intel; then
+    if ls /dev/dri/renderD* >/dev/null 2>&1; then
+      local va
+      va="$(vainfo --display drm 2>/dev/null | sed -n 's/.*Driver version: *//p' | head -n1)"
+      gpu_has amd && out+=("AMD $( [ -e /dev/kfd ] && echo "(ROCm pronto p/ containers)" ) ${va:+· $va}")
+      gpu_has intel && out+=("Intel ${va:+· $va}")
+    else
+      log "placa AMD/Intel detectada, mas sem /dev/dri (o driver do kernel não carregou; veja 'dmesg | grep -i drm')"
+      out+=("AMD/Intel sem /dev/dri: driver do kernel não carregou")
+    fi
+  fi
+  [ ${#out[@]} -eq 0 ] || status_set gpu_info "$(printf '%s\n' "${out[@]}" | sed 's/  */ /g; s/ *$//' | paste -sd'|' | sed 's/|/ · /g')"
 }
 
 # Agente do Remoto (MeshCentral do ISO Builder): o servidor aparece no grupo
