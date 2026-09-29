@@ -129,3 +129,11 @@
     location.href = "/";          // sem sessão, "/" é a página inicial
   };
 })();
+
+// Cartão "Qual sistema?": abas Linux (primeiro) / Windows
+document.querySelectorAll("button.os[data-os]").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll("button.os[data-os]").forEach(b => {
+    const on = b === btn; b.classList.toggle("sel", on); b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll(".ospanel").forEach(p => { p.hidden = p.dataset.panel !== btn.dataset.os; });
+}));
