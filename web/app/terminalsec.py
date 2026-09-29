@@ -102,8 +102,9 @@ def status() -> dict:
         return {"configured": False}
     if _cache.get("conn") is not None and time.time() - _cache.get("conn_at", 0) < 30:
         return _cache["conn"]
-    # o painel fica em /painel ("/" é a página pública); versões antigas do TerminalSec não mandam "app"
-    url = _cache.get("app") or c["url"].rstrip("/")
+    # o painel fica em /painel ("/" é a página pública de apresentação). O TerminalSec informa o
+    # endereço no ping ("app"); sem essa informação vale o padrão /painel, nunca a página pública.
+    url = _cache.get("app") or c["url"].rstrip("/") + "/painel"
     try:
         r = _call(_base(), "/api/integration/ping", timeout=5)
         ok = bool(r.get("ok"))
