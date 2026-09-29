@@ -269,6 +269,7 @@ type app struct {
 	isoHash   string
 	hashing   *progress
 	job       *progress
+	install   *progress // "formatar este computador (sem pendrive)"
 	busy      bool
 	lastSeen  time.Time
 	port      int
@@ -299,6 +300,10 @@ func (a *app) state() map[string]any {
 		st["job"] = a.job.get()
 	}
 	st["reboot"] = osRebootInfo()
+	st["local_install"] = localInstallInfo(a.bundle, a.isoPath, a.unattend != nil, a.winInfo != nil)
+	if a.install != nil {
+		st["install"] = a.install.get()
+	}
 	if a.stick != nil {
 		st["stick"] = a.stick
 	}
@@ -606,7 +611,7 @@ func (a *app) handler() http.Handler {
 			writeJSON(w, 409, map[string]string{"error": "gravação em andamento"})
 			return
 		}
-		a.job = nil
+		a.job, a.install = nil, nil
 		writeJSON(w, 200, map[string]string{"ok": "1"})
 	})
 	mux.HandleFunc(prefix+"/api/fetch", func(w http.ResponseWriter, r *http.Request) {
@@ -634,6 +639,37 @@ func (a *app) handler() http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, a.state())
+	})
+	mux.HandleFunc(prefix+"/api/install", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Confirm string `json:"confirm"`
+		}
+		if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil || req.Confirm != "FORMATAR" {
+			writeJSON(w, 400, map[string]string{"error": "digite FORMATAR para confirmar"})
+			return
+		}
+		a.mu.Lock()
+		li := localInstallInfo(a.bundle, a.isoPath, a.unattend != nil, a.winInfo != nil)
+		if !li.Available {
+			a.mu.Unlock()
+			writeJSON(w, 400, map[string]string{"error": li.Reason})
+			return
+		}
+		if a.busy {
+			a.mu.Unlock()
+			writeJSON(w, 409, map[string]string{"error": "já há uma operação em andamento"})
+			return
+		}
+		p := &progress{}
+		a.install, a.busy = p, true
+		isoPath, unattend := a.isoPath, a.unattendPath
+		isoURL := a.panelISOURL()
+		a.mu.Unlock()
+		go func() {
+			defer func() { a.mu.Lock(); a.busy = false; a.mu.Unlock() }()
+			osInstallLocal(a, isoPath, isoURL, unattend, p)
+		}()
+		writeJSON(w, 200, map[string]string{"ok": "1"})
 	})
 	mux.HandleFunc(prefix+"/api/reboot", a.rebootHandler)
 	mux.HandleFunc(prefix+"/api/ventoy", a.ventoyInfoHandler)

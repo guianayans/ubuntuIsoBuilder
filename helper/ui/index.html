@@ -68,6 +68,8 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
     <div id="hash" class="muted" style="margin-top:10px"></div>
   </section>
 
+  <section class="card hidden" id="sLocal" aria-live="polite"></section>
+
   <section class="card" id="s2">
     <div class="step"><span class="num">2</span><h2>Escolha o pendrive</h2></div>
     <div id="disks"></div>
@@ -166,6 +168,41 @@ function renderAgent(){
   $('#agNo').onclick = async () => { try { await api('agent', {action:'decline'}); } catch (e) { } poll(); };
 }
 
+// "Formatar este computador (sem pendrive)": aparece no gravador personalizado.
+function renderLocal(){
+  const box=document.getElementById('sLocal');
+  const li=S.local_install||{}, P=S.install;
+  if(!li.kind){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const title = li.kind==='windows' ? 'Formatar este computador (Windows, sem pendrive)' : 'Formatar este computador (sem pendrive)';
+  const head = `<div class="step"><span class="num">!</span><h2>${title}</h2></div>`;
+  if(P){
+    let body;
+    if(P.phase==='error') body=`<div class="err">✖ ${esc(P.message)}</div><div class="row"><button class="btn" id="liAgain">Tentar de novo</button></div>`;
+    else if(P.phase==='done'||P.phase==='rebooting') body=`<div class="ok" style="font-size:18px">↻ ${esc(P.message||'Reiniciando…')}</div><p class="muted small">Não desligue: o instalador começa sozinho e o computador volta a aparecer no painel quando terminar.</p>`;
+    else body=`<div>${esc(P.message||'Preparando…')}</div><p class="muted small">Não desligue.</p>`;
+    box.innerHTML=head+`<div id="liBox">${body}</div>`;
+    const ag=document.getElementById('liAgain'); if(ag) ag.onclick=async()=>{ try{ await api('reset',{}); }catch(e){} poll(); };
+    return;
+  }
+  if(!li.available){ box.innerHTML=head+`<p class="muted">${esc(li.reason||'indisponível')}</p>`; return; }
+  if(document.getElementById('liGo')) return; // já desenhado: não apaga o que foi digitado
+  box.innerHTML=head+`
+    <p class="muted">Instala ${li.kind==='windows'?'o Windows':'o Ubuntu'} <b>neste computador</b>, sem pendrive: o instalador é carregado na memória e o disco é apagado. Funciona em UEFI e em BIOS antiga. Precisa de cerca de ${li.need_ram_gb} GB de memória (RAM).</p>
+    <div class="err" style="border:0;padding:0;margin:0 0 10px"><b>Isto apaga TODO o disco deste computador</b> — arquivos, programas e o sistema atual —, sem volta.</div>
+    <label class="chk"><span>Para confirmar, digite <b>FORMATAR</b>:</span></label>
+    <input id="liTxt" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="FORMATAR" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit">
+    <div class="row"><button class="btn danger" id="liGo" disabled>Formatar este computador agora</button></div>
+    <div class="err" id="liErr"></div>`;
+  const t=document.getElementById('liTxt'), g=document.getElementById('liGo');
+  t.oninput=()=>{ g.disabled = t.value.trim().toUpperCase()!=='FORMATAR'; };
+  g.onclick=async()=>{
+    g.disabled=true;
+    try{ await api('install',{confirm:t.value.trim().toUpperCase()}); poll(); }
+    catch(e){ document.getElementById('liErr').textContent='✖ '+e.message; g.disabled=false; }
+  };
+}
+
 function render(){
   if(S.stick) return renderStick();
   renderAgent();
@@ -206,6 +243,8 @@ function render(){
   $('#hash').innerHTML = h;
   const isoOk = !!S.iso_sha256;
   stepClass('#s1', isoOk?'done':'active');
+
+  renderLocal();
 
   // 2. Discos
   const disks = S.disks || [];
