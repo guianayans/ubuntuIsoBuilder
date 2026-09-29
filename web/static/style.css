@@ -184,9 +184,16 @@ tr.clickable{cursor:pointer} tr.clickable:hover td{background:var(--soft)}
 
 /* acesso remoto embutido */
 .ovl-wide{width:min(1280px,100%)}
-.rv-body{display:flex;flex-direction:column;padding:12px}
+.rv-body{display:flex;flex-direction:column;padding:12px;overflow:hidden}
 .rv-frame{flex:1;height:auto;min-height:0}
-.ovl-b .rv-frame{height:calc(100dvh - 190px)}
+.rv-body .rv-frame{flex:1 1 auto;height:auto;min-height:0}
+.rframe:fullscreen{border:0;border-radius:0}
+.ovl-grip{position:absolute;left:-5px;top:0;bottom:0;width:10px;cursor:ew-resize;z-index:2;touch-action:none}
+.ovl-grip::after{content:"";position:absolute;left:4px;top:50%;height:48px;margin-top:-24px;width:3px;border-radius:3px;background:var(--line);transition:background .15s}
+.ovl-grip:hover::after,.ovl-dragging .ovl-grip::after{background:var(--accent)}
+.ovl-dragging,.ovl-dragging *{user-select:none;cursor:ew-resize!important}
+.ovl-dragging iframe{pointer-events:none}
+@media (max-width:700px){.ovl-grip{display:none}}
 .rsearch{max-width:420px}
 main:has(.rframe){max-width:1400px}
 .rframe{position:relative;height:calc(100dvh - 190px);min-height:420px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card)}
