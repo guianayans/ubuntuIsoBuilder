@@ -53,6 +53,11 @@ func osRebootInfo() rebootInfo {
 		return rebootInfo{Available: true, How: "O computador reinicia.",
 			Note: "Ao ligar, aperte a tecla do menu de boot (F12, F11, F8 ou Esc) e escolha o pendrive."}
 	}
+	if t, _ := findInstallStick(); t != nil {
+		return rebootInfo{Available: true,
+			How:  "O computador reinicia direto pelo pendrive (só no próximo boot).",
+			Note: "Se mesmo assim o Windows abrir de novo, a BIOS bloqueia boot por USB: reinicie apertando a tecla do menu de boot (F12, F11, F8 ou Esc) e escolha o pendrive."}
+	}
 	if usbFirmwareEntry() != "" {
 		return rebootInfo{Available: true,
 			How:  "O computador reinicia direto pelo pendrive (só no próximo boot).",
@@ -67,6 +72,14 @@ func osRebootToUSB() error {
 	if biosFirmware() {
 		return hidden("shutdown.exe", "/r", "/t", "5", "/c", "isoBuilder: reiniciando para instalar pelo pendrive").Run()
 	}
+	// 1º: entrada própria apontando para a partição exata do pendrive gravado
+	if t, _ := findInstallStick(); t != nil {
+		if _, err := armBootNext(t); err == nil {
+			osBeforeInstallReboot()
+			return osRebootNow()
+		}
+	}
+	osBeforeInstallReboot()
 	if id := usbFirmwareEntry(); id != "" {
 		// próximo boot (uma vez só) direto pela entrada USB da placa-mãe
 		if hidden("bcdedit.exe", "/set", "{fwbootmgr}", "bootsequence", id).Run() == nil {

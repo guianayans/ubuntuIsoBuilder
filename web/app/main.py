@@ -57,8 +57,10 @@ def _startup() -> None:
 async def security(request: Request, call_next):
     # Mutações só com JSON da própria origem (proteção CSRF, junto com SameSite=Strict).
     # Exceções: chamadas de programas autenticadas por token (sem cookie), não pelo navegador:
-    # relatório das máquinas (/api/agent/…) e aviso do gravador sobre o agente (/t/<token>/agent).
-    machine_call = request.url.path.startswith("/api/agent/") or bool(re.fullmatch(r"/t/[A-Za-z0-9_-]{20,100}/agent", request.url.path))
+    # relatório das máquinas (/api/agent/…), aviso do gravador sobre o agente (/t/<token>/agent)
+    # e andamento do "Formatar esta máquina" (/f/<token>/report).
+    machine_call = request.url.path.startswith("/api/agent/") or bool(
+        re.fullmatch(r"/t/[A-Za-z0-9_-]{20,100}/agent|/f/[A-Za-z0-9_-]{20,100}/report", request.url.path))
     if request.method in ("POST", "PUT", "PATCH", "DELETE") and not machine_call:
         if request.headers.get("x-requested-with") != "uab":
             return JSONResponse({"error": "requisição inválida"}, 403)
@@ -859,6 +861,220 @@ def download_helper(platform: str, _: core.User = Depends(current_user)):
     if not os.path.exists(p):
         raise HTTPException(404, "gravador não compilado nesta instalação")
     return FileResponse(p, media_type=mt, filename=name)
+
+
+# ------------------------------------------------------------------ formatar à distância
+# "Formatar esta máquina": pelo agente do Remoto (roda como SYSTEM/root), o PC baixa o
+# isoBuilder deste painel (hash conferido), fica esperando alguém conectar o pendrive
+# gravado pelo isoBuilder, avisa aqui e reinicia por ele (entrada UEFI própria + BootNext).
+FORMAT_WAIT_H = 24
+FORMAT_LIVE = ("enviado", "aguardando", "encontrado")
+FORMAT_FROM_PC = {"aguardando", "encontrado", "reiniciando", "erro", "bios", "expirou", "cancelado"}
+_sha_cache: dict[str, tuple[float, str]] = {}
+
+
+def _file_sha256(path: str) -> str:
+    import hashlib
+    mt = os.path.getmtime(path)
+    hit = _sha_cache.get(path)
+    if hit and hit[0] == mt:
+        return hit[1]
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    _sha_cache[path] = (mt, h.hexdigest())
+    return h.hexdigest()
+
+
+def _format_platform(osdesc: str) -> str:
+    o = osdesc.lower()
+    if "windows" in o:
+        return "windows"
+    if "mac" in o or "darwin" in o:
+        return "macos"
+    return "linux"
+
+
+def _format_tools(platform: str) -> dict[str, str]:
+    """Arquitetura -> nome do isoBuilder usado pelo PC (só os que existem compilados)."""
+    names = ({"x64": HELPERS["windows"][0], "arm64": HELPERS["windows-arm64"][0]} if platform == "windows"
+             else {"x64": HELPERS["linux"][0]})
+    return {a: n for a, n in names.items() if os.path.exists(os.path.join(HELPER_DIR, n))}
+
+
+def _format_script(platform: str, token: str) -> tuple[int, str]:
+    """Comandos que o agente roda no PC (2 = PowerShell, 3 = sh), sem nenhum segredo além
+    do token deste pedido (que só serve para baixar o isoBuilder e avisar o andamento)."""
+    base = f"{PUBLIC_URL}/f/{token}"
+    rep = f"{base}/report"
+    tools = _format_tools(platform)
+    sums = {a: _file_sha256(os.path.join(HELPER_DIR, n)) for a, n in tools.items()}
+    args = f'--boot-usb --wait {FORMAT_WAIT_H}h --report "{rep}"'
+    if platform == "windows":
+        hashes = "; ".join(f"{a}='{s}'" for a, s in sums.items())
+        steps = [
+            "$ErrorActionPreference='Stop'",
+            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12",
+            "$a=if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'arm64'}else{'x64'}",
+            f"$h=@{{{hashes}}}",
+            "if(-not $h[$a]){throw ('sem isoBuilder para '+$a)}",
+            "$d=Join-Path $env:ProgramData 'isoBuilder'",
+            "New-Item -ItemType Directory -Force -Path $d | Out-Null",
+            "$f=Join-Path $d 'isoBuilder-format.exe'",
+            "Stop-ScheduledTask -TaskName 'isoBuilderFormat' -ErrorAction SilentlyContinue",
+            f"Invoke-WebRequest -UseBasicParsing -Uri ('{base}/tool?arch='+$a) -OutFile $f",
+            "if((Get-FileHash -Algorithm SHA256 $f).Hash -ne $h[$a]){Remove-Item $f -Force; throw 'o arquivo baixado não confere'}",
+            f"$act=New-ScheduledTaskAction -Execute $f -Argument '{args}'",
+            "$pr=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
+            f"$st=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours {FORMAT_WAIT_H + 1})",
+            "Register-ScheduledTask -TaskName 'isoBuilderFormat' -Action $act -Principal $pr -Settings $st -Force | Out-Null",
+            "Start-ScheduledTask -TaskName 'isoBuilderFormat'",
+        ]
+        # uma linha só: o PowerShell lê os comandos pela entrada padrão, linha a linha
+        fail = (f"Invoke-RestMethod -Method Post -Uri '{rep}' -ContentType 'application/json; charset=utf-8' "
+                "-Body ([Text.Encoding]::UTF8.GetBytes((@{state='erro';message=('não consegui preparar o PC: '+"
+                "$_.Exception.Message)}|ConvertTo-Json)))")
+        return 2, "try { " + "; ".join(steps) + " } catch { " + fail + " }\n"
+    sh = f"""R='{rep}'
+fail() {{ curl -fsS -m 20 -X POST -H 'Content-Type: application/json' -d "{{\\"state\\":\\"erro\\",\\"message\\":\\"não consegui preparar o PC: $1\\"}}" "$R" >/dev/null 2>&1; exit 1; }}
+[ "$(uname -m)" = x86_64 ] || fail "só PCs x86_64 (64 bits)"
+command -v curl >/dev/null 2>&1 || fail "curl não instalado"
+d=/var/lib/isobuilder; mkdir -p "$d"; f="$d/isobuilder-format"
+curl -fsSL -m 900 -o "$f.tmp" '{base}/tool?arch=x64' || fail "não consegui baixar o isoBuilder"
+echo "{sums.get('x64', '')}  $f.tmp" | sha256sum -c --status || {{ rm -f "$f.tmp"; fail "o arquivo baixado não confere"; }}
+mv -f "$f.tmp" "$f"; chmod 700 "$f"
+systemctl stop isobuilder-format >/dev/null 2>&1; systemctl reset-failed isobuilder-format >/dev/null 2>&1
+systemd-run --unit=isobuilder-format --collect "$f" {args} >/dev/null 2>&1 || {{ setsid "$f" {args} >/dev/null 2>&1 </dev/null & }}
+"""
+    return 3, sh
+
+
+def _format_row(r) -> dict:
+    state, msg = r["state"], r["message"]
+    t = core.now()
+    if state in FORMAT_LIVE and t > r["expires_at"]:
+        state, msg = "expirou", "Ninguém conectou o pendrive a tempo."
+    elif state == "enviado" and t - r["updated_at"] > 180:
+        msg = ("O PC ainda não respondeu. Ele pode estar sem internet, ou o antivírus bloqueou o isoBuilder. "
+               "Abra o terminal do PC no Remoto para conferir.")
+    return {"id": r["id"], "node": r["node"], "name": r["name"], "platform": r["platform"], "state": state,
+            "message": msg, "stick": r["stick"], "created_at": r["created_at"], "updated_at": r["updated_at"],
+            "expires_at": r["expires_at"], "live": state in FORMAT_LIVE}
+
+
+@app.get("/api/admin/format")
+def format_list(_: core.User = Depends(admin_user)):
+    with core.db() as con:
+        rows = con.execute("SELECT * FROM format_jobs WHERE created_at>? ORDER BY created_at DESC LIMIT 50",
+                           (core.now() - 3 * 86400,)).fetchall()
+    return {"jobs": [_format_row(r) for r in rows], "available": REMOTE_LOCAL and remoto.available()}
+
+
+@app.post("/api/admin/format")
+async def format_start(request: Request, u: core.User = Depends(admin_user)):
+    _remoto_ready()
+    d = await body(request)
+    node = str(d.get("node") or "")
+    if not re.fullmatch(r"[A-Za-z0-9@$_\-]{20,120}", node):
+        raise core.Invalid("Aparelho inválido.")
+    try:
+        dev = next((x for x in await remoto.devices() if x["id"] == node), None)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"O Remoto não respondeu ({type(exc).__name__}).")
+    if not dev:
+        raise core.Invalid("Esse PC não está no Remoto.")
+    if str(d.get("confirm") or "").strip().lower() != dev["name"].strip().lower():
+        raise core.Invalid(f"Digite o nome do PC ({dev['name']}) para confirmar.")
+    if not dev["online"]:
+        raise core.Invalid("O PC está desligado ou sem internet: o agente do Remoto precisa estar conectado.")
+    platform = _format_platform(dev["os"])
+    if platform == "macos":
+        raise core.Invalid("Mac não permite escolher o próximo boot à distância.")
+    if not _format_tools(platform):
+        raise core.Invalid("O isoBuilder deste sistema não está compilado neste painel.")
+    token = secrets.token_urlsafe(32)
+    jid = secrets.token_hex(8)
+    t = core.now()
+    with core.db() as con:  # um pedido por PC: o novo substitui o anterior
+        con.execute("UPDATE format_jobs SET cancel=1, state='cancelado', message='Substituído por um novo pedido.', "
+                    "updated_at=? WHERE node=? AND state IN ('enviado','aguardando','encontrado')", (t, node))
+        con.execute("INSERT INTO format_jobs (id,token_hash,node,name,platform,state,message,created_by,created_at,"
+                    "updated_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (jid, core.token_hash(token), node, dev["name"][:80], platform, "enviado",
+                     "Preparando o PC (baixando o isoBuilder)…", u.email, t, t, t + (FORMAT_WAIT_H + 1) * 3600))
+    ctype, cmds = _format_script(platform, token)
+    try:
+        res = await remoto.run_commands(node, ctype, cmds)
+    except Exception as exc:  # noqa: BLE001
+        res = f"o Remoto não respondeu ({type(exc).__name__})"
+    if res != "OK":
+        with core.db() as con:
+            con.execute("UPDATE format_jobs SET state='erro', message=?, updated_at=? WHERE id=?",
+                        (f"O Remoto não conseguiu enviar o comando: {res}", core.now(), jid))
+    with core.db() as con:
+        return {"job": _format_row(con.execute("SELECT * FROM format_jobs WHERE id=?", (jid,)).fetchone())}
+
+
+@app.post("/api/admin/format/{jid}/cancel")
+def format_cancel(jid: str, _: core.User = Depends(admin_user)):
+    with core.db() as con:
+        n = con.execute("UPDATE format_jobs SET cancel=1, state='cancelado', message='Cancelado pelo painel.', "
+                        "updated_at=? WHERE id=? AND state IN ('enviado','aguardando','encontrado')",
+                        (core.now(), jid)).rowcount
+    if not n:
+        raise core.Invalid("Esse pedido já terminou.")
+    return {"ok": True}
+
+
+def _format_job(token: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,100}", token):
+        raise HTTPException(404, "pedido inválido")
+    with core.db() as con:
+        r = con.execute("SELECT * FROM format_jobs WHERE token_hash=?", (core.token_hash(token),)).fetchone()
+    if not r or core.now() > r["expires_at"]:
+        raise HTTPException(410, "pedido expirado ou inválido")
+    return r
+
+
+@app.get("/f/{token}/tool")
+def format_tool(token: str, arch: str = "x64"):
+    """isoBuilder para o PC do pedido (só enquanto o pedido está valendo)."""
+    r = _format_job(token)
+    if r["cancel"] or r["state"] not in FORMAT_LIVE:
+        raise HTTPException(410, "pedido encerrado")
+    name = _format_tools(r["platform"]).get(arch)
+    if not name:
+        raise HTTPException(404, "sem isoBuilder para esse sistema")
+    return FileResponse(os.path.join(HELPER_DIR, name), media_type="application/octet-stream", filename=name,
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/f/{token}/report")
+async def format_report(token: str, request: Request):
+    """O isoBuilder no PC avisa o andamento; a resposta diz se o técnico cancelou."""
+    r = _format_job(token)
+    lk = "fmt:" + r["id"]
+    if time.time() - _agent_last.get(lk, 0) < 1:
+        raise HTTPException(429, "devagar")
+    _agent_last[lk] = time.time()
+    try:
+        d = json.loads((await request.body())[:4096])
+        assert isinstance(d, dict)
+    except (ValueError, AssertionError):
+        raise HTTPException(400, "JSON inválido")
+    state = str(d.get("state") or "")
+    if state not in FORMAT_FROM_PC:
+        raise HTTPException(400, "estado inválido")
+    if r["cancel"]:
+        return {"cancel": True}
+    clean = lambda v, n: panel.SAFE.sub("", str(v or ""))[:n]  # noqa: E731
+    with core.db() as con:
+        con.execute("UPDATE format_jobs SET state=?, message=?, stick=CASE WHEN ?<>'' THEN ? ELSE stick END, "
+                    "updated_at=? WHERE id=? AND cancel=0",
+                    (state, clean(d.get("message"), 400), clean(d.get("stick"), 160), clean(d.get("stick"), 160),
+                     core.now(), r["id"]))
+    return {"cancel": False}
 
 
 BUNDLE_MAGIC = b"UABCFG01"

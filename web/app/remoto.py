@@ -112,6 +112,17 @@ async def invite_link(hours: int = 24) -> str:
     return url
 
 
+async def run_commands(node: str, ctype: int, cmds: str) -> str:
+    """Roda comandos no aparelho pelo agente (como SYSTEM/root). ctype: 2 = PowerShell
+    (Windows), 3 = sh (Linux). Devolve "OK" quando o agente recebeu."""
+    if not re.fullmatch(r"[A-Za-z0-9@$_\-]{20,120}", node) or ctype not in (2, 3):
+        raise ValueError("aparelho ou tipo de comando inválidos")
+    rid = "uab-" + os.urandom(6).hex()
+    r = await _call([{"action": "runcommands", "nodeids": [node], "type": ctype, "cmds": cmds,
+                      "runAsUser": 0, "reply": False, "responseid": rid}], {"runcommands"}, timeout=15)
+    return str(r["runcommands"].get("result") or "")
+
+
 def view_url(node: str, mode: str, user: str = "admin") -> str:
     """Só o visualizador (tela/terminal/arquivos) do aparelho, já logado e sem a interface do MeshCentral."""
     if not re.fullmatch(r"[A-Za-z0-9@$_\-]{20,120}", node) or mode not in MODES:

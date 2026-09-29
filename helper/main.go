@@ -757,6 +757,9 @@ func main() {
 	agentInstall := flag.Bool("agent-install", false, "instala o agente do Remoto (modo trabalhador privilegiado)")
 	agentURL := flag.String("agent-url", "", "endereço do Remoto (com --agent-install)")
 	agentMesh := flag.String("agent-meshid", "", "grupo do Remoto (com --agent-install)")
+	bootUSB := flag.Bool("boot-usb", false, "espera o pendrive do isoBuilder e reinicia por ele (botão \"Formatar esta máquina\" do painel)")
+	bootWait := flag.Duration("wait", 24*time.Hour, "com --boot-usb: quanto tempo esperar o pendrive")
+	bootReport := flag.String("report", "", "com --boot-usb: endereço do painel para avisar o andamento")
 	flag.Parse()
 
 	if *showVer {
@@ -783,6 +786,13 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if *bootUSB {
+		if !validReportURL(*bootReport) {
+			fmt.Fprintln(os.Stderr, "--report precisa ser https://")
+			os.Exit(2)
+		}
+		os.Exit(runBootUSB(*bootWait, *bootReport))
 	}
 	if *write {
 		p := &progress{file: *status}

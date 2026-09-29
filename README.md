@@ -803,8 +803,34 @@ Duas formas de colocar o agente do **Remoto** no PC do cliente antes de formatar
   "recusou"/erro) e o menu ⋯ ganha "Abrir tela do PC do cliente". O agente só é aceito se vier do
   mesmo painel que gerou o gravador; o gravador baixado pelo admin nunca leva o agente.
 
-Com o PC conectado, você grava o pendrive e manda reiniciar pelo acesso remoto: o cliente só
+Com o PC conectado, você grava o pendrive e usa **"Formatar esta máquina…"**: o cliente só
 instala o agente (um clique) e espeta o pendrive.
+
+### "Formatar esta máquina" (próximo boot pelo pendrive, sem ninguém apertar F12)
+
+No menu ⋯ de **Máquinas**, do **Remoto** ("Formatar este PC…") e da conta em **Acessos**
+("Formatar o PC do cliente…"), só para o admin e com o agente do Remoto online. Pede para digitar o
+nome do PC e então:
+
+1. O painel manda, pelo agente do Remoto (roda como SYSTEM/root), um comando curto que baixa o
+   isoBuilder **deste painel** (`/f/<token>/tool`, SHA256 conferido no PC) e o deixa rodando em
+   `--boot-usb`: tarefa agendada `isoBuilderFormat` (SYSTEM) no Windows, `systemd-run` no Linux.
+2. O PC **espera até 24 h** alguém conectar um pendrive gravado pelo isoBuilder. Ele reconhece o
+   pendrive lendo o disco direto (sem montar): a marca `uab-stick.json` na partição INSTALAR
+   (Ubuntu, GPT) ou em `INSTALAR/` (Windows, MBR), e confere o `\EFI\BOOT\BOOTX64.EFI`.
+3. Ao reconhecer, avisa o painel (`POST /f/<token>/report`), dá **30 s para cancelar**, cria a
+   entrada UEFI **própria** `isoBuilder - Instalar` (Boot1B00–Boot1B0F) apontando para a partição
+   exata do pendrive (GUID da partição na GPT ou assinatura do disco na MBR), marca **BootNext**
+   (vale só para o próximo boot), suspende o BitLocker por um reinício e reinicia.
+
+O andamento aparece no cartão **Formatações à distância** (Máquinas e Remoto): preparando →
+esperando o pendrive → pendrive conectado → reiniciando, com **Cancelar** até o reinício. Um pedido
+novo para o mesmo PC substitui o anterior.
+
+Limites: precisa de **UEFI** (BIOS antiga/Legacy não deixa escolher o próximo boot por software, e o
+painel avisa "BIOS antiga"); com boot por USB bloqueado ou senha na BIOS, o PC volta ao sistema
+atual; Mac não é aceito. O botão **Reiniciar agora** do gravador (quem grava no próprio PC) usa a
+mesma entrada própria antes de cair no método antigo.
 
 ## Sócios (acesso a máquinas escolhidas)
 

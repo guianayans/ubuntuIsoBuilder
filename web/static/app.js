@@ -1117,7 +1117,7 @@ async function loadUsers() {
         ? `<button class="btn sm primary" data-a="perms" data-id="${u.id}" data-email="${esc(u.email)}">Permissões</button>`
         : u.mode === "download" ? `<button class="btn sm ${u.build_ok ? "" : "primary"}" data-a="relink" data-id="${u.id}">${u.build_ok ? "Trocar ISO" : "Vincular ISO"}</button>` : ""}
       ${kebab(`${u.mode === "partner" ? "" : `<button data-a="topartner" data-id="${u.id}" data-email="${esc(u.email)}">Tornar sócio</button>`}
-        ${u.mode === "download" && u.remote_agent && u.agent && u.agent.state === "ok" ? `<button data-a="agentopen" data-host="${esc(u.agent.host)}">Abrir tela do PC do cliente</button>` : ""}
+        ${u.mode === "download" && u.remote_agent && u.agent && u.agent.state === "ok" ? `<button data-a="agentopen" data-host="${esc(u.agent.host)}">Abrir tela do PC do cliente</button><button class="danger" data-a="agentformat" data-host="${esc(u.agent.host)}">Formatar o PC do cliente…</button>` : ""}
         ${u.mode === "download" && (agentOK() || u.remote_agent) ? `<button data-a="agent" data-id="${u.id}" data-on="${u.remote_agent ? 0 : 1}">${u.remote_agent ? "Desligar" : "Ligar"} acesso remoto no gravador</button>` : ""}
         <button data-a="reset" data-id="${u.id}">Nova senha</button>
         ${u.mode === "partner" ? "" : `<button data-a="extend" data-id="${u.id}">Mais 24 horas de validade</button>`}
@@ -1133,6 +1133,7 @@ async function loadUsers() {
         return d ? openRemoteView(d, "desktop") : toast("Esse PC ainda não apareceu no Remoto (ou está desligado).");
       } catch (e) { return toast(e.message); }
     }
+    if (a === "agentformat") return formatDialog(btn.dataset.host || "");
     if (a === "agent") {
       try {
         await api(`/api/admin/users/${id}/agent`, { method: "POST", body: { enabled: btn.dataset.on === "1" } });
@@ -1325,8 +1326,9 @@ async function renderMachines() {
   view.innerHTML = `<div class="spread"><div><h1>Máquinas</h1>
     <p class="muted">Servidores instalados com ISOs deste painel. Eles se reportam no primeiro boot e a cada 10 minutos.</p></div>
     <button class="btn sm" id="mref">Atualizar</button></div>
-    <div id="pbanner"></div><div id="ml" class="card">Carregando…</div>`;
+    <div id="pbanner"></div><div id="fmtBox"></div><div id="ml" class="card">Carregando…</div>`;
   $("#mref").onclick = loadMachines;
+  fmtLoad();
   await loadMachines();
   timer = setInterval(() => { if (!document.hidden && !$("#ovl")) loadMachines(); }, 20000);
 }
@@ -1358,7 +1360,7 @@ async function loadMachines() {
       <td class="small" data-label="Rede local">${esc((m.local_ips[0] || "—").split(" ").pop())}</td>
       <td data-label="Provisionamento">${m.provisioned.startsWith("ok") ? `<span class="pill done">concluído</span>` : `<span class="pill running">${esc(m.provisioned || "em andamento")}</span>`}</td>
       <td class="small" data-label="Visto">${fmtAgo(m.last_seen)}</td>
-      <td class="rt-actions"><button class="btn sm primary" data-open="${m.id}">Abrir</button></td></tr>`).join("")}</table></div>`
+      <td class="rt-actions"><div class="row"><button class="btn sm primary" data-open="${m.id}">Abrir</button>${fmtReady() ? kebab(`<button class="danger" data-fmt="${esc(m.hostname)}">Formatar esta máquina…</button>`) : ""}</div></td></tr>`).join("")}</table></div>`
     : `<p class="muted">Nenhuma máquina ativa. As arquivadas estão logo abaixo.</p>`)
     + (arch.length ? `<details class="archived" id="archBox" ${ARCH_OPEN ? "open" : ""}><summary>Arquivadas (${arch.length})</summary>
       <p class="muted small">Fora da lista principal. Se ligarem, os relatórios continuam chegando, mas terminal, VPN (túnel pausado) e acesso de sócios ficam bloqueados até restaurar.</p>
@@ -1371,6 +1373,7 @@ async function loadMachines() {
           ${kebab(`<button class="danger" data-forget="${m.id}">Esquecer de vez</button>`)}</div></td></tr>`).join("")}</table></div></details>` : "");
   $$("#ml [data-m]").forEach(tr => tr.onclick = e => { if (!e.target.closest(".rt-actions")) openMachine(tr.dataset.m); });
   $$("#ml [data-open]").forEach(b => b.onclick = () => openMachine(b.dataset.open));
+  $$("#ml [data-fmt]").forEach(b => b.onclick = () => formatDialog(b.dataset.fmt));
   const ab = $("#archBox"); if (ab) ab.ontoggle = () => { ARCH_OPEN = ab.open; };
   $$("#ml [data-restore]").forEach(b => b.onclick = () => machineAction(b.dataset.restore, "restore"));
   $$("#ml [data-forget]").forEach(b => b.onclick = () => machineAction(b.dataset.forget, "forget"));
@@ -1422,12 +1425,13 @@ async function renderRemote() {
   if (!FEATURES.remote_sso) return renderRemoteFrame();  // outro remote (REMOTE_URL): página dele inteira
   view.innerHTML = `<div class="spread"><div><h1>Remoto</h1><p class="muted">Tela, terminal e arquivos dos computadores com o agente, direto no navegador.</p></div>
     <div class="row">${ME.role === "admin" ? `<button class="btn primary" id="rInvite">Adicionar computador</button>` : ""}<button class="btn" id="rFull">Opções avançadas ↗</button></div></div>
-    <div id="rInv"></div><div class="card"><div class="spread"><input id="rSearch" placeholder="Buscar pelo nome, sistema ou IP" class="u-w100 rsearch"><button class="btn sm" id="rReload">Atualizar</button></div>
+    <div id="rInv"></div><div id="fmtBox"></div><div class="card"><div class="spread"><input id="rSearch" placeholder="Buscar pelo nome, sistema ou IP" class="u-w100 rsearch"><button class="btn sm" id="rReload">Atualizar</button></div>
     <div id="rList" class="u-mt12">Carregando…</div></div>`;
   $("#rReload").onclick = () => loadRemote(true);
   $("#rSearch").oninput = () => loadRemote(false);
   $("#rFull").onclick = async () => { try { window.open((await api("/api/remoto/login")).url, "_blank", "noopener"); } catch (e) { toast(e.message); } };
   if ($("#rInvite")) $("#rInvite").onclick = remoteInvite;
+  fmtLoad();
   await loadRemote(true);
   timer = setInterval(() => { if (!document.hidden && !$("#ovl")) loadRemote(true); }, 20000);
 }
@@ -1446,10 +1450,11 @@ async function loadRemote(force) {
       <td class="rt-title"><div class="mname">${osLogo(d.os)}<div><b>${esc(d.name)}</b><br><span class="muted small">${esc(d.os || "—")}</span></div></div></td>
       <td class="small" data-label="Grupo">${esc(d.group)}</td><td class="small mono" data-label="IP">${esc(d.ip || "—")}</td>
       <td class="small" data-label="Visto">${d.online ? "agora" : d.last ? fmtAgo(Math.floor(d.last / 1000)) : "—"}</td>
-      <td class="rt-actions"><div class="row">${RMODES.map(([m, t]) => `<button class="btn sm ${m === "desktop" ? "primary" : ""}" data-rv="${esc(d.id)}" data-m="${m}" ${d.online ? "" : "disabled"}>${t}</button>`).join("")}</div></td></tr>`).join("")}
+      <td class="rt-actions"><div class="row">${RMODES.map(([m, t]) => `<button class="btn sm ${m === "desktop" ? "primary" : ""}" data-rv="${esc(d.id)}" data-m="${m}" ${d.online ? "" : "disabled"}>${t}</button>`).join("")}${fmtReady() && d.online && !/mac|darwin/i.test(d.os || "") ? kebab(`<button class="danger" data-fdev="${esc(d.id)}">Formatar este PC…</button>`) : ""}</div></td></tr>`).join("")}
     </table></div>${shown.length ? "" : `<p class="muted">Nada encontrado para “${esc(q)}”.</p>`}
     <p class="muted small u-mt8"><b>Tela</b> funciona em computadores com área de trabalho (Windows, Mac, Linux com interface). Em servidores sem interface gráfica, use <b>Terminal</b> e <b>Arquivos</b>.</p>`;
   $$("#rList [data-rv]").forEach(b => b.onclick = () => openRemoteView(list.find(x => x.id === b.dataset.rv), b.dataset.m));
+  $$("#rList [data-fdev]").forEach(b => b.onclick = () => formatDialog(list.find(x => x.id === b.dataset.fdev)));
 }
 
 // Remoto pronto para receber agentes (grupo criado) e o admin pode usá-lo
@@ -1461,6 +1466,93 @@ function agentLine(u) {           // estado do PC do cliente numa conta "só dow
   if (a.state === "erro") return `<br><span class="small err">Acesso remoto falhou no PC do cliente: ${esc(a.message)}</span>`;
   if (a.state === "recusado") return `<br><span class="small muted">O cliente não permitiu o acesso remoto.</span>`;
   return `<br><span class="small muted">Acesso remoto: aguardando o cliente abrir o gravador.</span>`;
+}
+
+/* -------------------------------------------------- formatar à distância
+   Pelo agente do Remoto, o PC fica esperando alguém conectar o pendrive gravado pelo
+   isoBuilder; ao reconhecer, avisa aqui (30 s para cancelar) e reinicia por ele. */
+const FMT_ST = {
+  enviado: ["running", "preparando o PC"], aguardando: ["running", "esperando o pendrive"],
+  encontrado: ["queued", "pendrive conectado"], reiniciando: ["done", "reiniciando pelo pendrive"],
+  erro: ["error", "falhou"], bios: ["error", "BIOS antiga"], expirou: ["", "expirou"], cancelado: ["", "cancelado"],
+};
+let FMT = { jobs: [], poll: null };
+const fmtReady = () => ME && ME.role === "admin" && FEATURES.remote_sso;
+const fmtPill = j => { const [c, t] = FMT_ST[j.state] || ["", j.state]; return `<span class="pill ${c}">${t}</span>`; };
+function fmtJobHTML(j) {
+  return `<div class="fmt-job" data-fj="${esc(j.id)}"><div class="spread"><div>${fmtPill(j)} <b>${esc(j.name)}</b>
+      <span class="muted small">· pedido ${fmtAgo(j.created_at)}${j.live ? ` · espera até ${fmtDate(j.expires_at)}` : ""}</span></div>
+      ${j.live ? `<button class="btn sm danger" data-fcancel="${esc(j.id)}" type="button">Cancelar</button>` : ""}</div>
+    ${j.message ? `<p class="small u-mt8 ${j.state === "erro" || j.state === "bios" ? "err" : ""}">${esc(j.message)}</p>` : ""}
+    ${j.stick ? `<p class="muted small">${esc(j.stick)}</p>` : ""}</div>`;
+}
+// cartão no topo de Máquinas e Remoto: pedidos em andamento e os que terminaram há pouco
+function fmtCard() {
+  const recent = FMT.jobs.filter(j => j.live || Date.now() / 1000 - j.updated_at < 3600);
+  if (!recent.length) return "";
+  return `<div class="card fmt-card"><b>Formatações à distância</b>${recent.map(fmtJobHTML).join("")}</div>`;
+}
+function wireFmt(root = document) {
+  $$("[data-fcancel]", root).forEach(b => b.onclick = async () => {
+    if (!confirm("Cancelar? O PC para de esperar o pendrive e não reinicia.")) return;
+    try { await api(`/api/admin/format/${b.dataset.fcancel}/cancel`, { method: "POST" }); toast("Cancelado."); } catch (e) { toast(e.message); }
+    fmtLoad();
+  });
+}
+async function fmtLoad() {
+  if (!fmtReady()) return;
+  try { FMT.jobs = (await api("/api/admin/format")).jobs; } catch (e) { return; }
+  const box = $("#fmtBox"); if (box) { box.innerHTML = fmtCard(); wireFmt(box); }
+  const dlg = $("#fmtLive"); if (dlg) { const j = FMT.jobs.find(x => x.id === dlg.dataset.job); if (j) { dlg.innerHTML = fmtJobHTML(j); wireFmt(dlg); } }
+  clearTimeout(FMT.poll);
+  if (FMT.jobs.some(j => j.live) && (box || dlg)) FMT.poll = setTimeout(fmtLoad, 4000);
+}
+// dev: aparelho do Remoto ({id, name, os, online}) ou só o nome (procura no Remoto)
+async function formatDialog(dev) {
+  if (typeof dev === "string") {
+    try {
+      const h = dev.toLowerCase();
+      dev = (await remoteDevices(true)).find(x => x.name.toLowerCase() === h);
+    } catch (e) { return toast(e.message); }
+    if (!dev) return toast("Esse PC não está no Remoto: instale o agente nele primeiro.");
+  }
+  if (!dev.online) return toast("O PC está desligado ou sem internet: o agente do Remoto precisa estar conectado.");
+  if (/mac|darwin/i.test(dev.os || "")) return toast("Mac não permite escolher o próximo boot à distância.");
+  closeOverlay();
+  OVL = { fmt: dev.id };
+  const el = document.createElement("div");
+  el.id = "ovl";
+  el.innerHTML = `<div class="ovl-bg"></div><aside class="ovl" role="dialog" aria-modal="true">
+    <header class="ovl-h"><div>${osLogo(dev.os, "sm")} <b>Formatar ${esc(dev.name)}</b><br><span class="muted small">${esc(dev.os || "")}</span></div>
+      <button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></header>
+    <div class="ovl-b" id="fmtBody">
+      <div class="note err"><b>Isto apaga todo o disco de ${esc(dev.name)}</b> (arquivos, programas e o sistema atual) e instala o sistema do pendrive.</div>
+      <ol class="fmt-steps">
+        <li>Grave o pendrive com o <b>isoBuilder</b> (a ISO do Ubuntu ou a configuração do Windows que você quer instalar).</li>
+        <li>Clique em <b>Começar</b>: o PC fica esperando o pendrive, por até 24 horas.</li>
+        <li>Alguém conecta o pendrive nesse PC. Ele é reconhecido, você ainda tem <b>30 segundos</b> para cancelar e o PC reinicia pelo pendrive. A instalação segue sozinha.</li>
+      </ol>
+      <p class="muted small">Funciona em PCs com UEFI (quase todos de 2012 para cá). Se o PC usar BIOS antiga, ou se a BIOS bloquear boot por USB, o painel avisa e alguém no local escolhe o pendrive no menu de boot (F12). O BitLocker é suspenso por um reinício.</p>
+      <label class="f">Para confirmar, digite o nome do PC: <b class="mono">${esc(dev.name)}</b>
+        <input id="fmtConfirm" autocomplete="off" spellcheck="false"></label>
+      <div class="row u-mt12"><button class="btn danger" id="fmtGo" type="button" disabled>Começar</button><button class="btn" id="fmtNo" type="button">Voltar</button></div>
+    </div></aside>`;
+  document.body.appendChild(el);
+  document.body.classList.add("noscroll");
+  $(".ovl-bg", el).onclick = closeOverlay; $("#ovlClose").onclick = closeOverlay; $("#fmtNo").onclick = closeOverlay;
+  const inp = $("#fmtConfirm"), goBtn = $("#fmtGo");
+  inp.oninput = () => { goBtn.disabled = inp.value.trim().toLowerCase() !== dev.name.trim().toLowerCase(); };
+  inp.focus();
+  goBtn.onclick = async () => {
+    goBtn.disabled = true;
+    try {
+      const r = await api("/api/admin/format", { method: "POST", body: { node: dev.id, confirm: inp.value.trim() } });
+      $("#fmtBody").innerHTML = `<div id="fmtLive" data-job="${esc(r.job.id)}">${fmtJobHTML(r.job)}</div>
+        <p class="muted small u-mt12">Pode fechar esta janela: o andamento aparece em <b>Máquinas</b> e no <b>Remoto</b>.</p>`;
+      wireFmt($("#fmtBody"));
+      fmtLoad();
+    } catch (e) { toast(e.message); goBtn.disabled = false; }
+  };
 }
 
 /* -------------------------------------------------- convite do agente (Remoto)

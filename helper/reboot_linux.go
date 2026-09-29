@@ -30,6 +30,10 @@ func usbBootEntry() string {
 }
 
 func osRebootInfo() rebootInfo {
+	if t, _ := findInstallStick(); t != nil && efiSupported() {
+		return rebootInfo{Available: true, How: "O próximo boot vai direto para o pendrive (uma vez só).",
+			Note: "Se mesmo assim iniciar o sistema atual, a BIOS bloqueia boot por USB: reinicie apertando a tecla do menu de boot (F12, F11, F8 ou Esc)."}
+	}
 	if usbBootEntry() != "" {
 		return rebootInfo{Available: true, How: "O próximo boot vai direto para o pendrive (uma vez só).",
 			Note: "Se mesmo assim iniciar o sistema atual, reinicie apertando a tecla do menu de boot (F12, F11, F8 ou Esc)."}
@@ -39,6 +43,11 @@ func osRebootInfo() rebootInfo {
 }
 
 func osRebootToUSB() error {
+	if t, _ := findInstallStick(); t != nil {
+		if _, err := armBootNext(t); err == nil {
+			return osRebootNow()
+		}
+	}
 	if n := usbBootEntry(); n != "" {
 		_ = exec.Command("efibootmgr", "--bootnext", n).Run()
 	}
