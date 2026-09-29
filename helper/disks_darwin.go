@@ -90,6 +90,10 @@ func appleQuote(s string) string {
 }
 
 func osRunPrivileged(args []string) error {
+	return osRunPrivilegedPrompt(args, "O isoBuilder precisa da sua senha para gravar o pendrive.")
+}
+
+func osRunPrivilegedPrompt(args []string, prompt string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -99,7 +103,7 @@ func osRunPrivileged(args []string) error {
 		parts = append(parts, `" "`, "quoted form of "+appleQuote(a))
 	}
 	script := "do shell script " + strings.Join(parts, " & ") +
-		` with prompt "O isoBuilder precisa da sua senha para gravar o pendrive." with administrator privileges`
+		" with prompt " + appleQuote(prompt) + " with administrator privileges"
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -110,7 +114,6 @@ func osRunPrivileged(args []string) error {
 	}
 	return nil
 }
-
 
 // DKIOCSYNCHRONIZECACHE = _IO('d', 22): pede ao pendrive para gravar o cache interno.
 const dkiocSynchronizeCache = 0x20006416

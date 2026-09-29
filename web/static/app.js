@@ -210,7 +210,7 @@ const W = {
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
   gpu: false, virt: false, virt_bridge: true, tweaks: true, remote_agent: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
-  deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "",
+  deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
   win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: "",
   win_tailscale: false  // no Windows o Tailscale começa desligado (precisa de auth key)
@@ -468,7 +468,8 @@ function deliverHTML(what) {
         <label class="f"><span>E-mail de acesso</span><div class="suffix"><input name="deliver_prefix" value="${esc(W.deliver_prefix)}" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small>Vazio = prefixo aleatório. A senha é gerada automaticamente.</small></label>
         <label class="f"><span>Validade do acesso</span><select name="deliver_duration">${[["24h", "24 horas"], ["3d", "3 dias"], ["7d", "7 dias"], ["30d", "30 dias"]].map(([v, t]) => `<option value="${v}" ${W.deliver_duration === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         ${field("deliver_label", "Para quem (opcional)", 'placeholder="ex.: Suporte da filial Centro"')}
-      </div></div></div>`;
+      </div>
+      ${agentOK() ? toggle("deliver_agent", "Instalar acesso remoto junto", "O gravador do cliente oferece instalar o agente do Remoto (a pessoa precisa permitir na tela). Assim você acessa o PC dela para gravar o pendrive e formatar.") : ""}</div></div>`;
 }
 
 /* -------------------------------------------------- catálogo de pacotes (estilo Ninite)
@@ -731,7 +732,7 @@ function renderWizard() {
             confirm_erase: W.confirm_erase }
         : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent };
       if (!isWin()) delete body.win_key;
-      if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label };
+      if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label, remote_agent: !!(W.deliver_agent && agentOK()) };
       const r = await api("/api/builds", { method: "POST", body });
       if (r.delivery) { try { sessionStorage.setItem("uab-delivery-" + r.id, JSON.stringify(r.delivery)); } catch (e) { } }
       W.password = W.password2 = W.tailscale_key = W.confirm_erase = W.coolify_password = W.coolify_password2 = W.ddns_password = W.cloudflare_token = W.win_key = ""; step = 0;
@@ -975,6 +976,7 @@ async function renderUsers() {
     </div>
     <label class="f hidden" id="isoPick"><span>ISO para este acesso</span><select name="build_id"></select>
       <small>A ISO fica guardada até o fim da validade do acesso.</small></label>
+    ${agentOK() ? `<label class="switch hidden" id="agentPick"><input type="checkbox" name="remote_agent" checked><span><b>Instalar acesso remoto junto</b><br><span class="muted small">O gravador do cliente oferece instalar o agente do Remoto (a pessoa precisa permitir na tela). Assim você acessa o PC dela para gravar o pendrive e formatar.</span></span></label>` : ""}
     <div class="grid">
       <label class="f"><span>Para quem (opcional)</span><input name="label" placeholder="ex.: Suporte da filial Centro"></label>
       <label class="f"><span>E-mail de login</span><div class="suffix"><input name="prefix" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small id="pfxHelp">Só o prefixo; vazio = aleatório.</small></label>
@@ -991,12 +993,13 @@ async function renderUsers() {
   $$('#uf input[name="mode"]').forEach(r => r.onchange = () => {
     const m = $('#uf input[name="mode"]:checked').value, dl = m === "download", pt = m === "partner";
     $("#isoPick").classList.toggle("hidden", !dl); $("#maxB").classList.toggle("hidden", dl || pt); $("#durF").classList.toggle("hidden", pt);
+    const ap = $("#agentPick"); if (ap) ap.classList.toggle("hidden", !dl);
     $("#pfxHelp").textContent = pt ? "Prefixo, ou o e-mail completo do sócio (qualquer domínio)." : "Só o prefixo; vazio = aleatório.";
   });
   $("#uf").onsubmit = async ev => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target));
-    try { const c = await api("/api/admin/users", { method: "POST", body: f }); ev.target.reset(); $("#isoPick").classList.add("hidden"); $("#maxB").classList.remove("hidden"); showCred(c, "Acesso criado"); loadUsers(); $("#uerr").innerHTML = ""; }
+    try { const c = await api("/api/admin/users", { method: "POST", body: f }); ev.target.reset(); $("#isoPick").classList.add("hidden"); $("#maxB").classList.remove("hidden"); const ap = $("#agentPick"); if (ap) ap.classList.add("hidden"); showCred(c, "Acesso criado"); loadUsers(); $("#uerr").innerHTML = ""; }
     catch (e) { $("#uerr").innerHTML = `<div class="note err">${esc(e.message)}</div>`; }
   };
   loadUsers();
@@ -1015,7 +1018,7 @@ async function loadUsers() {
       <td data-label="Último acesso" class="nowrap">${fmtDate(u.last_login)}</td><td data-label="Tipo / ISOs"><div>${u.mode === "partner"
         ? `<b>Sócio</b><br><span class="small muted">${u.perm_count ? u.perm_count + (u.perm_count === 1 ? " máquina liberada" : " máquinas liberadas") : "nenhuma máquina liberada"}</span>`
         : u.mode === "download"
-        ? `Só download<br><span class="small ${u.build_ok ? "muted" : "err"}">${u.build_hostname ? esc(u.build_hostname) : "ISO removida"}${!u.build_ok ? " (indisponível)" : u.build_status !== "done" ? " (sendo gerada)" : ""}</span>
+        ? `Só download<br><span class="small ${u.build_ok ? "muted" : "err"}">${u.build_hostname ? esc(u.build_hostname) : "ISO removida"}${!u.build_ok ? " (indisponível)" : u.build_status !== "done" ? " (sendo gerada)" : ""}</span>${agentLine(u)}
           <div class="hidden u-mt8" id="rl-${u.id}"><select>${isoOptions(u.build_ok ? u.build_id : "")}</select>
             <div class="row u-mt8"><button class="btn sm primary" data-a="relink-save" data-id="${u.id}" ${ready.length ? "" : "disabled"}>Vincular</button>
             <button class="btn sm" data-a="relink-cancel" data-id="${u.id}">Cancelar</button></div></div>`
@@ -1024,6 +1027,8 @@ async function loadUsers() {
         ? `<button class="btn sm primary" data-a="perms" data-id="${u.id}" data-email="${esc(u.email)}">Permissões</button>`
         : u.mode === "download" ? `<button class="btn sm ${u.build_ok ? "" : "primary"}" data-a="relink" data-id="${u.id}">${u.build_ok ? "Trocar ISO" : "Vincular ISO"}</button>` : ""}
       ${kebab(`${u.mode === "partner" ? "" : `<button data-a="topartner" data-id="${u.id}" data-email="${esc(u.email)}">Tornar sócio</button>`}
+        ${u.mode === "download" && u.remote_agent && u.agent && u.agent.state === "ok" ? `<button data-a="agentopen" data-host="${esc(u.agent.host)}">Abrir tela do PC do cliente</button>` : ""}
+        ${u.mode === "download" && (agentOK() || u.remote_agent) ? `<button data-a="agent" data-id="${u.id}" data-on="${u.remote_agent ? 0 : 1}">${u.remote_agent ? "Desligar" : "Ligar"} acesso remoto no gravador</button>` : ""}
         <button data-a="reset" data-id="${u.id}">Nova senha</button>
         ${u.mode === "partner" ? "" : `<button data-a="extend" data-id="${u.id}">Mais 24 horas de validade</button>`}
         ${u.state === "ativa" ? `<button class="danger" data-a="revoke" data-id="${u.id}">Revogar acesso</button>` : ""}
@@ -1031,6 +1036,20 @@ async function loadUsers() {
   $$("#ul [data-a]").forEach(btn => btn.onclick = async () => {
     const id = btn.dataset.id, a = btn.dataset.a;
     if (a === "perms") return openPerms(id, btn.dataset.email);
+    if (a === "agentopen") {
+      try {
+        const h = (btn.dataset.host || "").toLowerCase();
+        const d = (await remoteDevices(true)).find(x => x.name.toLowerCase() === h);
+        return d ? openRemoteView(d, "desktop") : toast("Esse PC ainda não apareceu no Remoto (ou está desligado).");
+      } catch (e) { return toast(e.message); }
+    }
+    if (a === "agent") {
+      try {
+        await api(`/api/admin/users/${id}/agent`, { method: "POST", body: { enabled: btn.dataset.on === "1" } });
+        toast(btn.dataset.on === "1" ? "Ligado: vale para o próximo download do gravador por esta conta." : "Desligado: o próximo gravador baixado não oferece o acesso remoto.");
+        return loadUsers();
+      } catch (e) { return toast(e.message); }
+    }
     if (a === "topartner") {
       if (!confirm(`Tornar ${btn.dataset.email} sócio?\n\nA conta passa a ser permanente (sem validade), com o mesmo login e senha, e não baixa nem gera mais ISOs. Em seguida você escolhe as máquinas que ela pode acessar.`)) return;
       try {
@@ -1341,6 +1360,17 @@ async function loadRemote(force) {
     </table></div>${shown.length ? "" : `<p class="muted">Nada encontrado para “${esc(q)}”.</p>`}
     <p class="muted small u-mt8"><b>Tela</b> funciona em computadores com área de trabalho (Windows, Mac, Linux com interface). Em servidores sem interface gráfica, use <b>Terminal</b> e <b>Arquivos</b>.</p>`;
   $$("#rList [data-rv]").forEach(b => b.onclick = () => openRemoteView(list.find(x => x.id === b.dataset.rv), b.dataset.m));
+}
+
+// Remoto pronto para receber agentes (grupo criado) e o admin pode usá-lo
+const agentOK = () => !!(ME && ME.role === "admin" && FEATURES.remote_sso && FEATURES.remote_agent);
+function agentLine(u) {           // estado do PC do cliente numa conta "só download"
+  if (!u.remote_agent) return "";
+  const a = u.agent || {};
+  if (a.state === "ok") return `<br><span class="small ok">● PC conectado: <b>${esc(a.host)}</b>${a.os ? " · " + esc(a.os) : ""} · ${fmtAgo(a.at)}</span>`;
+  if (a.state === "erro") return `<br><span class="small err">Acesso remoto falhou no PC do cliente: ${esc(a.message)}</span>`;
+  if (a.state === "recusado") return `<br><span class="small muted">O cliente não permitiu o acesso remoto.</span>`;
+  return `<br><span class="small muted">Acesso remoto: aguardando o cliente abrir o gravador.</span>`;
 }
 
 /* -------------------------------------------------- convite do agente (Remoto)

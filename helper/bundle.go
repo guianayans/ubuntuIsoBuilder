@@ -38,6 +38,8 @@ type Bundle struct {
 	Kind       string         `json:"kind,omitempty"`
 	ConfigName string         `json:"config_name,omitempty"`
 	Windows    *BundleWindows `json:"windows,omitempty"`
+	// Acesso remoto do técnico (conta do cliente com essa opção ligada no painel)
+	Agent *BundleAgent `json:"agent,omitempty"`
 }
 
 type BundleWindows struct {

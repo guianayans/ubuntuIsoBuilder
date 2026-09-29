@@ -46,12 +46,17 @@ label.chk{display:flex;gap:10px;align-items:flex-start;margin-top:12px;cursor:po
 label.chk input{margin-top:4px}
 .big{font-size:40px;line-height:1}
 footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
+#sAgent{border-color:var(--accent)}
+#sAgent h2{margin:0 0 6px}
+#sAgent .who{font-weight:600}
 </style>
 </head>
 <body>
 <main>
   <h1 class="brand"><img src="icon.png" alt="" width="40" height="40">isoBuilder</h1>
   <p class="sub" id="subtitle">Grava a ISO do instalador automático do Ubuntu Server no seu pendrive.</p>
+
+  <section class="card hidden" id="sAgent" aria-live="polite"></section>
 
   <section class="card" id="s1">
     <div class="step"><span class="num">1</span><h2 id="s1title">Escolha a ISO baixada</h2></div>
@@ -130,8 +135,40 @@ function wireReboot(boxId){
   };
 }
 
+// Acesso remoto do técnico: só com a permissão explícita da pessoa (caixa marcada).
+function renderAgent(){
+  const box = $('#sAgent'), A = S.agent;
+  if (!A) { box.classList.add('hidden'); return; }
+  const sig = A.state + '|' + A.message;
+  if (box.dataset.sig === sig) return;          // não redesenha: a caixa marcada não se perde
+  box.dataset.sig = sig; box.classList.remove('hidden');
+  if (A.state === 'ok') {
+    box.innerHTML = `<h2>✔ Acesso remoto instalado</h2><p class="muted">O técnico já consegue acessar este computador para preparar a formatação${A.message ? ' (' + esc(A.message) + ')' : ''}. Siga abaixo para gravar o pendrive.</p>`;
+    return;
+  }
+  if (A.state === 'instalando') {
+    box.innerHTML = `<h2>Instalando o acesso remoto…</h2><p class="muted">Baixando e instalando o agente do sistema deste computador. Leva menos de um minuto.</p>`;
+    return;
+  }
+  if (A.state === 'recusado') {
+    box.innerHTML = `<h2>Acesso remoto não instalado</h2><p class="muted">Tudo bem: o resto do isoBuilder funciona normalmente.</p><div class="row"><button class="btn" id="agAgain">Mudei de ideia: permitir</button></div>`;
+    $('#agAgain').onclick = () => { box.dataset.sig = ''; S.agent.state = ''; renderAgent(); };
+    return;
+  }
+  box.innerHTML = `<h2>Acesso remoto do técnico</h2>
+    <p>O técnico que preparou esta instalação pediu acesso remoto a este computador para preparar a formatação. Com a sua permissão, o isoBuilder instala o agente do Remoto, que deixa o técnico ver a tela, usar o terminal e transferir arquivos deste computador.</p>
+    <p class="muted">Você pode remover depois, nos programas instalados (“Mesh Agent”).</p>
+    ${A.state === 'erro' ? `<div class="err">✖ ${esc(A.message)}</div>` : ''}
+    <label class="chk"><input type="checkbox" id="agOk"> <span>Permito o acesso remoto a este computador.</span></label>
+    <div class="row"><button class="btn primary" id="agYes" disabled>${A.state === 'erro' ? 'Tentar de novo' : 'Permitir e instalar'}</button><button class="btn" id="agNo">Agora não</button></div>`;
+  $('#agOk').onchange = e => { $('#agYes').disabled = !e.target.checked; };
+  $('#agYes').onclick = async () => { if (!$('#agOk').checked) return; try { await api('agent', {action:'install'}); } catch (e) { alert(e.message); } poll(); };
+  $('#agNo').onclick = async () => { try { await api('agent', {action:'decline'}); } catch (e) { } poll(); };
+}
+
 function render(){
   if(S.stick) return renderStick();
+  renderAgent();
   // 1. ISO — gravador personalizado: baixa a ISO sozinho
   const B = S.bundle, F = S.fetch;
   if (B && B.kind === 'windows') {

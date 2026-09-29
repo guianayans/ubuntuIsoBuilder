@@ -787,6 +787,25 @@ local do cliente é só para Ubuntu) e **Tailscale**. Com a chave informada, a e
 **Ativação** ativa o Windows depois da instalação e mostra o resultado em Máquinas.
 Detalhes: `docs/windows/` (contrato, gerador, gravador e painel).
 
+## Formatar um PC do cliente à distância
+
+Duas formas de colocar o agente do **Remoto** no PC do cliente antes de formatar:
+
+- **Link do agente** (tela inicial do painel → "Formatar um PC à distância"): gera o convite do
+  MeshCentral com validade escolhida, com botões para copiar o link, copiar uma mensagem pronta e
+  enviar pelo WhatsApp. O cartão fica aguardando e avisa quando o PC aparece, com "Abrir tela".
+- **Pelo gravador da conta do cliente**: ao criar a conta "só download" (ou entregar a ISO pelo
+  assistente), a opção **"Instalar acesso remoto junto"** vem ligada. O isoBuilder baixado **por
+  essa conta** mostra antes de tudo o cartão "Acesso remoto do técnico": só com a caixa
+  "Permito o acesso remoto" marcada ele baixa o agente do sistema da pessoa (Windows x64/ARM,
+  macOS com a senha do usuário, Linux pelo script oficial), instala como serviço e avisa o painel
+  (`POST /t/<token>/agent`). Em **Acessos** a conta mostra "PC conectado: nome · sistema" (ou
+  "recusou"/erro) e o menu ⋯ ganha "Abrir tela do PC do cliente". O agente só é aceito se vier do
+  mesmo painel que gerou o gravador; o gravador baixado pelo admin nunca leva o agente.
+
+Com o PC conectado, você grava o pendrive e manda reiniciar pelo acesso remoto: o cliente só
+instala o agente (um clique) e espeta o pendrive.
+
 ## Sócios (acesso a máquinas escolhidas)
 
 Em **Acessos → Sócio (permanente)** você cria uma conta sem prazo (prefixo ou e-mail completo

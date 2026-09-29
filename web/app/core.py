@@ -95,6 +95,15 @@ def init_db() -> None:
             con.execute("ALTER TABLE users ADD COLUMN mode TEXT NOT NULL DEFAULT 'build'")
         if "build_id" not in cols:
             con.execute("ALTER TABLE users ADD COLUMN build_id TEXT")
+        # conta do cliente: o gravador dela também instala o agente do Remoto (com a permissão
+        # da pessoa na tela) e avisa aqui qual PC conectou
+        if "remote_agent" not in cols:
+            con.execute("ALTER TABLE users ADD COLUMN remote_agent INTEGER NOT NULL DEFAULT 0")
+        for c in ("agent_host", "agent_os", "agent_state", "agent_msg"):
+            if c not in cols:
+                con.execute(f"ALTER TABLE users ADD COLUMN {c} TEXT NOT NULL DEFAULT ''")
+        if "agent_at" not in cols:
+            con.execute("ALTER TABLE users ADD COLUMN agent_at INTEGER")
         # máquinas instaladas que se reportam ao painel
         bcols = {r[1] for r in con.execute("PRAGMA table_info(builds)")}
         if "report_token_hash" not in bcols:

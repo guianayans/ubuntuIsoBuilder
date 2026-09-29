@@ -100,3 +100,5 @@ func osOpenBrowser(url string) { _ = exec.Command("xdg-open", url).Start() }
 func osNeedsPrivilegedWorker() bool { return false }
 
 func osRunPrivileged(args []string) error { return errors.New("não suportado") }
+
+func osRunPrivilegedPrompt(args []string, prompt string) error { return errors.New("não suportado") }

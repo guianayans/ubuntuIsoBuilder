@@ -56,7 +56,10 @@ def _startup() -> None:
 @app.middleware("http")
 async def security(request: Request, call_next):
     # Mutações só com JSON da própria origem (proteção CSRF, junto com SameSite=Strict).
-    if request.method in ("POST", "PUT", "PATCH", "DELETE") and not request.url.path.startswith("/api/agent/"):
+    # Exceções: chamadas de programas autenticadas por token (sem cookie), não pelo navegador:
+    # relatório das máquinas (/api/agent/…) e aviso do gravador sobre o agente (/t/<token>/agent).
+    machine_call = request.url.path.startswith("/api/agent/") or bool(re.fullmatch(r"/t/[A-Za-z0-9_-]{20,100}/agent", request.url.path))
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and not machine_call:
         if request.headers.get("x-requested-with") != "uab":
             return JSONResponse({"error": "requisição inválida"}, 403)
         origin = request.headers.get("origin")
@@ -233,7 +236,9 @@ def _user_row(r) -> dict:
             "build_hostname": linked["hostname"] if linked else None,
             "build_ok": bool(linked and linked["status"] in ("done", "queued", "running")),
             "build_status": linked["status"] if linked else None,
-            "perm_count": len(core.partner_perms(r["id"])) if r["mode"] == "partner" else 0}
+            "perm_count": len(core.partner_perms(r["id"])) if r["mode"] == "partner" else 0,
+            "remote_agent": bool(r["remote_agent"]), "agent": {"host": r["agent_host"], "os": r["agent_os"],
+            "state": r["agent_state"], "message": r["agent_msg"], "at": r["agent_at"]}}
 
 
 def _link_build(con, build_id: str, until: int, allow_pending: bool = False) -> str:
@@ -273,7 +278,7 @@ def guest_email(prefix: str) -> str:
 
 
 def create_temp_user(con, *, prefix: str, label: str, duration: str, mode: str, build_id: str | None,
-                     max_builds: int, allow_pending: bool = False) -> dict:
+                     max_builds: int, allow_pending: bool = False, remote_agent: bool = False) -> dict:
     """Cria um acesso temporário (senha aleatória, mostrada só nesta resposta)."""
     email = guest_email(prefix)
     dur = DURATIONS.get(duration or "24h")
@@ -287,12 +292,73 @@ def create_temp_user(con, *, prefix: str, label: str, duration: str, mode: str, 
         hostname = _link_build(con, build_id or "", until, allow_pending=allow_pending)
         max_builds = 0
     password = core.generate_password()
-    con.execute("INSERT INTO users (email,label,pw_hash,created_at,expires_at,max_builds,mode,build_id) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+    agent = 1 if (remote_agent and mode == "download" and _agent_available()) else 0
+    con.execute("INSERT INTO users (email,label,pw_hash,created_at,expires_at,max_builds,mode,build_id,remote_agent) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (email, label, core.hash_password(password), core.now(), until, max_builds, mode,
-                 build_id if mode == "download" else None))
+                 build_id if mode == "download" else None, agent))
     return {"email": email, "password": password, "expires_at": until, "url": PUBLIC_URL,
             "mode": mode, "iso": hostname}
+
+
+def _agent_available() -> bool:
+    """O Remoto deste painel está pronto para receber agentes (grupo criado)?"""
+    return bool(REMOTE_LOCAL and remoto.available() and remoto.mesh_id())
+
+
+def _bundle_agent(u: core.User) -> dict:
+    """Gravador baixado PELA PRÓPRIA conta do cliente com "acesso remoto junto": leva o agente
+    do Remoto (instalado só com a permissão da pessoa na tela do gravador)."""
+    if not u.download_only or not _agent_available():
+        return {}
+    with core.db() as con:
+        r = con.execute("SELECT remote_agent FROM users WHERE id=?", (u.id,)).fetchone()
+    if not r or not r["remote_agent"]:
+        return {}
+    return {"agent": {"url": PUBLIC_URL.rstrip("/") + "/remoto", "meshid": remoto.mesh_id(), "account": u.email}}
+
+
+@app.post("/api/admin/users/{uid}/agent")
+async def user_agent_toggle(uid: int, request: Request, _: core.User = Depends(admin_user)):
+    """Liga/desliga "instalar acesso remoto junto" no gravador de uma conta "só download"."""
+    on = bool((await body(request)).get("enabled"))
+    if on and not _agent_available():
+        raise core.Invalid("O Remoto deste painel não está disponível.")
+    with core.db() as con:
+        r = con.execute("SELECT mode FROM users WHERE id=?", (uid,)).fetchone()
+        if not r or r["mode"] != "download":
+            raise HTTPException(404, "conta não encontrada (só contas \"só download\")")
+        con.execute("UPDATE users SET remote_agent=? WHERE id=?", (1 if on else 0, uid))
+    return {"ok": True}
+
+
+@app.post("/t/{token}/agent")
+async def token_agent_report(token: str, request: Request):
+    """O gravador da conta do cliente avisa o resultado do agente (instalado/erro/recusado)."""
+    import time as _t
+    th = core.token_hash(token)
+    with core.db() as con:
+        r = con.execute("SELECT created_by, expires_at FROM dl_tokens WHERE token_hash=?", (th,)).fetchone()
+    if not r or r["expires_at"] <= core.now():
+        raise HTTPException(410, "link expirado ou inválido")
+    if _t.time() - _agent_last.get("agent:" + th, 0) < 1:
+        raise HTTPException(429, "devagar")
+    _agent_last["agent:" + th] = _t.time()
+    try:
+        d = json.loads((await request.body())[:4096])
+        assert isinstance(d, dict)
+    except (ValueError, AssertionError):
+        raise HTTPException(400, "JSON inválido")
+    state = str(d.get("state") or "")
+    if state not in ("ok", "erro", "recusado"):
+        raise HTTPException(400, "estado inválido")
+    clean = lambda v, n: panel.SAFE.sub("", str(v or ""))[:n]  # noqa: E731
+    with core.db() as con:
+        con.execute("UPDATE users SET agent_state=?, agent_msg=?, agent_host=?, agent_os=?, agent_at=? "
+                    "WHERE id=? AND remote_agent=1",
+                    (state, clean(d.get("message"), 200), clean(d.get("hostname"), 64), clean(d.get("os"), 80),
+                     core.now(), r["created_by"]))
+    return {"ok": True}
 
 
 def create_partner(who: str, label: str) -> dict:
@@ -335,6 +401,7 @@ async def create_user(request: Request, _: core.User = Depends(admin_user)):
     mode = "download" if d.get("mode") == "download" else "build"
     with core.db() as con:
         return create_temp_user(con, prefix=str(d.get("prefix") or d.get("email") or ""), label=label,
+                                remote_agent=bool(d.get("remote_agent")),
                                 duration=str(d.get("duration") or "24h"), mode=mode,
                                 build_id=str(d.get("build_id") or "") or None, max_builds=max_builds)
 
@@ -641,7 +708,8 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
             delivery = create_temp_user(con, prefix=str(deliver.get("prefix") or ""),
                                         label=str(deliver.get("label") or cfg["HOSTNAME_"]).strip()[:60],
                                         duration=str(deliver.get("duration") or "7d"), mode="download",
-                                        build_id=bid, max_builds=0, allow_pending=True)
+                                        build_id=bid, max_builds=0, allow_pending=True,
+                                        remote_agent=bool(deliver.get("remote_agent")))
     try:
         builder.prepare_job(bid, data)
     except Exception as exc:  # noqa: BLE001
@@ -678,7 +746,8 @@ def _create_windows(d: dict, data: dict, u: core.User) -> dict:
             delivery = create_temp_user(con, prefix=str(deliver.get("prefix") or ""),
                                         label=str(deliver.get("label") or cfg["HOSTNAME_"]).strip()[:60],
                                         duration=str(deliver.get("duration") or "7d"), mode="download",
-                                        build_id=bid, max_builds=0, allow_pending=True)
+                                        build_id=bid, max_builds=0, allow_pending=True,
+                                        remote_agent=bool(deliver.get("remote_agent")))
     try:
         builder.make_windows(bid, data)
     except Exception as exc:  # noqa: BLE001
@@ -812,6 +881,7 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
     else:
         info = {"kind": "ubuntu", "server": PUBLIC_URL, "token": token, "iso_name": _file_name(r),
                 "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp}
+    info.update(_bundle_agent(u))   # conta do cliente com "acesso remoto junto"
     cfg = json.dumps(info, separators=(",", ":")).encode()
     headers = {"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"}
     if platform == "macos":

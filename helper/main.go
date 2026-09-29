@@ -22,6 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -277,6 +278,7 @@ type app struct {
 	cfgErr       string             // falha ao baixar a configuração
 	winInfo      *winISOInfo        // ISO do Windows conferida
 	fetchCancel  context.CancelFunc // interrompe o download da Microsoft (ex.: "Já tenho a ISO")
+	agent        agentStatus        // acesso remoto do técnico (quando o painel oferece)
 }
 
 func (a *app) state() map[string]any {
@@ -302,6 +304,10 @@ func (a *app) state() map[string]any {
 	}
 	if a.rebootErr != "" {
 		st["reboot_error"] = a.rebootErr
+	}
+	if a.bundle != nil && a.bundle.Agent != nil {
+		ag := a.agent.get()
+		st["agent"] = map[string]any{"account": a.bundle.Agent.Account, "state": ag["state"], "message": ag["message"]}
 	}
 	if a.bundle != nil {
 		st["bundle"] = map[string]any{"hostname": a.bundle.Hostname, "iso_name": a.bundle.ISOName,
@@ -611,6 +617,24 @@ func (a *app) handler() http.Handler {
 		a.startFetch()
 		writeJSON(w, 200, map[string]string{"ok": "1"})
 	})
+	mux.HandleFunc(prefix+"/api/agent", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || a.bundle == nil || a.bundle.Agent == nil {
+			http.Error(w, "indisponível", http.StatusNotFound)
+			return
+		}
+		var req struct {
+			Action string `json:"action"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&req); err != nil {
+			http.Error(w, "pedido inválido", http.StatusBadRequest)
+			return
+		}
+		if err := a.agentAction(req.Action); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, a.state())
+	})
 	mux.HandleFunc(prefix+"/api/reboot", a.rebootHandler)
 	mux.HandleFunc(prefix+"/api/ventoy", a.ventoyInfoHandler)
 	mux.HandleFunc(prefix+"/api/ventoy/copy", a.ventoyCopyHandler)
@@ -730,6 +754,9 @@ func main() {
 	noBrowser := flag.Bool("no-browser", false, "não abre o navegador")
 	port := flag.Int("port", 0, "porta local (0 = automática)")
 	showVer := flag.Bool("version", false, "mostra a versão")
+	agentInstall := flag.Bool("agent-install", false, "instala o agente do Remoto (modo trabalhador privilegiado)")
+	agentURL := flag.String("agent-url", "", "endereço do Remoto (com --agent-install)")
+	agentMesh := flag.String("agent-meshid", "", "grupo do Remoto (com --agent-install)")
 	flag.Parse()
 
 	if *showVer {
@@ -743,6 +770,18 @@ func main() {
 			os.Exit(1)
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(d)
+		return
+	}
+	if *agentInstall { // trabalhador privilegiado do macOS (a interface pede a senha e chama isto)
+		g := &BundleAgent{URL: *agentURL, MeshID: *agentMesh}
+		if !safeMeshID.MatchString(g.MeshID) || !strings.HasPrefix(g.URL, "https://") && !(os.Getenv("UAB_BUNDLE_INSECURE") == "1" && strings.HasPrefix(g.URL, "http://127.0.0.1:")) {
+			fmt.Fprintln(os.Stderr, "agente: endereço ou grupo inválido")
+			os.Exit(2)
+		}
+		if err := installAgent(g); err != nil {
+			fmt.Fprintln(os.Stderr, "agente:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *write {
@@ -795,6 +834,17 @@ func main() {
 	}
 	if a.bundle != nil {
 		a.startFetch()
+		// acesso remoto do técnico: só do mesmo painel; já instalado = avisa o painel
+		if g := a.bundle.Agent; g != nil && !g.valid(a.bundle.Server) {
+			a.bundle.Agent = nil
+		} else if g != nil {
+			go func() {
+				if agentInstalled() {
+					a.agent.set("ok", "já estava instalado neste computador")
+					reportAgent(a.bundle, "ok", "já estava instalado")
+				}
+			}()
+		}
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s/", a.port, a.token)
 	saveInstance(url)
