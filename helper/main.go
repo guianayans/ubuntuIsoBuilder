@@ -300,7 +300,13 @@ func (a *app) state() map[string]any {
 		st["job"] = a.job.get()
 	}
 	st["reboot"] = osRebootInfo()
-	st["local_install"] = localInstallInfo(a.bundle, a.isoPath, a.unattend != nil, a.winInfo != nil)
+	var isoSize int64
+	if a.isoPath != "" {
+		if fi, err := os.Stat(a.isoPath); err == nil {
+			isoSize = fi.Size()
+		}
+	}
+	st["local_install"] = localInstallInfo(a.bundle, a.isoPath, isoSize, a.unattend != nil, a.winInfo != nil)
 	if a.install != nil {
 		st["install"] = a.install.get()
 	}
@@ -649,7 +655,13 @@ func (a *app) handler() http.Handler {
 			return
 		}
 		a.mu.Lock()
-		li := localInstallInfo(a.bundle, a.isoPath, a.unattend != nil, a.winInfo != nil)
+		var isoSz int64
+		if a.isoPath != "" {
+			if fi, err := os.Stat(a.isoPath); err == nil {
+				isoSz = fi.Size()
+			}
+		}
+		li := localInstallInfo(a.bundle, a.isoPath, isoSz, a.unattend != nil, a.winInfo != nil)
 		if !li.Available {
 			a.mu.Unlock()
 			writeJSON(w, 400, map[string]string{"error": li.Reason})

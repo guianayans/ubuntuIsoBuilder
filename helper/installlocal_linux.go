@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+func osTotalRAMGB() int { return int(memTotalKB() / (1 << 20)) }
+
 func osLocalInstallReason(kind string) string {
 	if os.Getenv("UAB_FAKE_DISK") != "" {
 		return ""
@@ -19,9 +21,6 @@ func osLocalInstallReason(kind string) string {
 	}
 	if !haveKexec() {
 		return "instale o kexec-tools neste computador (sudo apt install kexec-tools)"
-	}
-	if memTotalKB() < 3_500_000 {
-		return "este computador precisa de ~4 GB de RAM para instalar sem pendrive"
 	}
 	return ""
 }
