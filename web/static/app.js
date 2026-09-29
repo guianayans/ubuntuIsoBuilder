@@ -1700,13 +1700,13 @@ function tabResumoWin(m, r, sv, gb, svc) {
   $("#goConn").onclick = () => showTab("conectar");
 }
 // indicador do TerminalSec (monitoramento de segurança) na lista de máquinas
-const TSEC_ST = { online: ["🟢", "protegido"], pending: ["🟡", "aguardando aprovação"], offline: ["🔴", "sem contato"], archived: ["⚪", "arquivado"] };
+const TSEC_ST = { online: ["on", "protegido"], pending: ["wait", "aguardando aprovação"], offline: ["off", "sem contato"], archived: ["gone", "arquivado"] };
 function tsecBadge(m, inline) {
   const t = m.terminalsec;
   if (!t) return "";
-  const [ico, txt] = TSEC_ST[t.status] || ["⚪", t.status];
+  const [cls, txt] = TSEC_ST[t.status] || ["gone", t.status];
   const url = /^https?:\/\//.test(t.url || "") ? t.url : "#";
-  return `${inline ? "" : "<br>"}<a class="small" href="${esc(url)}" target="_blank" rel="noopener" title="Abrir no TerminalSec">${ico} TerminalSec: ${esc(txt)}</a>`;
+  return `${inline ? "" : "<br>"}<a class="tsec-pill ${cls}${inline ? " inl" : ""}" href="${esc(url)}" target="_blank" rel="noopener" title="Abrir no TerminalSec"><i></i>TerminalSec · ${esc(txt)}</a>`;
 }
 
 // nomes das etapas do provisionamento do Windows (docs/windows/CONTRACT.md §4)

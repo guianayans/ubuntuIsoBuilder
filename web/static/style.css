@@ -85,6 +85,12 @@ input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(
 .bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .5s}
 .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600;background:var(--soft);color:var(--muted)}
 .pill.done{background:var(--ok-soft);color:var(--ok)} .pill.error{background:var(--err-soft);color:var(--err)}
+.tsec-pill{display:inline-flex;align-items:center;gap:6px;margin-top:5px;padding:2px 9px 2px 7px;border-radius:99px;font-size:12px;font-weight:600;line-height:18px;text-decoration:none;white-space:nowrap;background:var(--soft);color:var(--muted);border:1px solid transparent}
+.tsec-pill i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.tsec-pill.on{background:var(--ok-soft);color:var(--ok)} .tsec-pill.on i{box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+.tsec-pill.wait{background:var(--warn-soft);color:var(--warn)} .tsec-pill.off{background:var(--err-soft);color:var(--err)}
+.tsec-pill:hover{border-color:currentColor;text-decoration:none}
+.tsec-pill.inl{margin-top:0}
 .pill.running,.pill.queued{background:var(--accent-soft);color:var(--accent)}
 
 /* listas / tabelas */
