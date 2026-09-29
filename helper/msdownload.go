@@ -330,109 +330,142 @@ func downloadWindowsISO(ctx context.Context, w *BundleWindows, p *progress) (str
 			}
 		}
 	}
-	part := dest + ".part"
-	client := &http.Client{Timeout: 0}
-	label := fmt.Sprintf("Baixando o Windows 11 da Microsoft (%s)…", link.Name)
-	var lastErr error
-	for attempt := 1; attempt <= 40; attempt++ {
-		if ctx.Err() != nil {
-			return "", "", ctx.Err()
+	// srcTag identifica QUAL arquivo o .part contém: a Microsoft às vezes troca o conteúdo
+	// mantendo o nome; retomar em cima de outra versão mistura as duas e o SHA256 não bate.
+	srcTag := func(l *msLink) string { return fmt.Sprintf("%s %d %s", l.SHA256, l.Size, l.Name) }
+
+	fetch := func() (string, error) {
+		part := dest + ".part"
+		if b, err := os.ReadFile(part + ".src"); err != nil || strings.TrimSpace(string(b)) != srcTag(link) {
+			os.Remove(part) // .part de outra versão (ou sem origem conhecida): recomeça do zero
 		}
-		have := int64(0)
-		if fi, err := os.Stat(part); err == nil {
-			have = fi.Size()
-		}
-		if have >= link.Size {
-			break
-		}
-		p.set("downloading", label, link.Size)
-		p.add(have)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, link.URL, nil)
-		req.Header.Set("User-Agent", msUA)
-		if have > 0 {
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			p.setMessage(fmt.Sprintf("Sem conexão, tentando de novo (%d)…", attempt))
-			sleepCtx(ctx, time.Duration(min(attempt, 10))*3*time.Second)
-			continue
-		}
-		switch {
-		case resp.StatusCode == http.StatusOK:
-			have = 0
-		case resp.StatusCode == http.StatusPartialContent && have > 0:
-		case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusNotFound:
-			resp.Body.Close() // link expirou (vale 24 h): pede outro
-			p.setMessage("Renovando o link de download…")
-			nl, err := msGetLink(ctx, w.Lang, w.Arch)
-			if err != nil {
-				return "", "", err
+		client := &http.Client{Timeout: 0}
+		label := fmt.Sprintf("Baixando o Windows 11 da Microsoft (%s)…", link.Name)
+		var lastErr error
+		for attempt := 1; attempt <= 40; attempt++ {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
 			}
-			if nl.Name != link.Name || nl.Size != link.Size { // saiu versão nova: recomeça
-				os.Remove(part)
-				dest = filepath.Join(dir, nl.Name)
-				part = dest + ".part"
+			have := int64(0)
+			if fi, err := os.Stat(part); err == nil {
+				have = fi.Size()
 			}
-			link = nl
-			continue
-		default:
-			resp.Body.Close()
-			lastErr = fmt.Errorf("servidor da Microsoft respondeu %s", resp.Status)
-			sleepCtx(ctx, 5*time.Second)
-			continue
-		}
-		flags := os.O_CREATE | os.O_WRONLY
-		if have > 0 {
-			flags |= os.O_APPEND
-		} else {
-			flags |= os.O_TRUNC
-			p.set("downloading", label, link.Size)
-		}
-		f, err := os.OpenFile(part, flags, 0o644)
-		if err != nil {
-			resp.Body.Close()
-			return "", "", fmt.Errorf("não foi possível salvar em %s: %w", dir, err)
-		}
-		_, cerr := io.CopyBuffer(counter{f, p}, io.LimitReader(resp.Body, link.Size-have), make([]byte, 1<<20))
-		resp.Body.Close()
-		f.Close()
-		if cerr == nil {
-			if fi, err := os.Stat(part); err == nil && fi.Size() >= link.Size {
+			if have >= link.Size {
 				break
 			}
+			p.set("downloading", label, link.Size)
+			p.add(have)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, link.URL, nil)
+			req.Header.Set("User-Agent", msUA)
+			if have > 0 {
+				req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				lastErr = err
+				p.setMessage(fmt.Sprintf("Sem conexão, tentando de novo (%d)…", attempt))
+				sleepCtx(ctx, time.Duration(min(attempt, 10))*3*time.Second)
+				continue
+			}
+			switch {
+			case resp.StatusCode == http.StatusOK:
+				have = 0
+			case resp.StatusCode == http.StatusPartialContent && have > 0:
+			case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusNotFound:
+				resp.Body.Close() // link expirou (vale 24 h): pede outro
+				p.setMessage("Renovando o link de download…")
+				nl, err := msGetLink(ctx, w.Lang, w.Arch)
+				if err != nil {
+					return "", err
+				}
+				if srcTag(nl) != srcTag(link) { // saiu versão nova: recomeça
+					os.Remove(part)
+					os.Remove(part + ".src")
+					dest = filepath.Join(dir, nl.Name)
+					part = dest + ".part"
+				}
+				link = nl
+				continue
+			default:
+				resp.Body.Close()
+				lastErr = fmt.Errorf("servidor da Microsoft respondeu %s", resp.Status)
+				sleepCtx(ctx, 5*time.Second)
+				continue
+			}
+			flags := os.O_CREATE | os.O_WRONLY
+			if have > 0 {
+				flags |= os.O_APPEND
+			} else {
+				flags |= os.O_TRUNC
+				p.set("downloading", label, link.Size)
+				if err := os.WriteFile(part+".src", []byte(srcTag(link)+"\n"), 0o644); err != nil {
+					resp.Body.Close()
+					return "", fmt.Errorf("não foi possível salvar em %s: %w", dir, err)
+				}
+			}
+			f, err := os.OpenFile(part, flags, 0o644)
+			if err != nil {
+				resp.Body.Close()
+				return "", fmt.Errorf("não foi possível salvar em %s: %w", dir, err)
+			}
+			_, cerr := io.CopyBuffer(counter{f, p}, io.LimitReader(resp.Body, link.Size-have), make([]byte, 1<<20))
+			resp.Body.Close()
+			f.Close()
+			if cerr == nil {
+				if fi, err := os.Stat(part); err == nil && fi.Size() >= link.Size {
+					break
+				}
+			}
+			lastErr = cerr
+			p.setMessage("Conexão interrompida; retomando…")
+			sleepCtx(ctx, 3*time.Second)
 		}
-		lastErr = cerr
-		p.setMessage("Conexão interrompida; retomando…")
-		sleepCtx(ctx, 3*time.Second)
-	}
-	if fi, err := os.Stat(part); err != nil || fi.Size() != link.Size {
-		if lastErr == nil {
-			lastErr = errors.New("download incompleto")
+		if fi, err := os.Stat(part); err != nil || fi.Size() != link.Size {
+			if lastErr == nil {
+				lastErr = errors.New("download incompleto")
+			}
+			return "", fmt.Errorf("não foi possível baixar o Windows: %v", lastErr)
 		}
-		return "", "", fmt.Errorf("não foi possível baixar o Windows: %v", lastErr)
+		return part, nil
 	}
-	sum, err := hashFile(part, p)
-	if err != nil {
-		return "", "", err
+
+	for round := 1; ; round++ {
+		part, err := fetch()
+		if err != nil {
+			return "", "", err
+		}
+		sum, err := hashFile(part, p)
+		if err != nil {
+			return "", "", err
+		}
+		if link.SHA256 != "" && sum != link.SHA256 {
+			os.Remove(part)
+			os.Remove(part + ".src")
+			if round == 1 { // 1ª vez: baixa de novo do zero, com link novo
+				p.set("connecting", "A ISO não bateu com o SHA256 publicado pela Microsoft; baixando de novo do zero…", 0)
+				if nl, err := msGetLink(ctx, w.Lang, w.Arch); err == nil {
+					link = nl
+					dest = filepath.Join(dir, nl.Name)
+				}
+				continue
+			}
+			return "", "", errors.New("a ISO baixada veio corrompida duas vezes (o SHA256 não confere com o publicado pela Microsoft). Baixe a ISO no site da Microsoft e use \"Já tenho a ISO\"")
+		}
+		p.set("checking", "Conferindo o conteúdo da ISO…", 0)
+		if _, err := inspectWindowsISO(part, w.Arch, w.Edition, w.Lang); err != nil {
+			os.Remove(part)
+			os.Remove(part + ".src")
+			return "", "", fmt.Errorf("a ISO baixada não passou na conferência: %v", err)
+		}
+		os.Remove(part + ".src")
+		if err := os.Rename(part, dest); err != nil {
+			return "", "", err
+		}
+		if link.SHA256 != "" {
+			_ = os.WriteFile(dest+".sha256", []byte(sum+"  "+link.Name+"\n"), 0o644)
+		}
+		return dest, sum, nil
 	}
-	if link.SHA256 != "" && sum != link.SHA256 {
-		os.Remove(part)
-		return "", "", errors.New("a ISO baixada veio corrompida (o SHA256 não confere com o publicado pela Microsoft). Tente de novo")
-	}
-	p.set("checking", "Conferindo o conteúdo da ISO…", 0)
-	if _, err := inspectWindowsISO(part, w.Arch, w.Edition, w.Lang); err != nil {
-		os.Remove(part)
-		return "", "", fmt.Errorf("a ISO baixada não passou na conferência: %v", err)
-	}
-	if err := os.Rename(part, dest); err != nil {
-		return "", "", err
-	}
-	if link.SHA256 != "" {
-		_ = os.WriteFile(dest+".sha256", []byte(sum+"  "+link.Name+"\n"), 0o644)
-	}
-	return dest, sum, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {
