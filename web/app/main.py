@@ -868,9 +868,29 @@ def download_helper(platform: str, _: core.User = Depends(current_user)):
 # isoBuilder deste painel (hash conferido), fica esperando alguém conectar o pendrive
 # gravado pelo isoBuilder, avisa aqui e reinicia por ele (entrada UEFI própria + BootNext).
 FORMAT_WAIT_H = 24
-FORMAT_LIVE = ("enviado", "aguardando", "encontrado")
-FORMAT_FROM_PC = {"aguardando", "encontrado", "reiniciando", "erro", "bios", "expirou", "cancelado"}
+# estados "em andamento": usb espera o pendrive; disk baixa o instalador e prepara o kexec
+FORMAT_LIVE = ("enviado", "aguardando", "encontrado", "baixando", "preparando")
+FORMAT_FROM_PC = {"aguardando", "encontrado", "baixando", "preparando", "reiniciando", "erro", "bios",
+                  "expirou", "cancelado"}
 _sha_cache: dict[str, tuple[float, str]] = {}
+
+
+def _iso_boot_files(iso_path: str) -> tuple[str, str]:
+    """Extrai (uma vez, ao lado da ISO) o kernel e o initrd do /casper/ da ISO, com xorriso
+    (sem montar). Devolve os caminhos locais. O kexec no PC usa exatamente estes."""
+    import subprocess
+    kern, init = iso_path + ".kernel", iso_path + ".initrd"
+    if os.path.exists(kern) and os.path.exists(init) and \
+       os.path.getmtime(kern) >= os.path.getmtime(iso_path) and os.path.getmtime(init) >= os.path.getmtime(iso_path):
+        return kern, init
+    for src, dst in (("/casper/vmlinuz", kern), ("/casper/initrd", init)):
+        tmp = dst + ".part"
+        r = subprocess.run(["xorriso", "-osirrox", "on", "-indev", iso_path, "-extract", src, tmp],
+                           capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) < 1000:
+            raise HTTPException(500, f"não consegui extrair {src} da ISO (ISO não suportada para 'sem pendrive')")
+        os.replace(tmp, dst)
+    return kern, init
 
 
 def _file_sha256(path: str) -> str:
@@ -903,14 +923,20 @@ def _format_tools(platform: str) -> dict[str, str]:
     return {a: n for a, n in names.items() if os.path.exists(os.path.join(HELPER_DIR, n))}
 
 
-def _format_script(platform: str, token: str) -> tuple[int, str]:
+def _format_script(platform: str, token: str, method: str = "usb", iso_path: str = "") -> tuple[int, str]:
     """Comandos que o agente roda no PC (2 = PowerShell, 3 = sh), sem nenhum segredo além
-    do token deste pedido (que só serve para baixar o isoBuilder e avisar o andamento)."""
+    do token deste pedido (que só serve para baixar o isoBuilder/ISO e avisar o andamento)."""
     base = f"{PUBLIC_URL}/f/{token}"
     rep = f"{base}/report"
     tools = _format_tools(platform)
     sums = {a: _file_sha256(os.path.join(HELPER_DIR, n)) for a, n in tools.items()}
-    args = f'--boot-usb --wait {FORMAT_WAIT_H}h --report "{rep}"'
+    if method == "disk":
+        # sem pendrive: kexec no kernel/initrd da ISO servida pelo painel (só Linux)
+        kern, init = _iso_boot_files(iso_path)
+        args = (f'--install-disk --url "{base}" --kernel-sha {_file_sha256(kern)} '
+                f'--initrd-sha {_file_sha256(init)} --wait {FORMAT_WAIT_H}h --report "{rep}"')
+    else:
+        args = f'--boot-usb --wait {FORMAT_WAIT_H}h --report "{rep}"'
     if platform == "windows":
         hashes = "; ".join(f"{a}='{s}'" for a, s in sums.items())
         steps = [
@@ -936,11 +962,13 @@ def _format_script(platform: str, token: str) -> tuple[int, str]:
                 "-Body ([Text.Encoding]::UTF8.GetBytes((@{state='erro';message=('não consegui preparar o PC: '+"
                 "$_.Exception.Message)}|ConvertTo-Json)))")
         return 2, "try { " + "; ".join(steps) + " } catch { " + fail + " }\n"
+    kexec_check = ('command -v kexec >/dev/null 2>&1 || fail "kexec não instalado (apt install kexec-tools) — '
+                   'use a opção com pendrive"\n') if method == "disk" else ""
     sh = f"""R='{rep}'
 fail() {{ curl -fsS -m 20 -X POST -H 'Content-Type: application/json' -d "{{\\"state\\":\\"erro\\",\\"message\\":\\"não consegui preparar o PC: $1\\"}}" "$R" >/dev/null 2>&1; exit 1; }}
 [ "$(uname -m)" = x86_64 ] || fail "só PCs x86_64 (64 bits)"
 command -v curl >/dev/null 2>&1 || fail "curl não instalado"
-d=/var/lib/isobuilder; mkdir -p "$d"; f="$d/isobuilder-format"
+{kexec_check}d=/var/lib/isobuilder; mkdir -p "$d"; f="$d/isobuilder-format"
 curl -fsSL -m 900 -o "$f.tmp" '{base}/tool?arch=x64' || fail "não consegui baixar o isoBuilder"
 echo "{sums.get('x64', '')}  $f.tmp" | sha256sum -c --status || {{ rm -f "$f.tmp"; fail "o arquivo baixado não confere"; }}
 mv -f "$f.tmp" "$f"; chmod 700 "$f"
@@ -952,14 +980,17 @@ systemd-run --unit=isobuilder-format --collect "$f" {args} >/dev/null 2>&1 || {{
 
 def _format_row(r) -> dict:
     state, msg = r["state"], r["message"]
+    method = (r["method"] if "method" in r.keys() else "usb")
     t = core.now()
     if state in FORMAT_LIVE and t > r["expires_at"]:
-        state, msg = "expirou", "Ninguém conectou o pendrive a tempo."
+        state = "expirou"
+        msg = "O PC não ficou pronto a tempo." if method == "disk" else "Ninguém conectou o pendrive a tempo."
     elif state == "enviado" and t - r["updated_at"] > 180:
         msg = ("O PC ainda não respondeu. Ele pode estar sem internet, ou o antivírus bloqueou o isoBuilder. "
                "Abra o terminal do PC no Remoto para conferir.")
     return {"id": r["id"], "node": r["node"], "name": r["name"], "platform": r["platform"], "state": state,
-            "message": msg, "stick": r["stick"], "created_at": r["created_at"], "updated_at": r["updated_at"],
+            "message": msg, "stick": r["stick"], "method": method, "iso": r["stick"] if method == "disk" else "",
+            "created_at": r["created_at"], "updated_at": r["updated_at"],
             "expires_at": r["expires_at"], "live": state in FORMAT_LIVE}
 
 
@@ -993,17 +1024,31 @@ async def format_start(request: Request, u: core.User = Depends(admin_user)):
         raise core.Invalid("Mac não permite escolher o próximo boot à distância.")
     if not _format_tools(platform):
         raise core.Invalid("O isoBuilder deste sistema não está compilado neste painel.")
+    method = "disk" if str(d.get("method") or "usb") == "disk" else "usb"
+    iso_path, iso_label = "", ""
+    if method == "disk":
+        if platform != "linux":
+            raise core.Invalid("Sem pendrive, por enquanto, só para Ubuntu/Linux. Para Windows, use a opção com pendrive.")
+        r = _get_build(str(d.get("build_id") or ""), u)
+        if _is_win(r) or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
+            raise core.Invalid("Escolha uma ISO de Ubuntu pronta para instalar.")
+        iso_path = r["iso_path"]
+        iso_label = f"ISO {r['hostname']} ({(r['iso_size'] or 0) / 1e9:.1f} GB)"
+        _iso_boot_files(iso_path)  # extrai/valida kernel e initrd antes de disparar
     token = secrets.token_urlsafe(32)
     jid = secrets.token_hex(8)
     t = core.now()
+    wait_msg = ("Preparando o PC (baixando o instalador)…" if method == "disk"
+                else "Preparando o PC (baixando o isoBuilder)…")
     with core.db() as con:  # um pedido por PC: o novo substitui o anterior
         con.execute("UPDATE format_jobs SET cancel=1, state='cancelado', message='Substituído por um novo pedido.', "
-                    "updated_at=? WHERE node=? AND state IN ('enviado','aguardando','encontrado')", (t, node))
+                    "updated_at=? WHERE node=? AND state IN " + str(FORMAT_LIVE), (t, node))
         con.execute("INSERT INTO format_jobs (id,token_hash,node,name,platform,state,message,created_by,created_at,"
-                    "updated_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (jid, core.token_hash(token), node, dev["name"][:80], platform, "enviado",
-                     "Preparando o PC (baixando o isoBuilder)…", u.email, t, t, t + (FORMAT_WAIT_H + 1) * 3600))
-    ctype, cmds = _format_script(platform, token)
+                    "updated_at,expires_at,method,build_id,stick) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (jid, core.token_hash(token), node, dev["name"][:80], platform, "enviado", wait_msg,
+                     u.email, t, t, t + (FORMAT_WAIT_H + 1) * 3600, method,
+                     r["id"] if method == "disk" else "", iso_label))
+    ctype, cmds = _format_script(platform, token, method, iso_path)
     try:
         res = await remoto.run_commands(node, ctype, cmds)
     except Exception as exc:  # noqa: BLE001
@@ -1048,6 +1093,40 @@ def format_tool(token: str, arch: str = "x64"):
         raise HTTPException(404, "sem isoBuilder para esse sistema")
     return FileResponse(os.path.join(HELPER_DIR, name), media_type="application/octet-stream", filename=name,
                         headers={"Cache-Control": "no-store"})
+
+
+def _format_disk_build(token: str):
+    """Build (ISO) do pedido 'sem pendrive', só enquanto ele está valendo."""
+    r = _format_job(token)
+    if r["cancel"] or r["state"] not in FORMAT_LIVE or (r["method"] if "method" in r.keys() else "usb") != "disk":
+        raise HTTPException(410, "pedido encerrado")
+    with core.db() as con:
+        b = con.execute("SELECT * FROM builds WHERE id=?", (r["build_id"],)).fetchone()
+    if not b or b["status"] != "done" or not b["iso_path"] or not os.path.exists(b["iso_path"]):
+        raise HTTPException(410, "a ISO deste pedido não está mais disponível")
+    return b
+
+
+@app.get("/f/{token}/iso")
+def format_iso(token: str):
+    """A ISO que o PC baixa para a RAM (kexec com url=) e instala. Só no modo 'sem pendrive'."""
+    b = _format_disk_build(token)
+    return FileResponse(b["iso_path"], media_type="application/octet-stream",
+                        filename=f"{b['hostname']}-autoinstall.iso", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/f/{token}/kernel")
+def format_kernel(token: str):
+    b = _format_disk_build(token)
+    return FileResponse(_iso_boot_files(b["iso_path"])[0], media_type="application/octet-stream",
+                        filename="vmlinuz", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/f/{token}/initrd")
+def format_initrd(token: str):
+    b = _format_disk_build(token)
+    return FileResponse(_iso_boot_files(b["iso_path"])[1], media_type="application/octet-stream",
+                        filename="initrd", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/f/{token}/report")

@@ -832,6 +832,29 @@ painel avisa "BIOS antiga"); com boot por USB bloqueado ou senha na BIOS, o PC v
 atual; Mac não é aceito. O botão **Reiniciar agora** do gravador (quem grava no próprio PC) usa a
 mesma entrada própria antes de cair no método antigo.
 
+### Sem pendrive (kexec na ISO servida pelo painel — só Ubuntu)
+
+No mesmo diálogo, a opção **"Sem pendrive"** dispensa a mídia e a presença de alguém no local. O
+admin escolhe **qual ISO de Ubuntu** instalar (não há pendrive carregando-a). Então, pelo agente do
+Remoto:
+
+1. O painel extrai (uma vez, com `xorriso`) o `/casper/vmlinuz` e o `/casper/initrd` da ISO do build
+   e serve, enquanto o pedido vale, `/f/<token>/kernel`, `/f/<token>/initrd` e `/f/<token>/iso`.
+2. O PC baixa **só** o kernel e o initrd (poucos MB, SHA256 conferido) e faz **`kexec -l`** com a
+   mesma linha do pendrive (`autoinstall ds=nocloud;s=/cdrom/nocloud/`) mais `url=<painel>/f/<token>/iso`
+   e `ip=dhcp`.
+3. Depois de **30 s para cancelar**, `systemctl kexec` troca o kernel em execução: o casper baixa a
+   ISO para a RAM e roda o autoinstall, apagando o disco. Como o kexec ignora a firmware, funciona em
+   **UEFI e em BIOS antiga**.
+
+Estados no cartão: preparando → baixando o instalador → preparando a instalação → reiniciando.
+Requisitos no PC: **`kexec-tools`** (já vem no Ubuntu) e **~4 GB de RAM** (a ISO vai para a memória);
+se faltar, o painel avisa e você usa o pendrive. Windows "sem pendrive" ainda não: para Windows, use
+o pendrive.
+
+> Testado ponta a ponta com o painel e um PC Ubuntu simulado (download e conferência de kernel/initrd,
+> linha do kexec, contagem e cancelamento; o `kexec -e` real precisa de teste em VM/hardware).
+
 ## Sócios (acesso a máquinas escolhidas)
 
 Em **Acessos → Sócio (permanente)** você cria uma conta sem prazo (prefixo ou e-mail completo

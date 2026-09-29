@@ -161,6 +161,12 @@ def init_db() -> None:
             platform TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
             stick TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, cancel INTEGER NOT NULL DEFAULT 0)""")
+        # fase 2 "sem pendrive": method 'usb' (fase 1) | 'disk' (kexec na ISO servida pelo painel)
+        fcols = {r[1] for r in con.execute("PRAGMA table_info(format_jobs)")}
+        if "method" not in fcols:
+            con.execute("ALTER TABLE format_jobs ADD COLUMN method TEXT NOT NULL DEFAULT 'usb'")
+        if "build_id" not in fcols:  # 'disk': qual ISO instalar (não há pendrive carregando-a)
+            con.execute("ALTER TABLE format_jobs ADD COLUMN build_id TEXT NOT NULL DEFAULT ''")
 
 
 # --------------------------------------------------------------------- senhas

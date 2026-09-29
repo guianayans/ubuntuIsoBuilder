@@ -1473,7 +1473,8 @@ function agentLine(u) {           // estado do PC do cliente numa conta "só dow
    isoBuilder; ao reconhecer, avisa aqui (30 s para cancelar) e reinicia por ele. */
 const FMT_ST = {
   enviado: ["running", "preparando o PC"], aguardando: ["running", "esperando o pendrive"],
-  encontrado: ["queued", "pendrive conectado"], reiniciando: ["done", "reiniciando pelo pendrive"],
+  encontrado: ["queued", "pendrive conectado"], baixando: ["running", "baixando o instalador"],
+  preparando: ["queued", "preparando a instalação"], reiniciando: ["done", "reiniciando para instalar"],
   erro: ["error", "falhou"], bios: ["error", "BIOS antiga"], expirou: ["", "expirou"], cancelado: ["", "cancelado"],
 };
 let FMT = { jobs: [], poll: null };
@@ -1494,7 +1495,7 @@ function fmtCard() {
 }
 function wireFmt(root = document) {
   $$("[data-fcancel]", root).forEach(b => b.onclick = async () => {
-    if (!confirm("Cancelar? O PC para de esperar o pendrive e não reinicia.")) return;
+    if (!confirm("Cancelar? O PC para de esperar / preparar e não reinicia.")) return;
     try { await api(`/api/admin/format/${b.dataset.fcancel}/cancel`, { method: "POST" }); toast("Cancelado."); } catch (e) { toast(e.message); }
     fmtLoad();
   });
@@ -1518,21 +1519,38 @@ async function formatDialog(dev) {
   }
   if (!dev.online) return toast("O PC está desligado ou sem internet: o agente do Remoto precisa estar conectado.");
   if (/mac|darwin/i.test(dev.os || "")) return toast("Mac não permite escolher o próximo boot à distância.");
+  const isWin = /windows/i.test(dev.os || "");
+  let isos = [];
+  try { isos = (await api("/api/builds")).builds.filter(b => (b.os || "ubuntu") !== "windows" && b.status === "done"); } catch (e) { }
   closeOverlay();
   OVL = { fmt: dev.id };
+  const usbSteps = `<ol class="fmt-steps">
+      <li>Grave o pendrive com o <b>isoBuilder</b> (a ISO do Ubuntu ou a configuração do Windows que você quer instalar).</li>
+      <li>Clique em <b>Começar</b>: o PC fica esperando o pendrive, por até 24 horas.</li>
+      <li>Alguém conecta o pendrive nesse PC. Ele é reconhecido, você ainda tem <b>30 segundos</b> para cancelar e o PC reinicia pelo pendrive. A instalação segue sozinha.</li>
+    </ol>
+    <p class="muted small">Funciona em PCs com UEFI (quase todos de 2012 para cá). Se o PC usar BIOS antiga, ou se a BIOS bloquear boot por USB, o painel avisa e alguém no local escolhe o pendrive no menu de boot (F12). O BitLocker é suspenso por um reinício.</p>`;
+  const diskBody = isWin
+    ? `<div class="note warn">Sem pendrive, por enquanto, só para <b>Ubuntu/Linux</b>. Este PC é Windows: use a opção <b>com pendrive</b>.</div>`
+    : `<p class="small u-mt8">O PC baixa a ISO escolhida direto do painel e reinicia por ela (o instalador roda na memória, sem pendrive e sem ninguém no local). Serve em UEFI e em BIOS antiga.</p>
+      ${isos.length
+        ? `<label class="f">ISO do Ubuntu a instalar:
+            <select id="fmtIso">${isos.map(b => `<option value="${esc(b.id)}">${esc(b.hostname)} — ${esc(b.series)} (${fmtBytes(b.iso_size)})</option>`).join("")}</select></label>`
+        : `<div class="note warn">Nenhuma ISO de Ubuntu pronta. Gere uma ISO em <b>Nova ISO</b> primeiro.</div>`}
+      <p class="muted small">Precisa de <b>~4 GB de RAM</b> no PC (a ISO é carregada na memória) e do <code>kexec</code> (já vem no Ubuntu). Se faltar, o painel avisa e você usa o pendrive.</p>`;
   const el = document.createElement("div");
   el.id = "ovl";
   el.innerHTML = `<div class="ovl-bg"></div><aside class="ovl" role="dialog" aria-modal="true">
     <header class="ovl-h"><div>${osLogo(dev.os, "sm")} <b>Formatar ${esc(dev.name)}</b><br><span class="muted small">${esc(dev.os || "")}</span></div>
       <button class="btn sm" id="ovlClose" aria-label="Fechar">✕</button></header>
     <div class="ovl-b" id="fmtBody">
-      <div class="note err"><b>Isto apaga todo o disco de ${esc(dev.name)}</b> (arquivos, programas e o sistema atual) e instala o sistema do pendrive.</div>
-      <ol class="fmt-steps">
-        <li>Grave o pendrive com o <b>isoBuilder</b> (a ISO do Ubuntu ou a configuração do Windows que você quer instalar).</li>
-        <li>Clique em <b>Começar</b>: o PC fica esperando o pendrive, por até 24 horas.</li>
-        <li>Alguém conecta o pendrive nesse PC. Ele é reconhecido, você ainda tem <b>30 segundos</b> para cancelar e o PC reinicia pelo pendrive. A instalação segue sozinha.</li>
-      </ol>
-      <p class="muted small">Funciona em PCs com UEFI (quase todos de 2012 para cá). Se o PC usar BIOS antiga, ou se a BIOS bloquear boot por USB, o painel avisa e alguém no local escolhe o pendrive no menu de boot (F12). O BitLocker é suspenso por um reinício.</p>
+      <div class="note err"><b>Isto apaga todo o disco de ${esc(dev.name)}</b> (arquivos, programas e o sistema atual) e instala o sistema no lugar.</div>
+      <div class="fmt-methods">
+        <label class="fmt-m"><input type="radio" name="fmtMethod" value="usb" checked> <span><b>Com pendrive</b><br><span class="muted small">Alguém espeta o pendrive gravado no PC.</span></span></label>
+        <label class="fmt-m"><input type="radio" name="fmtMethod" value="disk"> <span><b>Sem pendrive</b><br><span class="muted small">O PC baixa a ISO e reinicia sozinho.</span></span></label>
+      </div>
+      <div id="fmtUsb">${usbSteps}</div>
+      <div id="fmtDisk" hidden>${diskBody}</div>
       <label class="f">Para confirmar, digite o nome do PC: <b class="mono">${esc(dev.name)}</b>
         <input id="fmtConfirm" autocomplete="off" spellcheck="false"></label>
       <div class="row u-mt12"><button class="btn danger" id="fmtGo" type="button" disabled>Começar</button><button class="btn" id="fmtNo" type="button">Voltar</button></div>
@@ -1541,17 +1559,28 @@ async function formatDialog(dev) {
   document.body.classList.add("noscroll");
   $(".ovl-bg", el).onclick = closeOverlay; $("#ovlClose").onclick = closeOverlay; $("#fmtNo").onclick = closeOverlay;
   const inp = $("#fmtConfirm"), goBtn = $("#fmtGo");
-  inp.oninput = () => { goBtn.disabled = inp.value.trim().toLowerCase() !== dev.name.trim().toLowerCase(); };
-  inp.focus();
+  const method = () => $("input[name=fmtMethod]:checked").value;
+  const canDisk = !isWin && isos.length > 0;
+  const refresh = () => {
+    const m = method();
+    $("#fmtUsb").hidden = m !== "usb"; $("#fmtDisk").hidden = m !== "disk";
+    const nameOK = inp.value.trim().toLowerCase() === dev.name.trim().toLowerCase();
+    goBtn.disabled = !nameOK || (m === "disk" && !canDisk);
+  };
+  $$("input[name=fmtMethod]").forEach(r => r.onchange = refresh);
+  inp.oninput = refresh; inp.focus();
   goBtn.onclick = async () => {
     goBtn.disabled = true;
+    const m = method();
+    const reqBody = { node: dev.id, confirm: inp.value.trim(), method: m };
+    if (m === "disk") reqBody.build_id = $("#fmtIso") ? $("#fmtIso").value : "";
     try {
-      const r = await api("/api/admin/format", { method: "POST", body: { node: dev.id, confirm: inp.value.trim() } });
+      const r = await api("/api/admin/format", { method: "POST", body: reqBody });
       $("#fmtBody").innerHTML = `<div id="fmtLive" data-job="${esc(r.job.id)}">${fmtJobHTML(r.job)}</div>
         <p class="muted small u-mt12">Pode fechar esta janela: o andamento aparece em <b>Máquinas</b> e no <b>Remoto</b>.</p>`;
       wireFmt($("#fmtBody"));
       fmtLoad();
-    } catch (e) { toast(e.message); goBtn.disabled = false; }
+    } catch (e) { toast(e.message); refresh(); }
   };
 }
 

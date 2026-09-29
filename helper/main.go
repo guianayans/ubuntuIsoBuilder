@@ -758,8 +758,12 @@ func main() {
 	agentURL := flag.String("agent-url", "", "endereço do Remoto (com --agent-install)")
 	agentMesh := flag.String("agent-meshid", "", "grupo do Remoto (com --agent-install)")
 	bootUSB := flag.Bool("boot-usb", false, "espera o pendrive do isoBuilder e reinicia por ele (botão \"Formatar esta máquina\" do painel)")
-	bootWait := flag.Duration("wait", 24*time.Hour, "com --boot-usb: quanto tempo esperar o pendrive")
-	bootReport := flag.String("report", "", "com --boot-usb: endereço do painel para avisar o andamento")
+	installDisk := flag.Bool("install-disk", false, "formata sem pendrive: kexec no instalador servido pelo painel (Linux)")
+	instURL := flag.String("url", "", "com --install-disk: base do pedido no painel (.../f/<token>)")
+	instKernelSHA := flag.String("kernel-sha", "", "com --install-disk: SHA256 do kernel")
+	instInitrdSHA := flag.String("initrd-sha", "", "com --install-disk: SHA256 do initrd")
+	bootWait := flag.Duration("wait", 24*time.Hour, "com --boot-usb/--install-disk: por quanto tempo tentar")
+	bootReport := flag.String("report", "", "com --boot-usb/--install-disk: endereço do painel para avisar o andamento")
 	flag.Parse()
 
 	if *showVer {
@@ -793,6 +797,17 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(runBootUSB(*bootWait, *bootReport))
+	}
+	if *installDisk {
+		if !validReportURL(*bootReport) || !validReportURL(*instURL) {
+			fmt.Fprintln(os.Stderr, "--url e --report precisam ser https://")
+			os.Exit(2)
+		}
+		if !safeHex64(*instKernelSHA) || !safeHex64(*instInitrdSHA) {
+			fmt.Fprintln(os.Stderr, "--kernel-sha e --initrd-sha precisam ser SHA256")
+			os.Exit(2)
+		}
+		os.Exit(runInstallDisk(strings.TrimRight(*instURL, "/"), *instKernelSHA, *instInitrdSHA, *bootWait, *bootReport))
 	}
 	if *write {
 		p := &progress{file: *status}
