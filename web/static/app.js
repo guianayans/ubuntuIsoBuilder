@@ -655,6 +655,7 @@ function renderWizard() {
   <h1>Nova ISO</h1><p class="muted">${isWin()
     ? "Responda às perguntas; no final o painel gera a configuração e o gravador de pendrive baixa o Windows oficial da Microsoft e aplica."
     : "Responda às perguntas; no final o servidor gera a ISO e você baixa com o gravador de pendrive."}</p>
+  ${step === 0 || INV ? `<div id="invBox">${inviteCard()}</div>` : ""}
   <div class="wizard">
     <div class="steps-m"><div class="spread"><b>${STEPS[step]}</b><span class="muted small">Passo ${step + 1} de ${STEPS.length}</span></div>
       <div class="bar"><i id="stepbar"></i></div></div>
@@ -666,6 +667,7 @@ function renderWizard() {
     </form></div>
   </div>`;
   $("#stepbar").style.width = ((step + 1) / STEPS.length) * 100 + "%";  // via CSSOM (a CSP barra style inline)
+  wireInvite();
   // trocar o sistema troca as etapas: redesenha na hora (a lista da esquerda muda)
   $$('input[name="sys"]').forEach(r => r.onchange = () => { collect(); renderWizard(); });
   // trocar a família escolhe a 1ª versão dela (ou a que já estava escolhida)
@@ -1341,17 +1343,65 @@ async function loadRemote(force) {
   $$("#rList [data-rv]").forEach(b => b.onclick = () => openRemoteView(list.find(x => x.id === b.dataset.rv), b.dataset.m));
 }
 
-async function remoteInvite() {
-  const box = $("#rInv");
-  box.innerHTML = `<div class="card">Gerando o convite…</div>`;
+/* -------------------------------------------------- convite do agente (Remoto)
+   Atalho para formatar um PC à distância: o cliente abre o link e instala o agente
+   (a página do convite detecta Windows/Mac/Linux); o PC aparece no Remoto e o cartão
+   avisa na hora. O estado fica aqui fora porque as telas são redesenhadas. */
+let INV = null;   // { url, until, known: Set(ids já existentes), found: [], poll }
+const INV_HOURS = [[1, "1 hora"], [24, "1 dia"], [72, "3 dias"], [168, "7 dias"]];
+const inviteReady = () => ME && ME.role === "admin" && FEATURES.remote_sso;
+function inviteMsg() {
+  return `Olá! Para eu acessar o seu computador e preparar a formatação, abra este link nele e instale o programa indicado para o seu sistema (Windows, Mac ou Linux): ${INV.url}\n\nDepois é só deixar o computador ligado e conectado à internet. O link vale até ${fmtDate(INV.until / 1000)}.`;
+}
+function inviteCard() {
+  if (!inviteReady()) return "";
+  if (!INV) return `<div class="card inv"><div class="spread"><div class="inv-head">${osLogo("", "sm")}<div><b>Formatar um PC à distância</b>
+      <p class="muted small">Mande um link para o cliente instalar o agente. Quando o PC aparecer, você grava o pendrive e formata pelo acesso remoto; o cliente só instala o agente e espeta o pendrive.</p></div></div>
+      <div class="row inv-go"><select id="invHours" aria-label="Validade do link">${INV_HOURS.map(([h, t]) => `<option value="${h}" ${h === 24 ? "selected" : ""}>vale ${t}</option>`).join("")}</select>
+      <button class="btn primary" id="invNew" type="button">Gerar link do agente</button></div></div></div>`;
+  const found = INV.found.map(d => `<div class="inv-pc">${osLogo(d.os, "sm")}<div class="inv-pct"><b>${esc(d.name)}</b><span class="muted small">${esc(d.os || "")} · conectou agora</span></div>
+      <button class="btn sm primary" data-invopen="${esc(d.id)}" type="button">Abrir tela</button></div>`).join("");
+  return `<div class="card inv"><div class="spread"><b>Link do agente para o cliente</b><button class="btn sm" id="invClose" type="button">Fechar</button></div>
+    <div class="cred mono u-mt8">${esc(INV.url)}</div>
+    <div class="row u-mt12"><button class="btn primary" id="invCopy" type="button">Copiar link</button>
+      <button class="btn" id="invMsg" type="button">Copiar mensagem pronta</button>
+      <a class="btn" href="https://wa.me/?text=${encodeURIComponent(inviteMsg())}" target="_blank" rel="noopener noreferrer">Enviar pelo WhatsApp</a></div>
+    <p class="muted small u-mt8">Vale até ${fmtDate(INV.until / 1000)}. O cliente abre no computador dele e instala o programa do sistema dele.</p>
+    <div class="inv-wait">${found || `<span class="inv-spin" aria-hidden="true"></span><span class="muted small">Aguardando o computador do cliente aparecer…</span>`}</div></div>`;
+}
+function wireInvite(root = document) {
+  const box = $("#invBox", root); if (!box) return;
+  const nb = $("#invNew", box); if (nb) nb.onclick = () => inviteCreate(+$("#invHours", box).value);
+  const cl = $("#invClose", box); if (cl) cl.onclick = () => { clearInterval(INV.poll); INV = null; refreshInvite(); };
+  const copy = async (txt, ok) => { try { await navigator.clipboard.writeText(txt); toast(ok); } catch (e) { toast("Selecione o texto e copie."); } };
+  const cp = $("#invCopy", box); if (cp) cp.onclick = () => copy(INV.url, "Link copiado!");
+  const ms = $("#invMsg", box); if (ms) ms.onclick = () => copy(inviteMsg(), "Mensagem copiada: é só colar para o cliente.");
+  $$("[data-invopen]", box).forEach(b => b.onclick = () => { const d = INV.found.find(x => x.id === b.dataset.invopen); if (d) openRemoteView(d, "desktop"); });
+}
+function refreshInvite() { const box = $("#invBox"); if (box) { box.innerHTML = inviteCard(); wireInvite(); } }
+async function inviteCreate(hours) {
+  const btn = $("#invNew"); if (btn) { btn.disabled = true; btn.textContent = "Gerando…"; }
   try {
-    const { url } = await api("/api/admin/remoto/invite", { method: "POST", body: { hours: 72 } });
-    box.innerHTML = `<div class="card"><h2>Adicionar um computador</h2>
-      <p class="small">Envie este link para quem está no computador. Ele abre uma página com o instalador do agente para Windows, Mac e Linux; depois de instalado, o computador aparece aqui. O link vale 3 dias.</p>
-      <div class="cred mono">${esc(url)}</div><div class="row u-mt12"><button class="btn primary" id="rCopy">Copiar link</button><button class="btn" id="rInvClose">Fechar</button></div></div>`;
-    $("#rCopy").onclick = async () => { try { await navigator.clipboard.writeText(url); toast("Link copiado!"); } catch (e) { toast("Selecione o link e copie."); } };
-    $("#rInvClose").onclick = () => { box.innerHTML = ""; };
-  } catch (e) { box.innerHTML = `<div class="note err">${esc(e.message)}</div>`; }
+    const known = new Set((await remoteDevices(true)).map(d => d.id));   // o que já existia antes do convite
+    const { url } = await api("/api/admin/remoto/invite", { method: "POST", body: { hours } });
+    if (INV) clearInterval(INV.poll);
+    INV = { url, until: Date.now() + hours * 3600e3, known, found: [] };
+    INV.poll = setInterval(async () => {
+      if (!INV || document.hidden) return;
+      if (Date.now() > INV.until) { clearInterval(INV.poll); return; }
+      try {
+        const fresh = (await remoteDevices(true)).filter(d => !INV.known.has(d.id) && !INV.found.some(f => f.id === d.id));
+        if (fresh.length) { INV.found.push(...fresh); refreshInvite(); toast(`${fresh[0].name} conectou: já dá para acessar.`); }
+      } catch (e) { }
+    }, 10000);
+    refreshInvite();
+  } catch (e) { toast(e.message); if (btn) { btn.disabled = false; btn.textContent = "Gerar link do agente"; } }
+}
+// página Remoto: "Adicionar computador" usa o mesmo cartão
+async function remoteInvite() {
+  const box = $("#rInv"); box.id = "invBox";
+  box.innerHTML = inviteCard(); wireInvite();
+  if (!INV) inviteCreate(72);
 }
 
 // Janela lateral (igual à de Máquinas) com o visualizador do MeshCentral.
