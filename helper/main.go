@@ -649,6 +649,7 @@ func (a *app) handler() http.Handler {
 	mux.HandleFunc(prefix+"/api/install", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Confirm string `json:"confirm"`
+			DryRun  bool   `json:"dry_run"`
 		}
 		if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil || req.Confirm != "FORMATAR" {
 			writeJSON(w, 400, map[string]string{"error": "digite FORMATAR para confirmar"})
@@ -676,10 +677,11 @@ func (a *app) handler() http.Handler {
 		a.install, a.busy = p, true
 		isoPath, unattend := a.isoPath, a.unattendPath
 		isoURL := a.panelISOURL()
+		dry := req.DryRun
 		a.mu.Unlock()
 		go func() {
 			defer func() { a.mu.Lock(); a.busy = false; a.mu.Unlock() }()
-			osInstallLocal(a, isoPath, isoURL, unattend, p)
+			osInstallLocal(a, isoPath, isoURL, unattend, dry, p)
 		}()
 		writeJSON(w, 200, map[string]string{"ok": "1"})
 	})

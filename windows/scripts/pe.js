@@ -94,6 +94,16 @@ log("=== ISO Builder: instalação no WinPE (build " + UAB.build + ") ===");
 var roots = readyRoots();
 log("unidades: " + roots.join(" "));
 
+// Marcadores do modo "sem pendrive" (gravador local): NOPEN preserva a partição da imagem
+// e nunca abre janelas (não há técnico na tela); DRY só escreve o plano e não apaga nada.
+function anyRootHas(name) {
+    for (var i = 0; i < roots.length; i++) { if (fso.FileExists(roots[i] + ":\\" + name)) return true; }
+    return fso.FileExists("X:\\" + name);
+}
+var NOPEN = anyRootHas("uab-nopendrive");
+var DRY = anyRootHas("uab-dryrun");
+if (NOPEN) log("modo SEM PENDRIVE" + (DRY ? " (TESTE: nao apaga nada)" : ""));
+
 var media = null;
 for (var i = 0; i < roots.length && !media; i++) {
     var s = roots[i] + ":\\sources\\";
@@ -121,8 +131,9 @@ var answerLetter = answer.charAt(1) === ":" ? answer.charAt(0).toUpperCase() : "
 
 // ------------------------------------------------------------------ 2. já instalado por este pendrive?
 // O UEFI às vezes volta a iniciar pelo pendrive depois da instalação: sem esta
-// checagem o PC seria apagado e reinstalado em laço.
-for (var i = 0; i < roots.length; i++) {
+// checagem o PC seria apagado e reinstalado em laço. (Sem pendrive não há esse laço,
+// e não há técnico na tela para responder, então pulamos.)
+for (var i = 0; !NOPEN && i < roots.length; i++) {
     var bid = readText(roots[i] + ":\\ProgramData\\uab\\build-id").replace(/\s+/g, "");
     if (bid && bid === UAB.build) {
         tell("ISO Builder - o Windows JÁ FOI INSTALADO neste computador por este pendrive.\r\n\r\n" +
@@ -154,7 +165,22 @@ function lettersOfDisk(dev) {
     return ls;
 }
 
-var best = null, seen = [];
+// partNumberOf: número da partição (como o diskpart usa, 1-based) da unidade dada.
+function partNumberOf(letter) {
+    try {
+        var e = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_LogicalDiskToPartition"));
+        for (; !e.atEnd(); e.moveNext()) {
+            var a = e.item();
+            if (String(a.Dependent).indexOf('"' + letter + ':"') >= 0) {
+                var m = String(a.Antecedent).match(/Partition #(\d+)/);
+                if (m) return parseInt(m[1], 10) + 1; // WMI é 0-based; diskpart é 1-based
+            }
+        }
+    } catch (e) { }
+    return 0;
+}
+
+var best = null, seen = [], mediaDisk = null;
 var disks = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_DiskDrive"));
 for (; !disks.atEnd(); disks.moveNext()) {
     var d = disks.item();
@@ -165,7 +191,7 @@ for (; !disks.atEnd(); disks.moveNext()) {
     if (/^USB/i.test(itf) || /^USBSTOR\\/i.test(pnp) || /UASPSTOR/i.test(pnp)) why = "USB";
     else if (/1394/i.test(itf)) why = "FireWire";
     else if (/removable|remov|external|extern/i.test(mt)) why = "removível/externo (" + mt + ")";
-    else if (media && indexOfArr(ls, media.letter) >= 0) why = "contém a mídia de instalação";
+    else if (media && indexOfArr(ls, media.letter) >= 0) { why = "contém a mídia de instalação"; mediaDisk = { index: idx, size: size, gb: gb, model: String(d.Model || ""), dev: d.DeviceID }; }
     else if (answerLetter && indexOfArr(ls, answerLetter) >= 0) why = "contém o arquivo de respostas";
     else if (size < UAB.minGB * 1e9) why = "pequeno demais (mínimo " + UAB.minGB + " GB)";
     var desc = "disco " + idx + ": " + (d.Model || "?") + ", " + gb + " GB, " + itf + ", " + mt + (ls.length ? ", unidades " + ls.join("") : "");
@@ -176,6 +202,17 @@ for (; !disks.atEnd(); disks.moveNext()) {
 }
 
 function indexOfArr(a, v) { for (var i = 0; i < a.length; i++) if (a[i] === v) return i; return -1; }
+
+// Sem pendrive: a imagem está numa partição reservada do próprio disco. Em vez de apagar o
+// disco todo, PRESERVA essa partição, apaga as outras, instala e (opcional) limpa depois.
+var PRESERVE = false, keepPart = 0;
+if (!best && NOPEN && mediaDisk) {
+    keepPart = partNumberOf(media.letter);
+    if (!keepPart) fail("Não consegui identificar a partição da imagem (" + media.letter + ":) para preservá-la.", false);
+    PRESERVE = true;
+    best = mediaDisk;
+    log("PRESERVAÇÃO: disco " + best.index + ", preservando a partição " + keepPart + " (" + media.letter + ":)");
+}
 
 if (!best) fail("Nenhum disco interno elegível para instalar o Windows (o pendrive e discos USB nunca são usados).\r\n\r\nDiscos encontrados:\r\n  " +
     (seen.length ? seen.join("\r\n  ") : "(nenhum)"), false);
@@ -206,16 +243,39 @@ for (var i = 0; i < pref.length; i++) if (!used[pref.charAt(i)]) free.push(pref.
 if (free.length < 2) fail("Não há letras de unidade livres para particionar.", false);
 var W = free[0], S = free[1];
 
-var dp = ["select disk " + best.index, "clean"];
-if (uefi) {
-    dp.push("convert gpt", "create partition efi size=300", "format quick fs=fat32 label=\"System\"",
-        "assign letter=" + S, "create partition msr size=16");
+var dp = ["select disk " + best.index];
+if (PRESERVE) {
+    // apaga as partições ANTES da reservada (a reservada é a última: foi criada encolhendo o C:).
+    // apagar "partition 1" (keepPart-1) vezes remove as da frente; a reservada vira a nº 1.
+    for (var k = 0; k < keepPart - 1; k++) dp.push("select partition 1", "delete partition override");
+    if (uefi) dp.push("create partition efi size=300", "format quick fs=fat32 label=\"System\"", "assign letter=" + S, "create partition msr size=16");
+    else dp.push("create partition primary size=500", "format quick fs=" + (both ? "fat32" : "ntfs") + " label=\"System\"", "active", "assign letter=" + S);
 } else {
-    // desconhecido: FAT32 na partição de sistema (o UEFI só lê FAT; o BIOS inicia de FAT32 ativa)
-    dp.push("convert mbr", "create partition primary size=500", "format quick fs=" + (both ? "fat32" : "ntfs") + " label=\"System\"",
-        "active", "assign letter=" + S);
+    dp.push("clean");
+    if (uefi) dp.push("convert gpt", "create partition efi size=300", "format quick fs=fat32 label=\"System\"", "assign letter=" + S, "create partition msr size=16");
+    else dp.push("convert mbr", "create partition primary size=500", "format quick fs=" + (both ? "fat32" : "ntfs") + " label=\"System\"", "active", "assign letter=" + S);
 }
 dp.push("create partition primary", "format quick fs=ntfs label=\"Windows\"", "assign letter=" + W, "exit");
+
+// MODO TESTE (sem pendrive): não apaga nada. Escreve o plano e o disco real na partição
+// reservada e reinicia, para o técnico conferir antes de ligar o apagamento de verdade.
+if (DRY) {
+    var probe = ["select disk " + best.index, "detail disk", "list partition", "exit"].join("\r\n") + "\r\n";
+    writeText(DIR + "\\probe.txt", probe, false);
+    var layout = run("diskpart /s " + DIR + "\\probe.txt").out;
+    var plan = "=== ISO Builder: PLANO (modo teste, NADA foi apagado) ===\r\n" +
+        "disco alvo: " + best.index + " (" + best.model + ", " + best.gb + " GB)\r\n" +
+        "partição reservada preservada: " + keepPart + " (" + media.letter + ":)\r\n" +
+        "firmware: " + (mode || "desconhecido") + "\r\n\r\n=== diskpart que SERIA executado ===\r\n" +
+        dp.join("\r\n") + "\r\n\r\n=== disco real agora ===\r\n" + layout + "\r\n";
+    writeText(media.letter + ":\\uab-plan.txt", plan, false);
+    try { fso.CopyFile(LOG, media.letter + ":\\uab-pe.log", true); } catch (e) { }
+    log("MODO TESTE: plano escrito em " + media.letter + ":\\uab-plan.txt; reiniciando sem apagar");
+    run("wpeutil reboot");
+    WScript.Sleep(60000);
+    WScript.Quit(0);
+}
+
 writeText(DIR + "\\diskpart.txt", dp.join("\r\n") + "\r\n", false);
 var r = run("diskpart /s " + DIR + "\\diskpart.txt");
 if (r.code !== 0 || !fso.FolderExists(W + ":\\")) fail("O diskpart falhou ao preparar o disco " + best.index + ".\r\n\r\n" + r.out, true);

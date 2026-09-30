@@ -54,7 +54,7 @@ func extractCasper(isoPath, dir string) (string, string, error) {
 
 // osInstallLocal (Linux): kexec para o instalador, que baixa a ISO do painel para a RAM
 // (url=) e roda o autoinstall, apagando o disco. Não depende da firmware.
-func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
+func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *progress) {
 	p.set("staging", "Preparando o instalador…", 0)
 	dir, err := os.MkdirTemp("", "uab-inst-")
 	if err != nil {

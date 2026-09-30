@@ -190,15 +190,19 @@ function renderLocal(){
   box.innerHTML=head+`
     <p class="muted">Instala ${li.kind==='windows'?'o Windows':'o Ubuntu'} <b>neste computador</b>, sem pendrive: o instalador é carregado na memória e o disco é apagado. Funciona em UEFI e em BIOS antiga. Precisa de cerca de ${li.need_ram_gb} GB de memória (RAM).</p>
     <div class="err" style="border:0;padding:0;margin:0 0 10px"><b>Isto apaga TODO o disco deste computador</b> — arquivos, programas e o sistema atual —, sem volta.</div>
+    ${li.kind==='windows'?`<label class="chk" style="margin:6px 0"><input type="checkbox" id="liDry" checked> <span><b>Testar sem apagar</b> (recomendado na 1ª vez): o PC reinicia no instalador, confere o disco, escreve um relatório e volta ao Windows — sem apagar nada.</span></label>`:''}
     <label class="chk"><span>Para confirmar, digite <b>FORMATAR</b>:</span></label>
     <input id="liTxt" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="FORMATAR" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit">
     <div class="row"><button class="btn danger" id="liGo" disabled>Formatar este computador agora</button></div>
     <div class="err" id="liErr"></div>`;
   const t=document.getElementById('liTxt'), g=document.getElementById('liGo');
+  const updateBtn=()=>{ const dry=document.getElementById('liDry'); g.textContent = (dry&&dry.checked)?'Testar sem apagar agora':'Formatar este computador agora'; };
   t.oninput=()=>{ g.disabled = t.value.trim().toUpperCase()!=='FORMATAR'; };
+  { const dry=document.getElementById('liDry'); if(dry){ dry.onchange=updateBtn; updateBtn(); } }
   g.onclick=async()=>{
     g.disabled=true;
-    try{ await api('install',{confirm:t.value.trim().toUpperCase()}); poll(); }
+    const dry=document.getElementById('liDry');
+    try{ await api('install',{confirm:t.value.trim().toUpperCase(), dry_run: !!(dry&&dry.checked)}); poll(); }
     catch(e){ document.getElementById('liErr').textContent='✖ '+e.message; g.disabled=false; }
   };
 }

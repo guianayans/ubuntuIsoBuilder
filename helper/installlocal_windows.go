@@ -2,15 +2,15 @@
 
 package main
 
-// "Formatar este computador (sem pendrive)" no Windows: o gravador (rodando no Windows,
-// como administrador) monta um WinPE que leva a imagem do Windows DENTRO dele e faz o PC
-// reiniciar por ele via ramdisk — o mesmo mecanismo que o Windows já usa para o WinRE, e
-// que funciona igual em BIOS e UEFI. Como tudo vai para a RAM (por isso a checagem de
-// memória), o disco inteiro pode ser apagado; o pe.js que instala é o MESMO do pendrive.
+// "Formatar este computador (sem pendrive)" no Windows: o gravador (no Windows, como
+// administrador) reserva uma partição no próprio disco com a imagem do Windows, e faz o PC
+// reiniciar num WinPE pequeno via ramdisk — o mesmo mecanismo do WinRE, que funciona em
+// BIOS e UEFI. Como só o WinPE (pequeno) vai para a RAM, cabe no boot do BIOS antigo. O
+// pe.js roda no WinPE, PRESERVA a partição da imagem, apaga o resto do disco e instala.
 //
-// Segurança: faz backup do BCD, cria só entradas novas e usa "bootsequence" (boot de UMA
-// vez só). Se qualquer passo falhar antes de reiniciar, nada no disco é tocado; se a
-// entrada de boot falhar, o PC volta ao Windows normal.
+// Segurança: backup do BCD, só entradas novas, boot de UMA vez só (bootsequence). No modo
+// de teste (dry-run) o pe.js só escreve o plano na partição reservada e volta ao Windows,
+// sem apagar nada. Qualquer falha antes do apagamento volta ao Windows normal.
 
 import (
 	"fmt"
@@ -23,6 +23,8 @@ import (
 	"time"
 	"unsafe"
 )
+
+const mediaLabel = "UABMEDIA" // rótulo da partição reservada (o pe.js a reconhece e preserva)
 
 func osTotalRAMGB() int {
 	var m struct {
@@ -54,7 +56,6 @@ func psOut(script string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// bcd roda o bcdedit e devolve a saída (para pegar o GUID criado).
 func bcd(args ...string) (string, error) {
 	out, err := hidden("bcdedit.exe", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
@@ -73,7 +74,7 @@ func setupWimIndex(bootWim string) int {
 		}
 	}
 	if idx == 0 {
-		idx = 2 // padrão das mídias do Windows
+		idx = 2
 	}
 	return idx
 }
@@ -95,7 +96,71 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
+// dismRun roda o dism e devolve as últimas linhas em caso de erro.
+func dismRun(args ...string) error {
+	out, err := hidden("dism.exe", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", lastLines(string(out)))
+	}
+	return nil
+}
+
+// mediaPartitionLetter: reaproveita a partição UABMEDIA se já existe; senão encolhe o maior
+// volume fixo e cria uma nova (NTFS, rótulo UABMEDIA) com espaço para a imagem. Devolve "P:".
+func mediaPartitionLetter(needBytes int64) (string, error) {
+	if l, _ := psOut("(Get-Volume -FileSystemLabel '" + mediaLabel + "' -ErrorAction SilentlyContinue).DriveLetter"); len(strings.TrimSpace(l)) == 1 {
+		return strings.TrimSpace(l) + ":", nil // já existe: reusa
+	}
+	needMB := needBytes/(1<<20) + 1536 // imagem + folga
+	// encolhe o volume do sistema e cria a partição reservada no espaço liberado
+	script := strings.Join([]string{
+		"$d = (Get-Partition -DriveLetter " + strings.TrimSuffix(os.Getenv("SystemDrive"), ":") + ").DiskNumber",
+		fmt.Sprintf("$s = Get-PartitionSupportedSize -DriveLetter %s", strings.TrimSuffix(os.Getenv("SystemDrive"), ":")),
+		fmt.Sprintf("$cur = (Get-Partition -DriveLetter %s).Size", strings.TrimSuffix(os.Getenv("SystemDrive"), ":")),
+		fmt.Sprintf("$new = $cur - %dMB", needMB),
+		"if ($new -lt $s.SizeMin) { Write-Error 'sem espaco para encolher'; exit 1 }",
+		fmt.Sprintf("Resize-Partition -DriveLetter %s -Size $new", strings.TrimSuffix(os.Getenv("SystemDrive"), ":")),
+		"$p = New-Partition -DiskNumber $d -UseMaximumSize",
+		"Format-Volume -Partition $p -FileSystem NTFS -NewFileSystemLabel '" + mediaLabel + "' -Confirm:$false | Out-Null",
+		"$p | Add-PartitionAccessPath -AssignDriveLetter",
+		"(Get-Volume -FileSystemLabel '" + mediaLabel + "').DriveLetter",
+	}, "; ")
+	out, err := psOut(script)
+	letter := strings.TrimSpace(lastNonEmpty(out))
+	if err != nil || len(letter) != 1 {
+		return "", fmt.Errorf("não consegui reservar a partição: %s", out)
+	}
+	return letter + ":", nil
+}
+
+func lastNonEmpty(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// deletePrevBCD apaga entradas isoBuilder de tentativas anteriores (para não acumular).
+func deletePrevBCD() {
+	out, _ := bcd("/enum", "osloader")
+	block := ""
+	for _, l := range strings.Split(out, "\n") {
+		block += l + "\n"
+		if strings.TrimSpace(l) == "" {
+			if strings.Contains(block, "isoBuilder") {
+				if g := reBCDGUID.FindString(block); g != "" {
+					bcd("/delete", g, "/f")
+				}
+			}
+			block = ""
+		}
+	}
+}
+
+func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *progress) {
 	fake := os.Getenv("UAB_FAKE_DISK") != ""
 	sysDrive := os.Getenv("SystemDrive")
 	if sysDrive == "" {
@@ -103,29 +168,27 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 	}
 	stage := sysDrive + `\uab-reinstall`
 	mnt := filepath.Join(stage, "mnt")
-
 	fail := func(msg string) { p.finish("error", msg, "") }
-	step := func(phase, msg string) { p.set(phase, msg, 0) }
+	step := func(msg string) { p.set("staging", msg, 0) }
 
-	// limpa uma tentativa anterior (desmonta um wim que tenha ficado montado)
 	hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run()
 	hidden("dism.exe", "/Cleanup-Wim").Run()
 	os.RemoveAll(stage)
 	for _, d := range []string{filepath.Join(stage, "sources"), filepath.Join(stage, "boot"), mnt} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
-			fail("não consegui criar a pasta de trabalho em " + stage + ": " + err.Error())
+			fail("não consegui criar a pasta de trabalho: " + err.Error())
 			return
 		}
 	}
 
-	// 1. monta a ISO do Windows
-	step("staging", "Abrindo a imagem do Windows…")
+	// 1. abre a ISO do Windows
+	step("Abrindo a imagem do Windows…")
 	var drive string
 	if fake {
-		drive = os.Getenv("UAB_FAKE_ISO_DRIVE") // teste: aponta para uma pasta com sources\boot.wim
+		drive = os.Getenv("UAB_FAKE_ISO_DRIVE")
 	} else {
 		out, err := psOut("$v = Mount-DiskImage -ImagePath '" + isoPath + "' -PassThru | Get-Volume; $v.DriveLetter")
-		letter := strings.TrimSpace(out)
+		letter := strings.TrimSpace(lastNonEmpty(out))
 		if err != nil || len(letter) != 1 {
 			fail("não consegui abrir a ISO do Windows: " + out)
 			return
@@ -133,12 +196,10 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 		drive = letter + ":"
 		defer hidden("powershell.exe", "-NoProfile", "-Command", "Dismount-DiskImage -ImagePath '"+isoPath+"'").Run()
 	}
-	srcBoot := drive + `\sources\boot.wim`
-	if _, err := os.Stat(srcBoot); err != nil {
+	if _, err := os.Stat(drive + `\sources\boot.wim`); err != nil {
 		fail("a ISO não tem sources\\boot.wim (ISO não suportada)")
 		return
 	}
-	// imagem do sistema: install.wim, .esd ou dividida (.swm)
 	var srcInstall, dstInstall string
 	for _, n := range []string{"install.wim", "install.esd"} {
 		if _, err := os.Stat(drive + `\sources\` + n); err == nil {
@@ -150,29 +211,28 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 		fail("a ISO não tem sources\\install.wim/.esd")
 		return
 	}
+	fi, _ := os.Stat(srcInstall)
+	installSize := int64(0)
+	if fi != nil {
+		installSize = fi.Size()
+	}
 
-	// 2. WinPE de instalação (índice "Setup") -> boot.wim de um índice só
-	step("staging", "Preparando o instalador (1/3)…")
+	// 2. WinPE pequeno (índice "Setup") -> stage\sources\boot.wim (poucas centenas de MB: cabe no ramdisk do BIOS)
+	step("Preparando o WinPE (1/3)…")
 	dstBoot := filepath.Join(stage, "sources", "boot.wim")
 	if !fake {
-		idx := setupWimIndex(srcBoot)
-		if out, err := hidden("dism.exe", "/Export-Image", "/SourceImageFile:"+srcBoot,
-			fmt.Sprintf("/SourceIndex:%d", idx), "/DestinationImageFile:"+dstBoot).CombinedOutput(); err != nil {
-			fail("falha ao preparar o WinPE: " + lastLines(string(out)))
+		if err := dismRun("/Export-Image", "/SourceImageFile:"+drive+`\sources\boot.wim`,
+			fmt.Sprintf("/SourceIndex:%d", setupWimIndex(drive+`\sources\boot.wim`)), "/DestinationImageFile:"+dstBoot); err != nil {
+			fail("falha ao preparar o WinPE: " + err.Error())
 			return
 		}
 	}
 
-	// 3. injeta a imagem do Windows + o autounattend DENTRO do WinPE (vai tudo para a RAM)
-	step("staging", "Preparando o instalador (2/3): copiando a imagem do Windows… (alguns minutos)")
+	// 3. injeta o autounattend (com pe.js) no WinPE; o marcador uab-dryrun liga o modo teste
+	step("Preparando o WinPE (2/3)…")
 	if !fake {
-		if out, err := hidden("dism.exe", "/Mount-Wim", "/WimFile:"+dstBoot, "/Index:1", "/MountDir:"+mnt).CombinedOutput(); err != nil {
-			fail("falha ao montar o WinPE: " + lastLines(string(out)))
-			return
-		}
-		if err := copyFile(srcInstall, filepath.Join(mnt, "sources", dstInstall)); err != nil {
-			hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run()
-			fail("falha ao copiar a imagem do Windows: " + err.Error())
+		if err := dismRun("/Mount-Wim", "/WimFile:"+dstBoot, "/Index:1", "/MountDir:"+mnt); err != nil {
+			fail("falha ao montar o WinPE: " + err.Error())
 			return
 		}
 		if err := copyFile(unattendPath, filepath.Join(mnt, "autounattend.xml")); err != nil {
@@ -180,10 +240,16 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 			fail("falha ao gravar as respostas: " + err.Error())
 			return
 		}
-		step("staging", "Preparando o instalador (3/3): finalizando o WinPE… (alguns minutos)")
-		if out, err := hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Commit").CombinedOutput(); err != nil {
+		// marcadores lidos pelo pe.js: "sem pendrive" (preserva a partição da imagem e não
+		// abre janelas, pois não há técnico na tela) e, no teste, "só escreva o plano".
+		os.WriteFile(filepath.Join(mnt, "uab-nopendrive"), []byte("1"), 0o644)
+		if dry {
+			os.WriteFile(filepath.Join(mnt, "uab-dryrun"), []byte("1"), 0o644)
+		}
+		step("Preparando o WinPE (3/3)…")
+		if err := dismRun("/Unmount-Wim", "/MountDir:"+mnt, "/Commit"); err != nil {
 			hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run()
-			fail("falha ao finalizar o WinPE: " + lastLines(string(out)))
+			fail("falha ao finalizar o WinPE: " + err.Error())
 			return
 		}
 	}
@@ -192,27 +258,41 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 		return
 	}
 
-	// 4. entradas de boot (modeladas na entrada do WinRE deste PC), com backup e boot de uma vez só
-	step("staging", "Configurando a inicialização…")
-	if !fake {
-		bcd("/export", filepath.Join(stage, "bcd-backup"))
+	// 4. partição reservada com a imagem do Windows (o pe.js instala a partir dela e a preserva)
+	step("Reservando espaço no disco e copiando a imagem do Windows… (alguns minutos)")
+	var media string
+	if fake {
+		media = os.Getenv("UAB_FAKE_MEDIA_DIR")
+	} else {
+		var err error
+		if media, err = mediaPartitionLetter(installSize); err != nil {
+			fail(err.Error())
+			return
+		}
+		os.MkdirAll(media+`\sources`, 0o755)
+		if err := copyFile(srcInstall, media+`\sources\`+dstInstall); err != nil {
+			fail("falha ao copiar a imagem do Windows para a partição reservada: " + err.Error())
+			return
+		}
 	}
-	winload := `\windows\system32\winload.efi`
-	mgr := "{fwbootmgr}"
+
+	// 5. entradas de boot (ramdisk do WinPE pequeno em C:), modeladas na entrada do WinRE
+	step("Configurando a inicialização…")
+	winload, mgr := `\windows\system32\winload.efi`, "{fwbootmgr}"
 	if !uefiFirmware() {
 		winload, mgr = `\windows\system32\winload.exe`, "{bootmgr}"
 	}
 	ramdisk := "ramdisk=[" + sysDrive + `]\uab-reinstall\sources\boot.wim,`
-
-	if fake { // teste: só registra o que faria, sem tocar no BCD nem reiniciar
-		plan := fmt.Sprintf("winload=%s mgr=%s device=%s{OPTS}\nsdipath=\\uab-reinstall\\boot\\boot.sdi\ninstall=%s", winload, mgr, ramdisk, dstInstall)
+	if fake {
 		if f := os.Getenv("UAB_FAKE_KEXEC"); f != "" {
-			os.WriteFile(f, []byte(plan), 0o644)
+			os.WriteFile(f, []byte(fmt.Sprintf("dry=%v media=%s winload=%s mgr=%s device=%s{OPTS}\nsdi=%s\\uab-reinstall\\boot\\boot.sdi\ninstall=%s",
+				dry, media, winload, mgr, ramdisk, sysDrive, dstInstall)), 0o644)
 		}
 		p.finish("done", "(teste) instalador preparado; nada foi reiniciado.", "")
 		return
 	}
-
+	bcd("/export", filepath.Join(stage, "bcd-backup"))
+	deletePrevBCD()
 	optsOut, err := bcd("/create", "/d", "isoBuilder ramdisk", "/device")
 	opts := reBCDGUID.FindString(optsOut)
 	if err != nil || opts == "" {
@@ -221,7 +301,6 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 	}
 	bcd("/set", opts, "ramdisksdidevice", "partition="+sysDrive)
 	bcd("/set", opts, "ramdisksdipath", `\uab-reinstall\boot\boot.sdi`)
-
 	entOut, err := bcd("/create", "/d", "isoBuilder - Instalar Windows", "/application", "osloader")
 	ent := reBCDGUID.FindString(entOut)
 	if err != nil || ent == "" {
@@ -247,11 +326,18 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 		return
 	}
 
-	osBeforeInstallReboot() // suspende o BitLocker por um reinício (inofensivo se estiver desligado)
-	step("rebooting", "Tudo pronto. Reiniciando para instalar o Windows; o computador volta a aparecer no painel quando terminar.")
+	if dry {
+		p.finish("done", "Modo teste: o PC vai reiniciar no instalador, escrever o plano (sem apagar nada) e voltar ao Windows. Depois me mande o arquivo "+media+`\uab-plan.txt`+".", "")
+	} else {
+		osBeforeInstallReboot()
+		p.set("rebooting", "Tudo pronto. Reiniciando para instalar o Windows; o computador volta a aparecer no painel quando terminar.", 0)
+	}
 	time.Sleep(1500 * time.Millisecond)
-	if err := exec.Command("shutdown.exe", "/r", "/t", "5", "/c", "isoBuilder: reiniciando para instalar o Windows").Run(); err != nil {
+	if err := exec.Command("shutdown.exe", "/r", "/t", "5", "/c", "isoBuilder: reiniciando").Run(); err != nil {
 		fail("não consegui reiniciar: " + err.Error())
+		return
+	}
+	if dry {
 		return
 	}
 	p.finish("done", "Reiniciando para instalar…", "")

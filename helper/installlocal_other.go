@@ -9,6 +9,6 @@ func osLocalInstallReason(kind string) string {
 	return "indisponível neste sistema"
 }
 
-func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
+func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *progress) {
 	p.finish("error", "instalação sem pendrive indisponível neste sistema", "")
 }
