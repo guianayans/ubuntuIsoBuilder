@@ -268,6 +268,8 @@ def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
         ("respostas pelo registro (Ventoy)",
          "cmd.exe /c for /f \"tokens=2*\" %a in ('reg query HKLM\\SYSTEM\\Setup /v UnattendFile 2^>nul') do @if exist \"%b\" "
          + grab.format(src='"%b"')),
+        ("respostas no Panther do WinPE (boot por ramdisk, sem pendrive)",
+         r"cmd.exe /c if exist X:\Windows\Panther\unattend.xml " + grab.format(src=r"X:\Windows\Panther\unattend.xml")),
         ("monta o pe.js",
          r'cmd.exe /c (for /f "usebackq tokens=1* delims=|" %a in ("X:\uab\raw.txt") do @echo.%b) >X:\uab\pe.js & exit 0'),
         ("instala no maior disco interno", r"cmd.exe /c if exist X:\uab\pe.js cscript.exe //nologo //e:jscript X:\uab\pe.js"),

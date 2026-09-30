@@ -235,9 +235,19 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 			fail("falha ao montar o WinPE: " + err.Error())
 			return
 		}
-		if err := copyFile(unattendPath, filepath.Join(mnt, "autounattend.xml")); err != nil {
+		// o Setup, num WinPE por ramdisk, procura o arquivo de respostas em \Windows\Panther;
+		// gravamos lá (para o Setup achar) e na raiz (o extrator do pe.js também procura nas raízes).
+		panther := filepath.Join(mnt, "Windows", "Panther")
+		os.MkdirAll(panther, 0o755)
+		okAny := false
+		for _, dst := range []string{filepath.Join(mnt, "autounattend.xml"), filepath.Join(panther, "unattend.xml")} {
+			if err := copyFile(unattendPath, dst); err == nil {
+				okAny = true
+			}
+		}
+		if !okAny {
 			hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run()
-			fail("falha ao gravar as respostas: " + err.Error())
+			fail("falha ao gravar as respostas no WinPE")
 			return
 		}
 		// marcadores lidos pelo pe.js: "sem pendrive" (preserva a partição da imagem e não
