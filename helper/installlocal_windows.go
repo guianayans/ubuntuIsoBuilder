@@ -111,7 +111,7 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, p *progress) {
 	hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run()
 	hidden("dism.exe", "/Cleanup-Wim").Run()
 	os.RemoveAll(stage)
-	for _, d := range []string{filepath.Join(stage, "sources"), filepath.Join(stage, "boot")} {
+	for _, d := range []string{filepath.Join(stage, "sources"), filepath.Join(stage, "boot"), mnt} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			fail("não consegui criar a pasta de trabalho em " + stage + ": " + err.Error())
 			return

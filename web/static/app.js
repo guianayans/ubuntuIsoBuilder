@@ -1542,7 +1542,7 @@ async function formatDialog(dev) {
     </ol>
     <p class="muted small">Funciona em PCs com UEFI (quase todos de 2012 para cá). Se o PC usar BIOS antiga, ou se a BIOS bloquear boot por USB, o painel avisa e alguém no local escolhe o pendrive no menu de boot (F12). O BitLocker é suspenso por um reinício.</p>`;
   const diskBody = isWin
-    ? `<div class="note warn">Sem pendrive, por enquanto, só para <b>Ubuntu/Linux</b>. Este PC é Windows: use a opção <b>com pendrive</b>.</div>`
+    ? `<div class="note warn">Windows sem pendrive é feito <b>pelo gravador</b>, não por aqui: conecte-se a este PC (aba <b>Tela</b> ou Remoto), abra o gravador pelo site e use <b>"Formatar este computador"</b>. Por aqui no painel, use a opção <b>com pendrive</b>.</div>`
     : `<p class="small u-mt8">O PC baixa a ISO escolhida direto do painel e reinicia por ela (o instalador roda na memória, sem pendrive e sem ninguém no local). Serve em UEFI e em BIOS antiga.</p>
       ${isos.length
         ? `<label class="f">ISO do Ubuntu a instalar:
