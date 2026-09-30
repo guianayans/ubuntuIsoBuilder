@@ -704,6 +704,22 @@ def _file_name(r) -> str:
     return builder.win_config_name(r["hostname"]) if _is_win(r) else f"{r['hostname']}-autoinstall.iso"
 
 
+def windows_config_bytes(r) -> bytes:
+    """autounattend.xml do build Windows, com o pe.js embutido SEMPRE na versão atual do painel
+    (o arquivo é gravado quando a ISO é criada e não muda sozinho; assim um Redeploy corrige
+    builds antigos). Determinístico: o bundle e o /config usam isto, então tamanho+SHA256 batem."""
+    with open(r["iso_path"], encoding="utf-8") as fh:
+        xml = fh.read()
+    try:
+        summ = json.loads(r["summary"] or "{}")
+        image = f"Windows {summ.get('WIN_VERSION') or '11'} {summ.get('WIN_EDITION') or 'Pro'}"
+        fresh = "<PE>" + winconfig._cdata("\n" + "\n".join(winconfig._pe_lines(r["id"], image)) + "\n") + "</PE>"
+        xml = re.sub(r"<PE>.*?</PE>", lambda _m: fresh, xml, count=1, flags=re.S)
+    except Exception:  # noqa: BLE001  (se falhar, serve o arquivo como está)
+        pass
+    return xml.encode("utf-8")
+
+
 def _build_row(r, u: core.User) -> dict:
     return {"id": r["id"], "hostname": r["hostname"], "series": r["series"], "status": r["status"],
             "os": r["os"] or "ubuntu",
@@ -1258,8 +1274,10 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
     _record_download(bid, u.email, f"gravador-{platform}")
     if _is_win(r):  # o gravador baixa o Windows da Microsoft e aplica esta configuração
         summ = json.loads(r["summary"] or "{}")
+        import hashlib as _hl
+        cfg_bytes = windows_config_bytes(r)  # mesmo conteúdo que /config serve (pe.js atual)
         info = {"kind": "windows", "server": PUBLIC_URL, "token": token, "config_name": _file_name(r),
-                "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp,
+                "sha256": _hl.sha256(cfg_bytes).hexdigest(), "size": len(cfg_bytes), "hostname": r["hostname"], "expires_at": exp,
                 "windows": {"version": summ.get("WIN_VERSION") or "11", "edition": summ.get("WIN_EDITION") or "Pro",
                             "lang": summ.get("WIN_LANG") or "pt-BR", "arch": "x64"}}
         if winstore.have(summ.get("WIN_LANG") or "pt-BR", "x64"):  # reserva no servidor (Microsoft recusou?)
@@ -1320,18 +1338,7 @@ def token_config(token: str):
         raise HTTPException(404, "só builds do Windows têm configuração")
     if not r or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
         raise HTTPException(410, "configuração removida do servidor")
-    with open(r["iso_path"], encoding="utf-8") as fh:
-        xml = fh.read()
-    # Mantém o instalador (pe.js) embutido SEMPRE na versão atual: assim um Redeploy corrige
-    # builds antigos (o autounattend é gravado quando a ISO é criada e não muda sozinho).
-    try:
-        summ = json.loads(r["summary"] or "{}")
-        image = f"Windows {summ.get('WIN_VERSION') or '11'} {summ.get('WIN_EDITION') or 'Pro'}"
-        fresh = "<PE>" + winconfig._cdata("\n" + "\n".join(winconfig._pe_lines(r["id"], image)) + "\n") + "</PE>"
-        xml = re.sub(r"<PE>.*?</PE>", lambda _m: fresh, xml, count=1, flags=re.S)
-    except Exception:  # noqa: BLE001  (se falhar, serve o arquivo como está)
-        pass
-    return Response(content=xml, media_type="application/xml",
+    return Response(content=windows_config_bytes(r), media_type="application/xml",
                     headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{_file_name(r)}"'})
 
 
