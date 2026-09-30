@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -22,8 +23,8 @@ var autoFormatState = map[string]string{
 // Saídas: 0 reiniciando/ok, 1 erro.
 func runAutoFormat(a *app, reportURL string, dry bool) int {
 	rep := &formatReporter{url: reportURL, c: &http.Client{Timeout: 20 * time.Second}}
-	if a.bundle == nil || !a.bundle.isWindows() {
-		rep.send("erro", "gravador sem configuração de Windows.", nil)
+	if a.bundle == nil {
+		rep.send("erro", "gravador sem configuração embutida.", nil)
 		return 1
 	}
 	p := &progress{}
@@ -59,6 +60,19 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 	defer close(stop)
 
 	ctx := context.Background()
+
+	if !a.bundle.isWindows() { // build de Ubuntu num PC Windows: EFISTUB via UEFI (sem pendrive)
+		b := a.bundle
+		base := strings.TrimRight(b.Server, "/") + "/t/" + b.Token
+		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/iso", dry, p)
+		if st := p.get(); st.Phase == "error" {
+			rep.send("erro", st.Message, nil)
+			return 1
+		}
+		rep.send("reiniciando", "Tudo pronto. Reiniciando para instalar o Ubuntu; o computador volta a aparecer no painel quando terminar.", nil)
+		return 0
+	}
+
 	rep.send("baixando", "Baixando a configuração do painel…", nil)
 	if err := a.loadConfig(); err != nil {
 		rep.send("erro", "não consegui baixar a configuração: "+err.Error(), nil)

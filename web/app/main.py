@@ -1133,13 +1133,15 @@ async def format_start(request: Request, u: core.User = Depends(admin_user)):
         r = _get_build(str(d.get("build_id") or ""), u)
         if r["status"] != "done":
             raise core.Invalid("Escolha uma configuração pronta para instalar.")
-        if platform == "windows":
-            if not _is_win(r):
-                raise core.Invalid("Este PC é Windows: escolha uma configuração de Windows.")
+        if _is_win(r):
+            # build de Windows: só num PC Windows (WinPE por ramdisk)
+            if platform != "windows":
+                raise core.Invalid("Uma configuração de Windows só instala num PC Windows.")
             summ = json.loads(r["summary"] or "{}")
             iso_label = f"Windows {summ.get('WIN_VERSION') or '11'} {summ.get('WIN_EDITION') or 'Pro'} ({summ.get('WIN_LANG') or 'pt-BR'})"
         else:
-            if _is_win(r) or not r["iso_path"] or not os.path.exists(r["iso_path"]):
+            # ISO de Ubuntu: em PC Linux (kexec) OU em PC Windows (EFISTUB via UEFI, sem pendrive)
+            if not r["iso_path"] or not os.path.exists(r["iso_path"]):
                 raise core.Invalid("Escolha uma ISO de Ubuntu pronta para instalar.")
             iso_path = r["iso_path"]
             iso_label = f"ISO {r['hostname']} ({(r['iso_size'] or 0) / 1e9:.1f} GB)"
@@ -1238,19 +1240,22 @@ def _format_disk_build(token: str):
 
 @app.get("/f/{token}/gravador")
 def format_gravador(token: str, arch: str = "x64"):
-    """Gravador personalizado (Windows, com o build embutido) para o 'sem pendrive':
-    o agente do Remoto baixa este .exe e roda `--auto-format`, que baixa a ISO/config
-    e instala no disco. Só enquanto o pedido está valendo."""
+    """Gravador do Windows com o build embutido para o 'sem pendrive': o agente do Remoto baixa
+    este .exe e roda `--auto-format`. Serve para instalar Windows (WinPE) OU Ubuntu (EFISTUB,
+    via UEFI) num PC Windows — o gravador decide pelo tipo do build embutido. Só enquanto vale."""
     b = _format_disk_build(token)
-    if not _is_win(b):
-        raise HTTPException(404, "este pedido não é de Windows")
     name, mt = HELPERS["windows"]
     base = os.path.join(HELPER_DIR, name)
     if not os.path.exists(base):
         raise HTTPException(404, "gravador do Windows não compilado nesta instalação")
     exp = min(b["expires_at"] or core.now() + 86400, core.now() + DL_TOKEN_DAYS * 86400)
     dl = core.create_dl_token(b["id"], exp, b["user_id"])
-    cfg = json.dumps(_win_bundle_info(b, dl, exp), separators=(",", ":")).encode()
+    if _is_win(b):
+        info = _win_bundle_info(b, dl, exp)
+    else:  # ISO de Ubuntu instalada num PC Windows (EFISTUB): mesmo bundle do gravador do Ubuntu
+        info = {"kind": "ubuntu", "server": PUBLIC_URL, "token": dl, "iso_name": _file_name(b),
+                "sha256": b["sha256"], "size": b["iso_size"], "hostname": b["hostname"], "expires_at": exp}
+    cfg = json.dumps(info, separators=(",", ":")).encode()
     overlay, gen = _bundle_overlay(base, cfg)
     return StreamingResponse(gen(), media_type=mt, headers={
         "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store",
@@ -1398,6 +1403,33 @@ def token_iso(token: str):
         raise HTTPException(410, "ISO removida do servidor")
     return FileResponse(r["iso_path"], media_type="application/octet-stream",
                         filename=_file_name(r), headers={"Cache-Control": "no-store"})
+
+
+def _t_ubuntu_build(token: str):
+    """Build de Ubuntu de um link temporário (para kernel/initrd do EFISTUB no Windows)."""
+    bid = core.dl_token_build(token)
+    if not bid:
+        raise HTTPException(410, "link expirado ou inválido")
+    with core.db() as con:
+        r = con.execute("SELECT * FROM builds WHERE id=?", (bid,)).fetchone()
+    if not r or _is_win(r) or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
+        raise HTTPException(410, "ISO removida do servidor")
+    return r
+
+
+@app.get("/t/{token}/kernel")
+def token_kernel(token: str):
+    """Kernel (vmlinuz, EFISTUB) da ISO — para instalar Ubuntu num PC Windows sem pendrive."""
+    r = _t_ubuntu_build(token)
+    return FileResponse(_iso_boot_files(r["iso_path"])[0], media_type="application/octet-stream",
+                        filename="vmlinuz", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/t/{token}/initrd")
+def token_initrd(token: str):
+    r = _t_ubuntu_build(token)
+    return FileResponse(_iso_boot_files(r["iso_path"])[1], media_type="application/octet-stream",
+                        filename="initrd", headers={"Cache-Control": "no-store"})
 
 
 @app.api_route("/t/{token}/config", methods=["GET", "HEAD"])

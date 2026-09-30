@@ -1659,8 +1659,12 @@ async function formatDialog(dev) {
   let isos = [];
   try {
     const done = (await api("/api/builds")).builds.filter(b => b.status === "done");
-    isos = done.filter(b => ((b.os || "ubuntu") === "windows") === isWin);
+    // PC Windows: Windows (WinPE) OU Ubuntu (EFISTUB/UEFI). PC Linux: só Ubuntu (kexec).
+    isos = done.filter(b => (b.os || "ubuntu") === "windows" ? isWin : true);
   } catch (e) { }
+  const isoOpt = b => (b.os || "ubuntu") === "windows"
+    ? `${esc(b.hostname)} — ${esc((b.summary && b.summary.image) || "Windows 11")}`
+    : `${esc(b.hostname)} — Ubuntu ${esc(b.series)} (${fmtBytes(b.iso_size)})`;
   closeOverlay();
   OVL = { fmt: dev.id };
   const usbSteps = `<ol class="fmt-steps">
@@ -1670,12 +1674,13 @@ async function formatDialog(dev) {
     </ol>
     <p class="muted small">Funciona em PCs com UEFI (quase todos de 2012 para cá). Se o PC usar BIOS antiga, ou se a BIOS bloquear boot por USB, o painel avisa e alguém no local escolhe o pendrive no menu de boot (F12). O BitLocker é suspenso por um reinício.</p>`;
   const diskBody = isWin
-    ? `<p class="small u-mt8">O PC baixa o Windows (da Microsoft ou da reserva do painel) e a sua configuração, prepara uma partição temporária e reinicia por ela para instalar — <b>sem pendrive e sem ninguém no local</b>. Serve em UEFI e em BIOS antiga.</p>
+    ? `<p class="small u-mt8">O PC baixa o instalador direto do painel e reinicia por ele — <b>sem pendrive e sem ninguém no local</b>.</p>
       ${isos.length
-        ? `<label class="f">Configuração de Windows a instalar:
-            <select id="fmtIso">${isos.map(b => `<option value="${esc(b.id)}">${esc(b.hostname)} — ${esc((b.summary && b.summary.image) || "Windows 11")}</option>`).join("")}</select></label>`
-        : `<div class="note warn">Nenhuma configuração de Windows pronta. Gere uma em <b>Nova ISO</b> (Windows) primeiro.</div>`}
-      <p class="muted small">O disco precisa de espaço livre para a imagem (~10 GB). Se faltar, o instalador avisa e você usa o pendrive.</p>`
+        ? `<label class="f">Sistema a instalar:
+            <select id="fmtIso">${isos.map(b => `<option value="${esc(b.id)}">${isoOpt(b)}</option>`).join("")}</select></label>`
+        : `<div class="note warn">Nenhuma configuração pronta. Gere uma em <b>Nova ISO</b> (Windows ou Ubuntu) primeiro.</div>`}
+      <p class="muted small"><b>Windows:</b> usa uma partição reservada (precisa de ~10 GB livres no disco); serve em UEFI e BIOS.<br>
+      <b>Ubuntu:</b> só em PC <b>UEFI</b> com o <b>Secure Boot desligado</b> (carrega o instalador na RAM; ~4 GB de RAM e rede). Se não puder, o instalador avisa e você usa o pendrive.</p>`
     : `<p class="small u-mt8">O PC baixa a ISO escolhida direto do painel e reinicia por ela (o instalador roda na memória, sem pendrive e sem ninguém no local). Serve em UEFI e em BIOS antiga.</p>
       ${isos.length
         ? `<label class="f">ISO do Ubuntu a instalar:

@@ -187,6 +187,12 @@ func findInstallStick() (*usbTarget, error) {
 // efiLoadOption monta o EFI_LOAD_OPTION (especificação UEFI 3.1.3): atributos,
 // descrição e o caminho HD(partição) + arquivo do carregador.
 func efiLoadOption(desc string, t *usbTarget, loader string) []byte {
+	return efiLoadOptionData(desc, t, loader, nil)
+}
+
+// efiLoadOptionData: igual, com OptionalData no fim (o firmware entrega ao carregador como
+// LoadOptions). Usado pelo EFISTUB do Ubuntu para receber a linha de comando do kernel.
+func efiLoadOptionData(desc string, t *usbTarget, loader string, optional []byte) []byte {
 	le := binary.LittleEndian
 	hd := make([]byte, 42)
 	hd[0], hd[1] = 0x04, 0x01 // Media Device Path / Hard Drive
@@ -215,6 +221,7 @@ func efiLoadOption(desc string, t *usbTarget, loader string) []byte {
 		_ = binary.Write(&b, le, c)
 	}
 	b.Write(list)
+	b.Write(optional)
 	return b.Bytes()
 }
 
@@ -255,6 +262,40 @@ func armBootNext(t *usbTarget) (string, error) {
 	}
 	name := fmt.Sprintf("Boot%04X", num)
 	if err := efiSet(name, efiLoadOption(bootEntryDesc, t, efiLoader())); err != nil {
+		return "", fmt.Errorf("a placa-mãe não aceitou a entrada de boot: %w", err)
+	}
+	next := []byte{byte(num), byte(num >> 8)}
+	if err := efiSet("BootNext", next); err != nil {
+		return "", fmt.Errorf("a placa-mãe não aceitou o próximo boot: %w", err)
+	}
+	if got, err := efiGet("BootNext"); err != nil || !bytes.Equal(got, next) {
+		return "", errors.New("a placa-mãe não guardou o próximo boot")
+	}
+	return name, nil
+}
+
+// armBootNextLO grava um EFI_LOAD_OPTION já montado (ex.: EFISTUB do Ubuntu, com cmdline) e
+// marca BootNext. Mesma faixa/reaproveitamento por descrição do armBootNext.
+func armBootNextLO(desc string, lo []byte) (string, error) {
+	if !efiSupported() {
+		return "", errNoUEFI
+	}
+	num := -1
+	for n := bootEntryFirst; n <= bootEntryLast; n++ {
+		cur, err := efiGet(fmt.Sprintf("Boot%04X", n))
+		if err == nil && loadOptionDesc(cur) == desc {
+			num = n
+			break
+		}
+		if err != nil && num < 0 {
+			num = n
+		}
+	}
+	if num < 0 {
+		return "", errors.New("sem número livre para a entrada de boot")
+	}
+	name := fmt.Sprintf("Boot%04X", num)
+	if err := efiSet(name, lo); err != nil {
 		return "", fmt.Errorf("a placa-mãe não aceitou a entrada de boot: %w", err)
 	}
 	next := []byte{byte(num), byte(num >> 8)}
