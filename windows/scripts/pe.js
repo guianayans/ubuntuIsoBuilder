@@ -65,7 +65,26 @@ function tell(msg) {
     sh.Run("notepad.exe \"" + p + "\"", 1, true);
 }
 
+// persist grava um texto + o log em TODAS as unidades prontas, para sobreviver ao reboot
+// (no modo sem pendrive não há técnico na tela, e o WinPE está na RAM: o log se perderia).
+function persist(text) {
+    var body = "=== ISO Builder (pe.js) ===\r\n" + text + "\r\n\r\n=== LOG ===\r\n";
+    try { body += readText(LOG); } catch (e) { }
+    var e2 = new Enumerator(fso.Drives);
+    for (; !e2.atEnd(); e2.moveNext()) {
+        try { if (e2.item().IsReady) writeText(e2.item().DriveLetter + ":\\uab-crash.txt", body, false); } catch (x) { }
+    }
+}
+
 function fail(msg, erased) {
+    log("FALHA: " + msg);
+    if (typeof NOPEN !== "undefined" && NOPEN) {
+        // sem pendrive: ninguém para fechar um Bloco de Notas; grava o motivo e reinicia
+        persist("FALHA: " + msg + (erased ? " (o disco já havia sido alterado!)" : " (nada foi apagado)"));
+        run("wpeutil reboot");
+        WScript.Sleep(60000);
+        WScript.Quit(1);
+    }
     tell("ISO Builder - instalação automática do Windows\r\n\r\n" + msg + "\r\n\r\n" +
         (erased ? "O disco escolhido já tinha sido apagado. " : "Nenhum disco foi apagado. ") +
         "\r\nAo fechar esta janela, o instalador normal do Windows continua\r\ne você pode escolher o disco manualmente.");
@@ -90,6 +109,7 @@ function readyRoots() {
 }
 
 // ------------------------------------------------------------------ 1. mídia e respostas
+try {
 log("=== ISO Builder: instalação no WinPE (build " + UAB.build + ") ===");
 var roots = readyRoots();
 log("unidades: " + roots.join(" "));
@@ -270,6 +290,7 @@ if (DRY) {
         dp.join("\r\n") + "\r\n\r\n=== disco real agora ===\r\n" + layout + "\r\n";
     writeText(media.letter + ":\\uab-plan.txt", plan, false);
     try { fso.CopyFile(LOG, media.letter + ":\\uab-pe.log", true); } catch (e) { }
+    persist("MODO TESTE concluído — plano:\r\n\r\n" + plan); // grava em todas as unidades, por garantia
     log("MODO TESTE: plano escrito em " + media.letter + ":\\uab-plan.txt; reiniciando sem apagar");
     run("wpeutil reboot");
     WScript.Sleep(60000);
@@ -304,3 +325,14 @@ log("pronto: Windows aplicado no disco " + best.index + "; reiniciando");
 try { fso.CopyFile(LOG, ud + "\\logs\\pe.log", true); } catch (e) { }
 run("wpeutil reboot");
 WScript.Sleep(60000);
+} catch (uabEx) {
+    // qualquer erro inesperado: no modo sem pendrive grava o motivo e reinicia (não trava)
+    if (typeof NOPEN !== "undefined" && NOPEN) {
+        try { persist("EXCEÇÃO: " + (uabEx.message || uabEx) + " (num " + (uabEx.number || "?") + ")"); } catch (e) { }
+        try { run("wpeutil reboot"); } catch (e) { }
+        WScript.Sleep(60000);
+    } else {
+        try { tell("Erro inesperado: " + (uabEx.message || uabEx)); } catch (e) { }
+    }
+    WScript.Quit(1);
+}
