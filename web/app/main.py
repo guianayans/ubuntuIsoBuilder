@@ -1657,16 +1657,23 @@ async def agent_report(request: Request):
             "hw_id=excluded.hw_id, off_at=NULL, off_reason=''",
             (key, b["id"], mid, host, now_, now_, json.dumps(rep_), client_ip(request), hw))
         # se havia um pedido de "formatar à distância", a volta da máquina ao painel significa
-        # que a instalação terminou: marca o pedido como concluído. Casa pelo build_id (a máquina
-        # reinstalada reporta com o token daquele build) ou, como reforço, pelo nome do pedido.
-        # (Sem pendrive o hostname muda para o do build, por isso o build_id é o sinal confiável.)
+        # que a instalação terminou: marca o pedido como concluído. Casa pelo build_id (sem
+        # pendrive a máquina reporta com o token daquele build) OU pelo nome do pedido — inclusive
+        # o nome de QUALQUER entrada do mesmo hardware (hw_id). No modo PENDRIVE o build_id do
+        # pedido é vazio e o hostname muda (ex.: Linux "hotel-interno" → Windows "teste"); a
+        # entrada antiga (mesmo hw, ainda não arquivada neste ponto) guarda o nome que o pedido usou.
+        names = [host]
+        if hw:
+            names += [r[0] for r in con.execute(
+                "SELECT DISTINCT hostname FROM machines WHERE hw_id=? AND id!=?", (hw, key)) if r[0]]
+        ph = ",".join("?" for _ in names)
         con.execute(
             "UPDATE format_jobs SET state='concluído', "
             "message='Instalação concluída: o computador voltou ao painel.', updated_at=? "
             "WHERE cancel=0 AND expires_at>=? "
             "AND state IN ('enviado','aguardando','encontrado','baixando','preparando','reiniciando','instalando') "
-            "AND (build_id=? OR LOWER(name)=LOWER(?))",
-            (now_, now_, b["id"], host))
+            f"AND (build_id=? OR LOWER(name) IN ({ph}))",
+            (now_, now_, b["id"], *[n.lower() for n in names]))
         moved = _adopt_reinstalled(con, key, b["id"], hw) if hw else False
         replaced = _archive_replaced(con, key, b["id"], hw, host) if hw and not moved else []
         archived = bool(con.execute("SELECT archived_at FROM machines WHERE id=?", (key,)).fetchone()["archived_at"])
@@ -1936,18 +1943,21 @@ async def update_machine(mid: str, request: Request, u: core.User = Depends(curr
 def _claude_script(platform: str, rep: str, action: str) -> tuple[int, str]:
     """Comandos que o agente roda para instalar/desinstalar o Claude Code, transmitindo o log."""
     if platform == "windows":
-        runonce = ('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v UABClaudeCode '
-                   '/t REG_SZ /d "powershell -NoProfile -ExecutionPolicy Bypass -Command \\"try { irm '
-                   'https://claude.ai/install.ps1 | iex } catch {}\\"" /f')
+        # New-ItemProperty (aspas simples) em vez de reg.exe com aspas aninhadas (\") — que o
+        # PowerShell parseava errado, fazendo o ramo "ninguém logado" falhar sem reportar.
+        runonce = ("New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce' "
+                   "-Name UABClaudeCode -PropertyType String -Force "
+                   "-Value 'powershell -NoProfile -ExecutionPolicy Bypass -Command \"try { irm "
+                   "https://claude.ai/install.ps1 | iex } catch {}\"'")
         head = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\n"
                 f"$R='{rep}'\n"
                 "function Tail($p){ try { $t=Get-Content -Raw -ErrorAction SilentlyContinue $p; if($t -and $t.Length -gt 6000){ $t=$t.Substring($t.Length-6000) }; return $t } catch { return '' } }\n"
-                "function Send($st,$txt){ try { Invoke-RestMethod -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
+                "function Send($st,$txt){ try { Invoke-RestMethod -UseBasicParsing -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
                 "$sys = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18'\n")
         if action == "uninstall":
             ps = head + (
                 "if ($sys) {\n"
-                "  reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce\" /v UABClaudeCode /f 2>$null | Out-Null\n"
+                "  Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce' -Name UABClaudeCode -ErrorAction SilentlyContinue\n"
                 "  Send 'removido' 'Instalacao agendada cancelada. Se o Claude Code ja estava instalado, abra a sessao do usuario e desinstale de novo.'\n"
                 "} else {\n"
                 "  try { Remove-Item -Recurse -Force \"$HOME\\.claude\" -ErrorAction SilentlyContinue; "
@@ -1963,7 +1973,7 @@ def _claude_script(platform: str, rep: str, action: str) -> tuple[int, str]:
             "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\n"
             f"$R='{rep}'\n"
             "function Tail($p){ try { $t=Get-Content -Raw -ErrorAction SilentlyContinue $p; if($t -and $t.Length -gt 6000){ $t=$t.Substring($t.Length-6000) }; return $t } catch { return '' } }\n"
-            "function Send($st,$txt){ try { Invoke-RestMethod -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
+            "function Send($st,$txt){ try { Invoke-RestMethod -UseBasicParsing -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
             "$log=Join-Path $env:TEMP 'uab-claude.log'; $err=\"$log.err\"\n"
             "Send 'instalando' 'Baixando e instalando o Claude Code...'\n"
             "try {\n"
