@@ -1308,8 +1308,12 @@ async function renderSystem() {
     const busy = (d.isos || []).some(i => i.fetch && i.fetch.state === "running");
     const rows = (d.isos || []).filter(i => i.present || i.fetch).map(i => {
       const f = i.fetch;
-      const st = f ? (f.state === "running" ? `${esc(f.message || "baixando…")} <b>${Math.round(f.percent || 0)}%</b>`
-        : f.state === "error" ? `<span class="err">${esc(f.message)}</span>` : esc(f.message || "")) : (i.present ? "Pronta" : "—");
+      const st = f && f.state === "running"
+        ? `${esc(f.message || "baixando…")} <b>${Math.round(f.percent || 0)}%</b>`
+        : i.present  // a ISO já está salva: uma tentativa posterior de rebaixar que falhou não a invalida
+          ? `<span class="ok">Pronta</span>${f && f.state === "error" ? ` <span class="muted small">(rebaixar de novo falhou; a salva continua valendo)</span>` : ""}`
+          : f && f.state === "error" ? `<span class="err">${esc(f.message)}</span>`
+            : f ? esc(f.message || "") : "—";
       return `<tr><td><b>${esc(i.lang || i.key)}</b>${i.name ? `<br><span class="muted small">${esc(i.name)}</span>` : ""}</td>
         <td>${i.present ? fmtBytes(i.size) : "<span class='muted'>—</span>"}</td>
         <td>${i.at ? fmtDate(i.at) : ""}</td><td>${st}</td>
