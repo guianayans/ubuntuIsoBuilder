@@ -1073,8 +1073,10 @@ def _format_row(r) -> dict:
     elif state == "enviado" and t - r["updated_at"] > 180:
         msg = ("O PC ainda não respondeu. Ele pode estar sem internet, ou o antivírus bloqueou o isoBuilder. "
                "Abra o terminal do PC no Remoto para conferir.")
+    pct = r["percent"] if "percent" in r.keys() else -1
     return {"id": r["id"], "node": r["node"], "name": r["name"], "platform": r["platform"], "state": state,
             "message": msg, "stick": r["stick"], "method": method, "iso": r["stick"] if method == "disk" else "",
+            "percent": pct if state in FORMAT_LIVE else -1,
             "created_at": r["created_at"], "updated_at": r["updated_at"],
             "expires_at": r["expires_at"], "live": state in FORMAT_LIVE}
 
@@ -1282,11 +1284,15 @@ async def format_report(token: str, request: Request):
     if r["cancel"]:
         return {"cancel": True}
     clean = lambda v, n: panel.SAFE.sub("", str(v or ""))[:n]  # noqa: E731
+    try:
+        pct = max(-1, min(100, int(float(d.get("percent")))))
+    except (TypeError, ValueError):
+        pct = -1
     with core.db() as con:
         con.execute("UPDATE format_jobs SET state=?, message=?, stick=CASE WHEN ?<>'' THEN ? ELSE stick END, "
-                    "updated_at=? WHERE id=? AND cancel=0",
+                    "percent=?, updated_at=? WHERE id=? AND cancel=0",
                     (state, clean(d.get("message"), 400), clean(d.get("stick"), 160), clean(d.get("stick"), 160),
-                     core.now(), r["id"]))
+                     pct, core.now(), r["id"]))
     return {"cancel": False}
 
 

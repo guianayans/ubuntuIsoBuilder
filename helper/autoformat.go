@@ -31,7 +31,7 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 	go func() { // ponte progresso -> painel
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
-		last := ""
+		lastMsg, lastPct := "", -1
 		for {
 			select {
 			case <-stop:
@@ -42,9 +42,14 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 				if state == "" {
 					state = "preparando"
 				}
-				if st.Message != "" && st.Message != last {
-					last = st.Message
-					if rep.send(state, st.Message, nil) { // painel cancelou
+				pct := -1
+				if state == "baixando" && st.Percent > 0 { // só o download tem porcentagem confiável
+					pct = int(st.Percent + 0.5)
+				}
+				// avisa quando a mensagem muda ou a porcentagem anda ao menos 1 ponto
+				if st.Message != "" && (st.Message != lastMsg || pct != lastPct) {
+					lastMsg, lastPct = st.Message, pct
+					if rep.sendProgress(state, st.Message, pct) { // painel cancelou
 						return
 					}
 				}

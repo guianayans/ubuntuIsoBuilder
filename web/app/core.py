@@ -167,6 +167,8 @@ def init_db() -> None:
             con.execute("ALTER TABLE format_jobs ADD COLUMN method TEXT NOT NULL DEFAULT 'usb'")
         if "build_id" not in fcols:  # 'disk': qual ISO instalar (não há pendrive carregando-a)
             con.execute("ALTER TABLE format_jobs ADD COLUMN build_id TEXT NOT NULL DEFAULT ''")
+        if "percent" not in fcols:  # andamento (0-100) que o gravador reporta durante a preparação
+            con.execute("ALTER TABLE format_jobs ADD COLUMN percent INTEGER NOT NULL DEFAULT -1")
 
 
 # --------------------------------------------------------------------- senhas

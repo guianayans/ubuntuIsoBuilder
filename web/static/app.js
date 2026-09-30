@@ -1544,7 +1544,8 @@ function fmtJobHTML(j) {
       <span class="muted small">· pedido ${fmtAgo(j.created_at)}${j.live ? ` · espera até ${fmtDate(j.expires_at)}` : ""}</span></div>
       ${j.live ? `<button class="btn sm danger" data-fcancel="${esc(j.id)}" type="button">Cancelar</button>`
         : `<button class="btn sm" data-fdismiss="${esc(j.id)}" type="button" title="Remover este aviso">✕</button>`}</div>
-    ${j.message ? `<p class="small u-mt8 ${j.state === "erro" || j.state === "bios" ? "err" : ""}">${esc(j.message)}</p>` : ""}
+    ${j.message ? `<p class="small u-mt8 ${j.state === "erro" || j.state === "bios" ? "err" : ""}">${esc(j.message)}${j.live && j.percent >= 0 ? ` <b>${j.percent}%</b>` : ""}</p>` : ""}
+    ${j.live && j.percent >= 0 ? `<div class="bar"><i style="width:${j.percent}%"></i></div>` : ""}
     ${j.stick ? `<p class="muted small">${esc(j.stick)}</p>` : ""}</div>`;
 }
 // cartão no topo de Máquinas e Remoto: pedidos em andamento e os que terminaram há pouco

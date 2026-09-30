@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -275,16 +276,30 @@ type formatReporter struct {
 
 // send avisa o painel (se houver endereço) e devolve true se o técnico cancelou.
 func (r *formatReporter) send(state, msg string, t *usbTarget) bool {
+	body := map[string]string{"state": state, "message": msg}
+	if t != nil {
+		body["stick"] = t.String()
+	}
+	return r.post(state, msg, body)
+}
+
+// sendProgress avisa o painel com uma porcentagem (0-100) durante a preparação.
+func (r *formatReporter) sendProgress(state, msg string, percent int) bool {
+	body := map[string]string{"state": state, "message": msg}
+	if percent >= 0 {
+		body["percent"] = strconv.Itoa(percent)
+	}
+	return r.post(state, msg, body)
+}
+
+func (r *formatReporter) post(state, msg string, body map[string]string) bool {
 	fmt.Printf("[%s] %s %s\n", time.Now().Format("15:04:05"), state, msg)
 	if r.url == "" {
 		return false
 	}
-	body := map[string]string{"state": state, "message": msg, "os": osDescription()}
+	body["os"] = osDescription()
 	if h, err := os.Hostname(); err == nil {
 		body["hostname"] = h
-	}
-	if t != nil {
-		body["stick"] = t.String()
 	}
 	raw, _ := json.Marshal(body)
 	for try := 0; try < 3; try++ {
