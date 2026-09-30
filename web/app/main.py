@@ -1251,9 +1251,12 @@ def format_tool(token: str, arch: str = "x64"):
 
 
 def _format_disk_build(token: str):
-    """Build (ISO) do pedido 'sem pendrive', só enquanto ele está valendo."""
+    """Build (ISO) do pedido 'sem pendrive'. NÃO exige o pedido ainda 'vivo' (FORMAT_LIVE):
+    no kexec (Linux) o casper baixa a ISO DEPOIS do reboot — quando o gravador já reportou
+    'reiniciando' e o pedido saiu do FORMAT_LIVE. Basta não estar cancelado nem expirado
+    (o _format_job já checa a validade/expiração pelo token) e ser do método 'sem pendrive'."""
     r = _format_job(token)
-    if r["cancel"] or r["state"] not in FORMAT_LIVE or (r["method"] if "method" in r.keys() else "usb") != "disk":
+    if r["cancel"] or (r["method"] if "method" in r.keys() else "usb") != "disk":
         raise HTTPException(410, "pedido encerrado")
     with core.db() as con:
         b = con.execute("SELECT * FROM builds WHERE id=?", (r["build_id"],)).fetchone()
