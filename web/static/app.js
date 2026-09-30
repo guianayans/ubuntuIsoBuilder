@@ -2008,7 +2008,7 @@ function tabResumo() {
     <h3>Serviços</h3><div class="row">${svc("SSH", sv.ssh)}${svc("Tailscale", sv.tailscaled)}${m.apps.docker ? svc("Docker", sv.docker) : ""}${m.apps.coolify ? svc("Coolify", sv.coolify) : ""}${m.apps.cockpit ? svc("Cockpit", sv.cockpit) : ""}${m.ssh_auth === "password" ? svc("fail2ban", sv.fail2ban) : ""}${"ddclient" in sv ? svc("DDNS", sv.ddclient) : ""}${"cloudflared" in sv ? svc("Cloudflare Tunnel", sv.cloudflared) : ""}${"libvirtd" in sv ? svc("Virtualização", sv.libvirtd) : ""}${"nvidia" in sv ? svc("GPU NVIDIA", sv.nvidia) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}
       ${m.report.docker_containers != null ? `<span class="pill">${m.report.docker_containers} container(s)</span>` : ""}</div>
     <h3>Provisionamento</h3>
-    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${String(v).startsWith("ok") || /^100\./.test(v) ? `<span class="ok">${esc(v)}</span>` : String(v).startsWith("falhou") ? `<span class="err">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
+    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${stepVal(k, v, m)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
       <tr><td><b>geral</b></td><td>${esc(m.provisioned || "—")}</td></tr></table></div>
     ${m.downloads.length ? `<h3>Quem baixou</h3><div class="table-wrap"><table>${m.downloads.slice().reverse().map(x => `<tr><td>${esc(x.email)}</td><td class="small">${esc(x.kind === "iso" ? "ISO" : "gravador " + x.kind.replace("gravador-", ""))}</td><td class="small">${fmtDate(x.at)}</td></tr>`).join("")}</table></div>` : ""}
     <div class="row u-mt16"><button class="btn primary" id="goTerm">Abrir terminal</button><button class="btn" id="goConn">Conectar do meu computador</button></div>`;
@@ -2032,7 +2032,7 @@ function tabResumoWin(m, r, sv, gb, svc) {
     </div>
     <h3>Serviços</h3><div class="row">${"ssh" in sv || m.panel_access ? svc("OpenSSH", sv.ssh) : ""}${"meshagent" in sv ? svc("Remoto", sv.meshagent) : ""}${"wireguard" in sv ? svc("WireGuard", sv.wireguard) : ""}${"tailscaled" in sv ? svc("Tailscale", sv.tailscaled) : ""}</div>
     <h3>Provisionamento</h3>
-    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(WIN_STEP[k] || k)}</td><td>${String(v).startsWith("ok") ? `<span class="ok">${esc(v)}</span>` : /^(falhou|desistiu)/.test(String(v)) ? `<span class="err">${esc(v)}</span>` : esc(v)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
+    <div class="table-wrap"><table>${Object.entries(m.steps || {}).map(([k, v]) => `<tr><td>${esc(WIN_STEP[k] || k)}</td><td>${stepVal(k, v, m)}</td></tr>`).join("") || "<tr><td class='muted'>sem dados</td></tr>"}
       <tr><td><b>geral</b></td><td>${esc(m.provisioned || "—")}</td></tr></table></div>
     ${m.downloads && m.downloads.length ? `<h3>Quem baixou</h3><div class="table-wrap"><table>${m.downloads.slice().reverse().map(x => `<tr><td>${esc(x.email)}</td><td class="small">${esc(x.kind === "config" ? "autounattend.xml" : "gravador " + x.kind.replace("gravador-", ""))}</td><td class="small">${fmtDate(x.at)}</td></tr>`).join("")}</table></div>` : ""}
     <div class="row u-mt16">${OVL.rdev ? `<button class="btn primary" id="goTela">Abrir tela (Remoto)</button>` : ""}<button class="btn ${OVL.rdev ? "" : "primary"}" id="goTerm">Abrir terminal</button><button class="btn" id="goConn">Conectar do meu computador</button></div>`;
@@ -2042,6 +2042,20 @@ function tabResumoWin(m, r, sv, gb, svc) {
 }
 // indicador do TerminalSec (monitoramento de segurança) na lista de máquinas
 const TSEC_ST = { online: ["on", "protegido"], pending: ["wait", "aguardando"], offline: ["off", "sem contato"], archived: ["gone", "arquivado"] };
+// valor de uma etapa do provisionamento (verde = ok/concluído, vermelho = falhou).
+// Caso especial do TerminalSec: a máquina só grava "aguardando aprovação" na instalação e
+// não sabe sozinha quando é aceita — então usamos o estado real que o painel conhece
+// (m.terminalsec, do TerminalSec), assim a linha vira "protegido" (verde) após a aprovação.
+function stepVal(k, v, m) {
+  if (k === "terminalsec" && m.terminalsec) {
+    const T = { online: ["ok", "protegido"], offline: ["", "sem contato"], pending: ["", "aguardando aprovação"], archived: ["", "arquivado"] };
+    const [cls, txt] = T[m.terminalsec.status] || ["", m.terminalsec.status];
+    return cls === "ok" ? `<span class="ok">${esc(txt)}</span>` : esc(txt);
+  }
+  return String(v).startsWith("ok") || /^100\./.test(v) ? `<span class="ok">${esc(v)}</span>`
+    : /^(falhou|desistiu)/.test(String(v)) ? `<span class="err">${esc(v)}</span>` : esc(v);
+}
+
 function tsecBadge(m, inline) {
   const t = m.terminalsec;
   if (!t) return "";
