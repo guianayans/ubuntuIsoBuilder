@@ -2326,7 +2326,16 @@ function wireClaude() {
     try { const j = await api("/api/machines/" + OVL.id + "/claude-status"); paint(j);
       if (!busyOf(j.state)) { clearInterval(OVL.cpoll); OVL.cpoll = null; settle(j); } } catch (e) { }
   };
-  api("/api/machines/" + OVL.id + "/claude-status").then(j => { if (j.state !== "idle") paint(j); if (busyOf(j.state) && !OVL.cpoll) OVL.cpoll = setInterval(poll, 3000); }).catch(() => { });
+  api("/api/machines/" + OVL.id + "/claude-status").then(j => {
+    // reconcilia o botão: se a última ação (ok/removido) for mais recente que o último relatório,
+    // usa ela — assim, logo após instalar/desinstalar, reabrir já mostra o botão certo (sem esperar o relatório).
+    if ((j.state === "ok" || j.state === "removido") && (j.updated_at || 0) >= (OVL.m.last_seen || 0)) {
+      const inst = j.state === "ok";
+      if (inst !== installed) { OVL.m.report = OVL.m.report || {}; OVL.m.report.claude = inst; if (OVL.tab === "config") { showTab("config"); return; } }
+    }
+    if (j.state !== "idle") paint(j);
+    if (busyOf(j.state) && !OVL.cpoll) OVL.cpoll = setInterval(poll, 3000);
+  }).catch(() => { });
   btn.onclick = async () => {
     if (!confirm(installed ? "Desinstalar o Claude Code CLI desta máquina?" : "Instalar o Claude Code CLI nesta máquina?")) return;
     btn.disabled = true; cs.className = "small u-mt8 muted"; cs.textContent = "Enviando…";
