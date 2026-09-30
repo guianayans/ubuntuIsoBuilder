@@ -1013,7 +1013,7 @@ def _format_tools(platform: str) -> dict[str, str]:
     return {a: n for a, n in names.items() if os.path.exists(os.path.join(HELPER_DIR, n))}
 
 
-def _format_script(platform: str, token: str, method: str = "usb", iso_path: str = "") -> tuple[int, str]:
+def _format_script(platform: str, token: str, method: str = "usb", iso_path: str = "", dry: bool = False) -> tuple[int, str]:
     """Comandos que o agente roda no PC (2 = PowerShell, 3 = sh), sem nenhum segredo além
     do token deste pedido (que só serve para baixar o isoBuilder/ISO e avisar o andamento)."""
     base = f"{PUBLIC_URL}/f/{token}"
@@ -1027,8 +1027,9 @@ def _format_script(platform: str, token: str, method: str = "usb", iso_path: str
         args = (f'--install-disk --url "{base}" --kernel-sha {_file_sha256(kern)} '
                 f'--initrd-sha {_file_sha256(init)} --wait {FORMAT_WAIT_H}h --report "{rep}"')
     elif win_disk:
-        # sem pendrive (Windows): o gravador baixa a ISO e config e instala no disco (headless)
-        args = f'--auto-format --report "{rep}"'
+        # sem pendrive (PC Windows): instala Windows (WinPE) ou Ubuntu (EFISTUB) headless.
+        # --dry = modo teste: prepara e mostra o plano, sem apagar nada.
+        args = f'--auto-format --report "{rep}"' + (" --dry" if dry else "")
     else:
         args = f'--boot-usb --wait {FORMAT_WAIT_H}h --report "{rep}"'
     if platform == "windows":
@@ -1159,7 +1160,8 @@ async def format_start(request: Request, u: core.User = Depends(admin_user)):
                     (jid, core.token_hash(token), node, dev["name"][:80], platform, "enviado", wait_msg,
                      u.email, t, t, t + (FORMAT_WAIT_H + 1) * 3600, method,
                      r["id"] if method == "disk" else "", iso_label))
-    ctype, cmds = _format_script(platform, token, method, iso_path)
+    dry = bool(d.get("dry")) and method == "disk" and platform == "windows"  # modo teste só no 'sem pendrive' do PC Windows
+    ctype, cmds = _format_script(platform, token, method, iso_path, dry)
     try:
         res = await remoto.run_commands(node, ctype, cmds)
     except Exception as exc:  # noqa: BLE001
