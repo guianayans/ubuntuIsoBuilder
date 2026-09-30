@@ -384,14 +384,15 @@ function stepHTML() {
       </div>
       <label class="f"><span>Porta do SSH</span><input name="ssh_port" type="number" min="1" max="65535" inputmode="numeric" value="${esc(W.ssh_port)}" class="u-w-port">
       <small>Deixe <b>22</b> (padrão) ou escolha outra entre 1024 e 65535, ex.: 2222. Com outra porta, conecte com <code>ssh -p PORTA usuario@servidor</code>.</small></label>
-      <label class="f"><span>Chave(s) SSH pública(s) <span class="muted small" id="keyopt">${pwMode ? "(opcional)" : "(opcional: em branco = usuário e senha)"}</span></span><textarea name="ssh_keys" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG7kQv2m... notebook-suporte">${esc(W.ssh_keys)}</textarea>
+      <div id="keybox" class="${pwMode ? "hidden" : ""}">
+      <label class="f"><span>Chave(s) SSH pública(s) <span class="muted small">(em branco = usuário e senha)</span></span><textarea name="ssh_keys" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG7kQv2m... notebook-suporte">${esc(W.ssh_keys)}</textarea>
       <small>Uma por linha. Arquivo <code>id_ed25519.pub</code> (nunca a chave sem .pub).</small></label>
       <div class="row"><label class="btn sm">Carregar arquivo .pub<input type="file" id="pubfile" accept=".pub,text/plain" class="hidden"></label></div>
       <details><summary>Não tenho chave SSH — como criar?</summary>
         <p class="small">No <b>Windows</b> (PowerShell) ou <b>Mac</b> (Terminal):</p>
         <pre class="log">ssh-keygen -t ed25519 -C "notebook-suporte"</pre>
         <p class="small">Aperte Enter nas perguntas. Depois carregue o arquivo <code>id_ed25519.pub</code> da pasta <code>.ssh</code> da sua pasta de usuário (no Mac: <code>cat ~/.ssh/id_ed25519.pub</code>; no Windows: <code>type $env:USERPROFILE\\.ssh\\id_ed25519.pub</code>) e cole acima.</p>
-      </details>`;
+      </details></div>`;
     }
     case "net": return `<h2>Rede</h2>
       <p class="muted">Use cabo de rede. Wi-Fi não é configurado.</p>
@@ -773,9 +774,10 @@ function renderWizard() {
   $("#back").onclick = () => { collect(); step = Math.max(0, step - 1); renderWizard(); };
   $$('input[name="net_mode"]').forEach(r => r.onchange = () => $("#static").classList.toggle("hidden", r.value !== "static"));
   $$('input[name="ssh_auth"]').forEach(r => r.onchange = () => {
+    if (!r.checked) return;
     const pw = r.value === "password";
     $("#pwnote").classList.toggle("hidden", !pw);
-    $("#keyopt").textContent = pw ? "(opcional)" : "(opcional: em branco = usuário e senha)";
+    $("#keybox").classList.toggle("hidden", pw);  // modo senha: não mostra o campo de chave
     $("#pwhelp").textContent = (pw ? "Mínimo 12 caracteres. Usada no SSH, no sudo e no console." : "Mínimo 10 caracteres. Usada no sudo e no console físico.") + " Não fica salva: só o hash vai na ISO.";
   });
   $$('input[name="storage_type"]').forEach(r => r.onchange = () => $("#sval").classList.toggle("hidden", r.value === "single"));
