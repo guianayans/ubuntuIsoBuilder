@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
@@ -1074,8 +1075,17 @@ def _format_script(platform: str, token: str, method: str = "usb", iso_path: str
                 "-Body ([Text.Encoding]::UTF8.GetBytes((@{state='erro';message=('não consegui preparar o PC: '+"
                 "$_.Exception.Message)}|ConvertTo-Json)))")
         return 2, "try { " + "; ".join(steps) + " } catch { " + fail + " }\n"
-    kexec_check = ('command -v kexec >/dev/null 2>&1 || fail "kexec não instalado (apt install kexec-tools) — '
-                   'use a opção com pendrive"\n') if method == "disk" else ""
+    # sem pendrive (Ubuntu) depende do kexec: se faltar, instala sozinho (roda como root aqui).
+    # Só falha (pedindo o pendrive) se realmente não der para instalar (sem internet/sem apt).
+    kexec_check = (
+        'if ! command -v kexec >/dev/null 2>&1; then\n'
+        '  export DEBIAN_FRONTEND=noninteractive\n'
+        '  apt-get -y install kexec-tools >/dev/null 2>&1 || '
+        '{ apt-get -y update >/dev/null 2>&1; apt-get -y install kexec-tools >/dev/null 2>&1; }\n'
+        '  command -v kexec >/dev/null 2>&1 || fail "não consegui instalar o kexec-tools automaticamente '
+        '(sem internet ou apt indisponível) — use a opção com pendrive"\n'
+        'fi\n'
+    ) if method == "disk" else ""
     sh = f"""R='{rep}'
 fail() {{ curl -fsS -m 20 -X POST -H 'Content-Type: application/json' -d "{{\\"state\\":\\"erro\\",\\"message\\":\\"não consegui preparar o PC: $1\\"}}" "$R" >/dev/null 2>&1; exit 1; }}
 [ "$(uname -m)" = x86_64 ] || fail "só PCs x86_64 (64 bits)"
@@ -1898,16 +1908,27 @@ def _claude_script(platform: str, rep: str, action: str) -> tuple[int, str]:
                 "Send 'removido' 'Claude Code removido.' } catch { Send 'erro' $_.Exception.Message }\n"
                 "}")
             return 2, ps
-        ps = head + (
-            "if ($sys) {\n"  # ninguém logado: agenda no RunOnce
-            "  try { " + runonce + " | Out-Null; Send 'agendado' 'Ninguem logado agora: o Claude Code sera instalado no proximo logon do usuario.' } catch { Send 'erro' 'Falha ao agendar a instalacao.' }\n"
-            "} else {\n"
-            "  $log=Join-Path $env:TEMP 'uab-claude.log'; $err=\"$log.err\"\n"
-            "  Send 'instalando' 'Baixando e instalando o Claude Code...'\n"
+        # A instalação (demorada) roda num processo DESTACADO (Start-Process de um .ps1 próprio),
+        # não inline: senão o agente do Remoto mataria o monitor ao retornar/expirar e o estado
+        # final (ok/erro) nunca chegaria — travando em "instalando" (mesmo motivo do Linux).
+        monitor = (
+            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\n"
+            f"$R='{rep}'\n"
+            "function Tail($p){ try { $t=Get-Content -Raw -ErrorAction SilentlyContinue $p; if($t -and $t.Length -gt 6000){ $t=$t.Substring($t.Length-6000) }; return $t } catch { return '' } }\n"
+            "function Send($st,$txt){ try { Invoke-RestMethod -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
+            "$log=Join-Path $env:TEMP 'uab-claude.log'; $err=\"$log.err\"\n"
+            "Send 'instalando' 'Baixando e instalando o Claude Code...'\n"
+            "try {\n"
             "  $p=Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','irm https://claude.ai/install.ps1 | iex' -RedirectStandardOutput $log -RedirectStandardError $err -PassThru -WindowStyle Hidden\n"
             "  while (-not $p.HasExited) { Start-Sleep 3; Send 'instalando' (Tail $log) }\n"
             "  $out=((Tail $log) + \"`n\" + (Tail $err)).Trim()\n"
             "  if ($p.ExitCode -eq 0) { Send 'ok' $out } else { Send 'erro' $out }\n"
+            "} catch { Send 'erro' $_.Exception.Message }\n")
+        ps = head + (
+            "if ($sys) {\n"  # ninguém logado: agenda no RunOnce
+            "  try { " + runonce + " | Out-Null; Send 'agendado' 'Ninguem logado agora: o Claude Code sera instalado no proximo logon do usuario.' } catch { Send 'erro' 'Falha ao agendar a instalacao.' }\n"
+            "} else {\n"
+            + _win_detached(monitor) +
             "}")
         return 2, ps
     # Linux: age para o usuário principal (UID 1000), não para o root, transmitindo o log.
@@ -1951,6 +1972,19 @@ def _sh_detached(inner: str) -> str:
         "UAB_CLAUDE_EOF\n"
         'setsid bash "$S" >/dev/null 2>&1 </dev/null &\n'
         "echo started\n")
+
+
+def _win_detached(monitor: str) -> str:
+    """Empacota um script PowerShell para rodar DESTACADO do comando do agente (Start-Process de
+    um .ps1 próprio, processo independente). O monitor reporta o próprio progresso/fim e se apaga."""
+    body = monitor if monitor.endswith("\n") else monitor + "\n"
+    body += "try { Remove-Item -Force $PSCommandPath -ErrorAction SilentlyContinue } catch {}\n"
+    b64 = base64.b64encode(b"\xef\xbb\xbf" + body.encode("utf-8")).decode()  # UTF-8 com BOM
+    return (
+        f"  $b='{b64}'\n"
+        "  $f=Join-Path $env:TEMP 'uab-claude-mon.ps1'\n"
+        "  [IO.File]::WriteAllBytes($f,[Convert]::FromBase64String($b))\n"
+        "  Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$f -WindowStyle Hidden\n")
 
 
 def _claude_status(mid: str) -> dict:
