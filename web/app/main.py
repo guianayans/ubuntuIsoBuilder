@@ -1909,30 +1909,46 @@ def _claude_script(platform: str, rep: str, action: str) -> tuple[int, str]:
             "}")
         return 2, ps
     # Linux: age para o usuário principal (UID 1000), não para o root, transmitindo o log.
+    # IMPORTANTE: o trabalho roda DESTACADO (setsid, sessão nova). O agente do Remoto mata o
+    # grupo de processos do comando ao retornar/expirar; se a instalação (que demora) rodasse
+    # inline, o curl e o loop de progresso morreriam e o estado final (ok/erro) nunca chegaria —
+    # ficando "instalando" para sempre. Destacado, ele sobrevive e reporta o próprio fim.
     shead = (
         f"R='{rep}'\n"
         "send(){ printf '%s' \"$2\" | curl -fsS -m 20 -X POST --data-binary @- \"$R&state=$1\" >/dev/null 2>&1; }\n"
         'u="$(getent passwd 1000 | cut -d: -f1)"; [ -n "$u" ] || u=root\n'
         "command -v curl >/dev/null 2>&1 || { apt-get -q update >/dev/null 2>&1; apt-get -q install -y curl >/dev/null 2>&1; }\n"
-        'out="$(mktemp)"\n')
+        'out="$(mktemp)"\n'
+        # trap: aconteça o que acontecer (erro, kill), manda um estado final para não travar o painel.
+        'st=erro\n'
+        'trap \'send "$st" "$(tail -c 8000 "$out" 2>/dev/null)"; rm -f "$out" "$0" 2>/dev/null\' EXIT\n')
     if action == "uninstall":
-        sh = shead + (
+        inner = shead + (
             "send desinstalando 'Removendo o Claude Code...'\n"
-            "sudo -u \"$u\" -H bash -lc 'rm -rf ~/.local/bin/claude ~/.local/share/claude ~/.claude; rm -f ~/claude.json; echo removido' >\"$out\" 2>&1\n"
-            '[ "$?" = 0 ] && st=removido || st=erro\n'
-            "send \"$st\" \"$(tail -c 4000 \"$out\")\"\n"
-            'rm -f "$out"\n')
-        return 3, sh
-    sh = shead + (
-        "send instalando 'Baixando e instalando o Claude Code...'\n"
-        "sudo -u \"$u\" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >\"$out\" 2>&1 &\n"
-        "pid=$!\n"
-        "while kill -0 \"$pid\" 2>/dev/null; do sleep 3; send instalando \"$(tail -c 6000 \"$out\")\"; done\n"
-        "wait \"$pid\"; rc=$?\n"
-        '[ "$rc" = 0 ] && st=ok || st=erro\n'
-        "send \"$st\" \"$(tail -c 8000 \"$out\")\"\n"
-        'rm -f "$out"\n')
-    return 3, sh
+            "sudo -u \"$u\" -H bash -lc 'rm -rf ~/.local/bin/claude ~/.local/share/claude ~/.claude; rm -f ~/claude.json; echo removido' >\"$out\" 2>&1 "
+            "&& st=removido || st=erro\n")
+    else:
+        inner = shead + (
+            "send instalando 'Baixando e instalando o Claude Code...'\n"
+            "sudo -u \"$u\" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >\"$out\" 2>&1 &\n"
+            "pid=$!\n"
+            "while kill -0 \"$pid\" 2>/dev/null; do sleep 3; send instalando \"$(tail -c 6000 \"$out\")\"; done\n"
+            "wait \"$pid\"; rc=$?\n"
+            '[ "$rc" = 0 ] && st=ok || st=erro\n')
+    return 3, _sh_detached(inner)
+
+
+def _sh_detached(inner: str) -> str:
+    """Empacota um script sh para rodar DESTACADO do comando do agente (setsid, sem travar o
+    canal do Remoto). Escreve o corpo num arquivo temporário e o lança em nova sessão."""
+    body = inner if inner.endswith("\n") else inner + "\n"
+    return (
+        'S="$(mktemp)"\n'
+        "cat > \"$S\" <<'UAB_CLAUDE_EOF'\n"
+        + body +
+        "UAB_CLAUDE_EOF\n"
+        'setsid bash "$S" >/dev/null 2>&1 </dev/null &\n'
+        "echo started\n")
 
 
 def _claude_status(mid: str) -> dict:
