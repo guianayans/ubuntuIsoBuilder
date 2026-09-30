@@ -706,10 +706,12 @@ func (a *app) handler() http.Handler {
 			writeJSON(w, 405, nil)
 			return
 		}
+		var req struct{ Force bool }
+		json.NewDecoder(r.Body).Decode(&req) // corpo opcional; {"force":true} encerra mesmo gravando
 		a.mu.Lock()
 		busy := a.busy
 		a.mu.Unlock()
-		if busy {
+		if busy && !req.Force {
 			writeJSON(w, 409, map[string]string{"error": "aguarde o fim da gravação"})
 			return
 		}

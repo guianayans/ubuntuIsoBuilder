@@ -406,11 +406,19 @@ async function selectIso(p){ try{ await api('select',{path:p}); }catch(e){ alert
 async function poll(){ try{ S = await api('state'); render(); }catch(e){} }
 $('#useIso').onclick = () => { const p=$('#isoPath').value.trim().replace(/^"|"$/g,''); if(p) selectIso(p); };
 $('#refresh').onclick = () => { VT = {}; $('#confirmBox').dataset.sig=''; poll(); };
-// Encerrar: se o pendrive JÁ finalizou (job done), fecha direto; senão, confirma antes.
+// Encerrar: se o pendrive JÁ finalizou (job done), fecha direto. Se estiver GRAVANDO, avisa e
+// encerra à força (o pendrive fica incompleto e precisa ser gravado de novo; o PC de destino
+// não é afetado). Nos demais casos (idle/baixando), confirma antes.
 async function doQuit(){
   const finished = S && S.job && S.job.phase === 'done';
-  if(!finished && !confirm('Encerrar o gravador? O pendrive ainda não foi finalizado.')) return;
-  try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder encerrado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }
+  const busy = !!(S && S.busy);
+  if(!finished){
+    const msg = busy
+      ? 'O gravador está GRAVANDO o pendrive. Encerrar agora deixa o pendrive incompleto (precisa gravá-lo de novo). O computador de destino NÃO é afetado. Encerrar mesmo assim?'
+      : 'Encerrar o gravador? O pendrive ainda não foi finalizado.';
+    if(!confirm(msg)) return;
+  }
+  try{ await api('quit', busy ? {force:true} : {}); document.body.innerHTML='<main><h1>isoBuilder encerrado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }
   catch(e){ alert(e.message); }
 }
 $('#quit').onclick = doQuit;
