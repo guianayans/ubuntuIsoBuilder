@@ -37,6 +37,12 @@ autoinstall:
       Acquire::http::Timeout "30";
       Acquire::https::Timeout "30";
   updates: security
+  # Meta-pacote do kernel: garante que linux-modules-extra (onde ficam r8169 e a maioria dos
+  # drivers de rede/hardware) e os headers ACOMPANHEM todo kernel — inclusive o kernel novo que
+  # o "updates: security" instala durante a própria instalação. Sem isso, um upgrade de kernel
+  # pode deixar a máquina sem placa de rede no primeiro boot.
+  packages:
+    - linux-generic
   network: {}
   storage: {}
   early-commands:
