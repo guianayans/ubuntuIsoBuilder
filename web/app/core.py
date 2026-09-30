@@ -720,6 +720,18 @@ def validate_windows(d: dict) -> dict:
             raise Invalid(f"ID do winget inválido: {i[:40]}")
     c["WIN_APPS"] = " ".join(ids)
     c["DISK_MODE"] = "largest"
+    # SSH direto (opcional), igual ao Linux: "usuário e senha" (a conta criada) ou "chave".
+    # A senha, quando ligada, é aceita só na rede local e na VPN (de IP público, só chave).
+    # O terminal do painel no navegador entra sempre com a chave do app (independe disto).
+    c["WIN_SSH"] = "yes" if d.get("win_ssh") else "no"
+    auth = str(d.get("win_ssh_auth") or "password")
+    if auth not in ("password", "key"):
+        raise Invalid("Modo de SSH inválido.")
+    c["WIN_SSH_AUTH"] = auth
+    win_keys: list[str] = []
+    if c["WIN_SSH"] == "yes" and auth == "key":
+        win_keys = validate_pubkeys(_req(d, "win_ssh_keys"))  # levanta se não houver chave válida
+    c["WIN_SSH_KEYS"] = "\n".join(win_keys)
     if _req(d, "confirm_erase") != "APAGAR":
         raise Invalid("Digite APAGAR para confirmar que o maior disco interno será apagado.")
     return {"os": "windows", "config": c, "panel_access": panel_access, "win_key_set": bool(key),

@@ -175,27 +175,47 @@ function Step-OpenSSH {
     New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -PropertyType String -Force `
         -Value (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') | Out-Null
 
-    # chave do painel: administradores usam C:\ProgramData\ssh\administrators_authorized_keys,
-    # que o sshd só aceita se for de SYSTEM e Administradores (sem herança)
-    $pub = ''
+    # chaves aceitas (a conta é Administrador -> C:\ProgramData\ssh\administrators_authorized_keys,
+    # que o sshd só aceita se for de SYSTEM e Administradores, sem herança): a chave do painel
+    # (terminal no navegador) + as chaves do usuário, se ele escolheu acesso por chave.
+    $keys = @()
     $pf = Join-Path $UabRoot 'panel.pub'
-    if (Test-Path $pf) { $pub = (Get-Content -LiteralPath $pf -Raw -Encoding UTF8).Trim() }
-    if ($pub) {
+    if (Test-Path $pf) { foreach ($k in (Get-Content -LiteralPath $pf -Encoding UTF8)) { if ($k.Trim()) { $keys += $k.Trim() } } }
+    foreach ($k in @($conf.ssh_keys)) { if ("$k".Trim()) { $keys += "$k".Trim() } }
+    if ($keys.Count) {
         $ak = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
         $lines = @()
         if (Test-Path $ak) { $lines = @(Get-Content -LiteralPath $ak -Encoding UTF8 | Where-Object { $_.Trim() }) }
-        foreach ($k in ($pub -split "`r?`n")) { if ($k.Trim() -and $lines -notcontains $k.Trim()) { $lines += $k.Trim() } }
+        foreach ($k in $keys) { if ($lines -notcontains $k) { $lines += $k } }
         [IO.File]::WriteAllText($ak, (($lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
         & icacls.exe $ak /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "icacls falhou em $ak" }
     }
 
-    # só chave (como no Ubuntu com acesso por chave): a 1ª ocorrência vale no sshd
+    # sshd_config: por padrão só chave. No modo "usuário e senha" ($conf.ssh_password), a senha é
+    # aceita SOMENTE da rede local e da VPN (de IP público, só chave) — igual ao Linux. O bloco
+    # global vai no topo (1ª ocorrência vale) e o "Match Address" no fim (não engloba os padrões).
     if (Test-Path $cfg) {
+        $nets = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,127.0.0.0/8,fd7a:115c:a1e0::/48,fc00::/7,fe80::/10,::1'
         $txt = Get-Content -LiteralPath $cfg -Raw -Encoding UTF8
-        if ($txt -notmatch '(?m)^# uab: somente chave') {
-            $txt = "# uab: somente chave (ISO Builder)`nPasswordAuthentication no`nPubkeyAuthentication yes`n`n" + $txt
-            [IO.File]::WriteAllText($cfg, $txt, (New-Object Text.UTF8Encoding $false))
+        $txt = [regex]::Replace($txt, '(?s)# uab-ssh-ini.*?# uab-ssh-fim\r?\n', '')            # bloco global antigo
+        $txt = [regex]::Replace($txt, '(?s)\r?\n# uab-ssh-pw-ini.*?# uab-ssh-pw-fim', '')       # bloco Match antigo
+        $txt = [regex]::Replace($txt, '(?m)^# uab: somente chave.*(\r?\n(Password|Pubkey)Authentication.*)*\r?\n?', '')  # marca ainda mais antiga
+        $head = "# uab-ssh-ini (ISO Builder)`r`nPubkeyAuthentication yes`r`nPasswordAuthentication no`r`n# uab-ssh-fim`r`n"
+        $txt = $head + $txt.TrimStart()
+        if ($conf.ssh_password) {
+            $txt = $txt.TrimEnd() + "`r`n`r`n# uab-ssh-pw-ini`r`nMatch Address $nets`r`n    PasswordAuthentication yes`r`n# uab-ssh-pw-fim`r`n"
+        }
+        [IO.File]::WriteAllText($cfg, $txt, (New-Object Text.UTF8Encoding $false))
+        # valida: se ficar inválido, remove o bloco de senha para não perder o acesso do painel
+        $sshdExe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+        if ($conf.ssh_password -and (Test-Path $sshdExe)) {
+            & $sshdExe -t 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Log 'sshd -t recusou o bloco de senha; revertendo para só-chave'
+                $txt = [regex]::Replace((Get-Content -LiteralPath $cfg -Raw -Encoding UTF8), '(?s)\r?\n# uab-ssh-pw-ini.*?# uab-ssh-pw-fim\r?\n?', '')
+                [IO.File]::WriteAllText($cfg, $txt, (New-Object Text.UTF8Encoding $false))
+            }
         }
     }
 

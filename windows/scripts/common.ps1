@@ -190,7 +190,7 @@ function Invoke-UabWinget {
 function Get-UabPlan($conf) {
     <# Etapas previstas (mesma ordem em specialize.ps1 e provision.ps1). #>
     $plan = @()
-    if ($conf.panel_access) { $plan += 'openssh' }
+    if ($conf.panel_access -or $conf.ssh) { $plan += 'openssh' }
     if ($conf.wireguard) { $plan += 'wireguard' }
     if ($conf.tailscale) { $plan += 'tailscale_install'; $plan += 'tailscale_login' }
     if ($conf.remote_agent -and $conf.remote_url) { $plan += 'remote_agent' }

@@ -242,6 +242,12 @@ def _validate(cfg: dict, secrets: dict, ctx: dict) -> dict:
         if not TS_KEY_RE.match(tk):
             raise ValueError("Auth key do Tailscale inválida (deve começar com tskey-auth-).")
         v["ts_host"], v["ts_key"] = th, tk
+    # SSH direto (opcional): senha (aceita só na rede local/VPN) ou chave. O terminal do painel
+    # no navegador entra sempre com a chave do app (panel_access), independente disto.
+    win_ssh = str(cfg.get("WIN_SSH") or "no") == "yes"
+    v["ssh_password"] = win_ssh and str(cfg.get("WIN_SSH_AUTH") or "password") == "password"
+    v["ssh_keys"] = [k.strip() for k in str(cfg.get("WIN_SSH_KEYS") or "").splitlines() if k.strip()]
+    v["ssh"] = v["panel_access"] or win_ssh   # instala o OpenSSH se houver qualquer acesso por SSH
     return v
 
 
@@ -356,6 +362,7 @@ def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
         "build_id": v["build"], "panel_url": v["panel_url"], "hostname": v["host"], "admin_user": v["user"],
         "panel_access": v["panel_access"], "remote_agent": v["remote_agent"], "remote_url": v["remote_url"],
         "apps": v["apps"], "activate": v["key"] != GENERIC_PRO_KEY, "wireguard": v["wireguard"], "tailscale": v["tailscale"], "tailscale_hostname": v["ts_host"],
+        "ssh": v["ssh"], "ssh_password": v["ssh_password"], "ssh_keys": v["ssh_keys"],
         "win_version": str(cfg.get("WIN_VERSION") or "11"),
         "win_edition": str(cfg.get("WIN_EDITION") or "Pro"),
     }

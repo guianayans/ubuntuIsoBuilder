@@ -302,7 +302,8 @@ const W = {
   deliver_on: false, deliver_target: "new", deliver_existing: "", deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
   win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: "",
-  win_tailscale: false  // no Windows o Tailscale começa desligado (precisa de auth key)
+  win_tailscale: false,  // no Windows o Tailscale começa desligado (precisa de auth key)
+  win_ssh: false, win_ssh_auth: "password", win_ssh_keys: ""
 };
 let step = 0;
 let GUEST_DOMAIN = "gvtserver.online";
@@ -509,6 +510,16 @@ function stepHTML() {
     case "wacc": return `<h2>Acesso</h2>
       <p class="muted">O computador aparece em “Máquinas” (com o logo do Windows) alguns minutos depois de instalado, e se reporta a cada 10 minutos. Para alcançá-lo de longe, deixe ao menos uma forma de acesso ligada (Remoto, WireGuard ou Tailscale); duas = uma é reserva da outra.</p>
       ${toggle("panel_access", "Terminal pelo painel (OpenSSH)", "Instala o OpenSSH Server do Windows (shell PowerShell) com a chave do painel: o terminal abre no navegador, sem senha. O painel entra pelo túnel (WireGuard ou Tailscale, abaixo) ou por um endereço definido em Máquinas → Configurações.")}
+      ${toggle("win_ssh", "Acesso por SSH (você entra com ssh)", "Além do terminal do painel, libera você entrar por linha de comando com ssh. Escolha usuário e senha ou chave. O terminal do painel continua funcionando com a chave do app.")}
+      <div id="winssh" class="${W.win_ssh ? "" : "hidden"}">
+        ${radio("win_ssh_auth", [
+          ["password", "Usuário e senha", "Entra com a conta e a senha que você definiu. A senha é aceita só na rede local e na VPN (de IP público, só chave)."],
+          ["key", "Chave SSH", "Sem senha: só com a(s) chave(s) pública(s) abaixo."]])}
+        <div id="winsshkeys" class="${W.win_ssh_auth === "key" ? "" : "hidden"}">
+          <label class="f"><span>Chave(s) SSH pública(s)</span><textarea name="win_ssh_keys" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG7kQv2m... notebook-suporte">${esc(W.win_ssh_keys)}</textarea>
+          <small>Uma por linha. Arquivo <code>id_ed25519.pub</code> (nunca a chave sem .pub).</small></label>
+        </div>
+      </div>
       ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto (MeshCentral)", "Instala o agente do Remoto: tela, terminal e arquivos pelo navegador, de qualquer lugar, sem abrir portas no roteador. Recomendado.")
         : `<div class="note">Remoto (MeshCentral): indisponível neste painel agora; o computador aparece só em Máquinas.</div>`}
       ${FEATURES.wireguard ? toggle("wireguard", "WireGuard pelo seu servidor", "O PC conecta para fora até o seu servidor (funciona atrás de qualquer roteador/CGNAT do cliente), com um serviço do Windows que sobe no boot, antes de qualquer login. O terminal do painel passa pelo túnel e, em Máquinas, você gera o QR code para o seu Mac/celular alcançar o PC. (O acesso à rede local do cliente ainda não existe no Windows.)")
@@ -537,7 +548,7 @@ function stepHTML() {
         <tr><th>Ativação</th><td>${key ? `chave informada (termina em <span class="mono">${esc(key.slice(-5).toUpperCase())}</span>): ativa sozinho depois da instalação, com internet — o resultado aparece em Máquinas` : "sem chave: instala sem ativar"}</td></tr>
         <tr><th>Região</th><td>${esc((WINCAT && WINCAT.timezones[W.win_timezone]) || W.win_timezone)} · teclado ${esc((WINCAT && WINCAT.keyboards[W.win_keyboard]) || W.win_keyboard)}</td></tr>
         <tr><th>Disco</th><td>maior disco interno (nunca USB)</td></tr>
-        <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "",
+        <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.win_ssh ? "SSH (" + (W.win_ssh_auth === "password" ? "usuário e senha" : "chave") + ")" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "",
           W.wireguard && FEATURES.wireguard ? "WireGuard pelo seu servidor" : "", W.win_tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" · ") || "só aparece em Máquinas"}</td></tr>
         <tr><th>Programas</th><td>${names.length ? esc(names.join(", ")) : "nenhum"}</td></tr>
       </table></div>
@@ -711,6 +722,8 @@ function checkStep() {
   }
   if (k === "wacc" && W.win_tailscale && !/^tskey-/.test(W.tailscale_key.trim())) e.push("Cole a auth key do Tailscale (tskey-auth-…) ou desligue o Tailscale.");
   if (k === "wacc" && W.win_tailscale && W.tailscale_hostname && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(W.tailscale_hostname.toLowerCase())) e.push("Nome na Tailnet: minúsculas, números e hífen.");
+  if (k === "wacc" && W.win_ssh && W.win_ssh_auth === "key" && !W.win_ssh_keys.split("\n").some(l => /^(ssh-|ecdsa-|sk-)/.test(l.trim()))) e.push("Cole ao menos uma chave SSH pública ou escolha “usuário e senha”.");
+  if (k === "wacc" && W.win_ssh && W.win_ssh_auth === "key" && /PRIVATE KEY|-----BEGIN/.test(W.win_ssh_keys)) e.push("Isso é uma chave PRIVADA. Use o arquivo .pub.");
   if (k === "wacc" && !e.length && !(W.remote_agent && FEATURES.remote_agent) && !(W.wireguard && FEATURES.wireguard) && !W.win_tailscale
     && !confirm("Sem Remoto, WireGuard e Tailscale, o PC só será alcançável pela rede local do cliente. Continuar?")) e.push("Escolha pelo menos uma forma de acesso (Remoto, WireGuard ou Tailscale).");
   if (k === "wapps" && W.win_apps.split(/\s+/).some(i => i && !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$/.test(i))) e.push("ID do winget inválido em “Avançado”.");
@@ -815,6 +828,8 @@ function renderWizard() {
   });
   if (W.deliver_on && W.deliver_target === "existing") loadDeliverUsers();  // ao voltar a este passo
   const ts = $('input[name="tailscale"]') || $('input[name="win_tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
+  const ws = $('input[name="win_ssh"]'); if (ws) ws.onchange = () => $("#winssh").classList.toggle("hidden", !ws.checked);
+  $$('input[name="win_ssh_auth"]').forEach(r => r.onchange = () => { if (r.checked) $("#winsshkeys").classList.toggle("hidden", r.value !== "key"); });
   [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"]].forEach(([n, box]) => {
     const c = $(`input[name="${n}"]`); if (c) c.onchange = () => $(box).classList.toggle("hidden", !c.checked);
   });
@@ -851,6 +866,7 @@ function renderWizard() {
             win_timezone: W.win_timezone, win_keyboard: W.win_keyboard, panel_access: W.panel_access, remote_agent, win_apps: W.win_apps,
             wireguard: !!(W.wireguard && FEATURES.wireguard), tailscale: W.win_tailscale,
             ...(W.win_tailscale ? { tailscale_key: W.tailscale_key, tailscale_hostname: W.tailscale_hostname } : {}),
+            win_ssh: W.win_ssh, win_ssh_auth: W.win_ssh_auth, ...(W.win_ssh && W.win_ssh_auth === "key" ? { win_ssh_keys: W.win_ssh_keys } : {}),
             confirm_erase: W.confirm_erase }
         : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent, terminalsec: !!(W.terminalsec && FEATURES.terminalsec) };
       if (!isWin()) delete body.win_key;

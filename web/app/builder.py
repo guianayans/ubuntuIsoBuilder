@@ -415,7 +415,7 @@ def summary_of(cfg: dict, extra: dict | None = None) -> str:
     if cfg.get("OS") == "windows":
         keep = ["OS", "WIN_VERSION", "WIN_EDITION", "WIN_LANG", "HOSTNAME_", "ADMIN_USER", "TIMEZONE_WIN",
                 "INPUT_LOCALE", "UI_LANG", "PANEL_ACCESS", "REMOTE_AGENT", "WIN_APPS", "DISK_MODE",
-                "WG_ENABLED", "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME"]
+                "WG_ENABLED", "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "WIN_SSH", "WIN_SSH_AUTH"]
         return json.dumps({**{k: cfg.get(k, "") for k in keep}, **(extra or {})})
     keep = ["UBUNTU_SERIES", "HOSTNAME_", "ADMIN_USER", "TIMEZONE", "LOCALE", "KEYBOARD_LAYOUT", "NET_MODE",
             "NET_ADDRESS", "STORAGE_MATCH_TYPE", "STORAGE_MATCH_VALUE", "STORAGE_LAYOUT",
