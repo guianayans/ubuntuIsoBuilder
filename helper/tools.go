@@ -105,15 +105,34 @@ func (a *app) gatherTools(isoPath string) (string, []string, error) {
 }
 
 func httpGet(c *http.Client, url string) ([]byte, error) {
-	resp, err := c.Get(url)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ { // tenta de novo em erro de rede ou 5xx (ex.: 502 do proxy logo após um Redeploy)
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		resp, err := c.Get(url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode >= 500 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("servidor respondeu %d", resp.StatusCode)
+			continue
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("servidor respondeu %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 40<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return data, nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("servidor respondeu %d", resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 40<<20))
+	return nil, lastErr
 }
 
 func placeTool(put func(string, []byte) error, plat string, data []byte) error {
