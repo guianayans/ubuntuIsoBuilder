@@ -12,10 +12,10 @@ import time
 import zipfile
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import builder, core, panel, remoto, terminalsec, wg, winstore
+from . import builder, core, panel, remoto, terminalsec, wg, winconfig, winstore
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 HELPER_DIR = os.environ.get("HELPER_DIST", os.path.join(builder.UAB_ROOT, "helper", "dist"))
@@ -1320,8 +1320,19 @@ def token_config(token: str):
         raise HTTPException(404, "só builds do Windows têm configuração")
     if not r or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
         raise HTTPException(410, "configuração removida do servidor")
-    return FileResponse(r["iso_path"], media_type="application/xml", filename=_file_name(r),
-                        headers={"Cache-Control": "no-store"})
+    with open(r["iso_path"], encoding="utf-8") as fh:
+        xml = fh.read()
+    # Mantém o instalador (pe.js) embutido SEMPRE na versão atual: assim um Redeploy corrige
+    # builds antigos (o autounattend é gravado quando a ISO é criada e não muda sozinho).
+    try:
+        summ = json.loads(r["summary"] or "{}")
+        image = f"Windows {summ.get('WIN_VERSION') or '11'} {summ.get('WIN_EDITION') or 'Pro'}"
+        fresh = "<PE>" + winconfig._cdata("\n" + "\n".join(winconfig._pe_lines(r["id"], image)) + "\n") + "</PE>"
+        xml = re.sub(r"<PE>.*?</PE>", lambda _m: fresh, xml, count=1, flags=re.S)
+    except Exception:  # noqa: BLE001  (se falhar, serve o arquivo como está)
+        pass
+    return Response(content=xml, media_type="application/xml",
+                    headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{_file_name(r)}"'})
 
 
 def _win_build_langarch(token: str):
