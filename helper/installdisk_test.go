@@ -68,7 +68,7 @@ func TestRunInstallDiskFlow(t *testing.T) {
 		t.Fatalf("estados: %s", joined)
 	}
 	got, _ := os.ReadFile(kexOut)
-	if !strings.Contains(string(got), "url="+ts.URL+"/f/tok/iso") || !strings.Contains(string(got), "autoinstall") {
+	if !strings.Contains(string(got), "url="+ts.URL+"/f/tok/image.iso") || !strings.Contains(string(got), "autoinstall") {
 		t.Fatalf("kexec preparado errado: %s", got)
 	}
 
