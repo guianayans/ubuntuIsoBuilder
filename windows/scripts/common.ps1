@@ -39,8 +39,10 @@ function Write-UabFileAtomic([string]$Path, [string]$Text, [switch]$Bom) {
 # { "plan": [...], "current": "", "provisioned": "", "steps": { "openssh": "ok", ... } }
 function Get-UabStatus {
     $st = @{ plan = @(); current = ''; provisioned = ''; steps = @{} }
+    if (-not (Test-Path -LiteralPath $UabStatusFile)) { return $st }  # 1º boot: ainda não existe
     try {
-        $j = Get-Content -LiteralPath $UabStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        # -ErrorAction Stop: torna o erro terminante para o catch pegar (senão vaza pro console)
+        $j = Get-Content -LiteralPath $UabStatusFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
         if ($j.plan) { $st.plan = @($j.plan) }
         if ($j.current) { $st.current = [string]$j.current }
         if ($j.provisioned) { $st.provisioned = [string]$j.provisioned }
