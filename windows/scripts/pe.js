@@ -187,17 +187,29 @@ function lettersOfDisk(dev) {
     return ls;
 }
 
-// mediaDiskPart: disco e número da partição de uma unidade, pelo diskpart (a associação de
-// letras por WMI NÃO é confiável no WinPE). Devolve {disk, part} (-1/0 se não achar).
+// mediaDiskPart: disco, número da partição e estilo (GPT/MBR) de uma unidade, pelo diskpart
+// (a associação de letras por WMI NÃO é confiável no WinPE). Devolve {disk, part, gpt}.
 function mediaDiskPart(letter) {
     writeText(DIR + "\\dp-detail.txt", "select volume " + letter + "\r\ndetail partition\r\ndetail volume\r\nexit\r\n", false);
     var out = run("diskpart /s " + DIR + "\\dp-detail.txt").out;
-    var r = { disk: -1, part: 0 };
+    var r = { disk: -1, part: 0, gpt: false };
     var mp = out.match(/^\s*Parti\S*\s+(\d+)\s*$/im);   // "Partição 3" / "Partition 3"
     if (mp) r.part = parseInt(mp[1], 10);
     var md = out.match(/^\s*\*\s*Dis\S*\s+(\d+)/im);   // "* Disco 0" / "* Disk 0"
     if (md) r.disk = parseInt(md[1], 10);
+    // "Tipo : 07" (MBR, 2 dígitos hex) vs "Tipo : ebd0a0a2-..." (GPT, um GUID com hífens)
+    var mt = out.match(/^\s*(?:Tipo|Type)\b[^\r\n:]*:\s*([0-9a-fA-F-]+)/im);
+    if (mt) r.gpt = mt[1].indexOf("-") >= 0;
     return r;
+}
+
+// listPartitions: números das partições de um disco (via diskpart, confiável no WinPE).
+function listPartitions(disk) {
+    writeText(DIR + "\\dp-list.txt", "select disk " + disk + "\r\nlist partition\r\nexit\r\n", false);
+    var out = run("diskpart /s " + DIR + "\\dp-list.txt").out;
+    var nums = [], re = /^\s*Parti\S*\s+(\d+)\s/gim, m;
+    while ((m = re.exec(out)) !== null) nums.push(parseInt(m[1], 10));
+    return nums;
 }
 
 // diskInfo: modelo/tamanho/USB de um disco pelo índice (a enumeração de discos por WMI
@@ -223,8 +235,9 @@ if (NOPEN) {
     if (!di) fail("Não consegui ler o disco " + mdp.disk + ".", false);
     if (di.usb) fail("A imagem está num disco USB; a instalação sem pendrive só apaga o disco interno.", false);
     if (di.size < UAB.minGB * 1e9) fail("O disco é pequeno demais (mínimo " + UAB.minGB + " GB).", false);
-    PRESERVE = true; keepPart = mdp.part; best = di;
-    log("PRESERVAÇÃO: disco " + best.index + " (" + best.model + "), preservando a partição " + keepPart + " (" + media.letter + ":)");
+    PRESERVE = true; keepPart = mdp.part; best = di; best.gpt = mdp.gpt;
+    log("PRESERVAÇÃO: disco " + best.index + " (" + best.model + ", " + (best.gpt ? "GPT" : "MBR") +
+        "), preservando a partição " + keepPart + " (" + media.letter + ":)");
 } else {
     // Com pendrive: maior disco interno (exclui USB/removível e o que contém a mídia/respostas).
     var disks = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_DiskDrive"));
@@ -272,6 +285,16 @@ var both = !mode;  // desconhecido: serve aos dois
 var uefi = mode === "uefi" || (both && best.size >= 2 * 1099511627776);  // >= 2 TB não cabe em MBR
 log("firmware: " + (mode ? mode.toUpperCase() : "DESCONHECIDO -> " + (uefi ? "GPT" : "MBR") + " + bcdboot /f ALL") + " (" + fwHow + ")");
 
+if (PRESERVE) {
+    // Preservando a imagem, NÃO dá para "clean"/"convert": o estilo de partição tem que ser o
+    // que o disco JÁ tem (GPT ou MBR). Se ele não bate com o firmware, o PC não bootaria — então
+    // paramos ANTES de apagar e o técnico usa o pendrive (que refaz o disco do zero).
+    if (mode === "uefi" && !best.gpt) fail("O disco está em MBR e o PC liga em UEFI: sem pendrive não dá para converter sem apagar a imagem. Use a opção com pendrive.", false);
+    if (mode === "bios" && best.gpt) fail("O disco está em GPT e o PC liga em BIOS: sem pendrive não dá para converter sem apagar a imagem. Use a opção com pendrive.", false);
+    uefi = best.gpt; both = false;  // segue o disco (não o firmware)
+    log("preservação: disco em " + (best.gpt ? "GPT -> boot UEFI" : "MBR -> boot BIOS"));
+}
+
 var used = lettersInUse(), free = [], pref = "WSTUVRQPONMLKJIHG";
 for (var i = 0; i < pref.length; i++) if (!used[pref.charAt(i)]) free.push(pref.charAt(i));
 if (free.length < 2) fail("Não há letras de unidade livres para particionar.", false);
@@ -279,11 +302,16 @@ var W = free[0], S = free[1];
 
 var dp = ["select disk " + best.index];
 if (PRESERVE) {
-    // apaga as partições ANTES da reservada (a reservada é a última: foi criada encolhendo o C:).
-    // apagar "partition 1" (keepPart-1) vezes remove as da frente; a reservada vira a nº 1.
-    for (var k = 0; k < keepPart - 1; k++) dp.push("select partition 1", "delete partition override");
+    // apaga TODAS as partições menos a reservada (keepPart), pelos números REAIS e da maior para
+    // a menor (apagar uma partição não renumera as de número menor). Assim a imagem nunca é
+    // apagada, e não depende de o diskpart renumerar as partições.
+    var parts = listPartitions(best.index).sort(function (a, b) { return b - a; });
+    log("partições no disco " + best.index + ": " + parts.join(",") + " (preservando " + keepPart + ")");
+    for (var pi = 0; pi < parts.length; pi++) {
+        if (parts[pi] !== keepPart) dp.push("select partition " + parts[pi], "delete partition override");
+    }
     if (uefi) dp.push("create partition efi size=300", "format quick fs=fat32 label=\"System\"", "assign letter=" + S, "create partition msr size=16");
-    else dp.push("create partition primary size=500", "format quick fs=" + (both ? "fat32" : "ntfs") + " label=\"System\"", "active", "assign letter=" + S);
+    else dp.push("create partition primary size=500", "format quick fs=ntfs label=\"System\"", "active", "assign letter=" + S);
 } else {
     dp.push("clean");
     if (uefi) dp.push("convert gpt", "create partition efi size=300", "format quick fs=fat32 label=\"System\"", "assign letter=" + S, "create partition msr size=16");
