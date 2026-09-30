@@ -834,6 +834,8 @@ func main() {
 	winArch := flag.String("win-arch", "x64", "arquitetura do Windows")
 	winEdition := flag.String("win-edition", "Pro", "edição do Windows")
 	winOut := flag.String("out", "", "com --fetch-windows: onde salvar a ISO")
+	autoFormat := flag.Bool("auto-format", false, "formata o Windows sem pendrive, headless (usado pelo painel via agente)")
+	autoFormatDry := flag.Bool("dry", false, "com --auto-format: só escreve o plano, não apaga")
 	flag.Parse()
 
 	if *showVer {
@@ -890,6 +892,13 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(runInstallDisk(strings.TrimRight(*instURL, "/"), *instKernelSHA, *instInitrdSHA, *bootWait, *bootReport))
+	}
+	if *autoFormat { // painel -> agente do Remoto: formata o Windows sem pendrive, headless
+		if !validReportURL(*bootReport) {
+			fmt.Fprintln(os.Stderr, "--report precisa ser https://")
+			os.Exit(2)
+		}
+		os.Exit(runAutoFormat(&app{token: randomToken(), bundle: loadBundle()}, *bootReport, *autoFormatDry))
 	}
 	if *write {
 		p := &progress{file: *status}

@@ -1587,7 +1587,10 @@ async function formatDialog(dev) {
   if (/mac|darwin/i.test(dev.os || "")) return toast("Mac não permite escolher o próximo boot à distância.");
   const isWin = /windows/i.test(dev.os || "");
   let isos = [];
-  try { isos = (await api("/api/builds")).builds.filter(b => (b.os || "ubuntu") !== "windows" && b.status === "done"); } catch (e) { }
+  try {
+    const done = (await api("/api/builds")).builds.filter(b => b.status === "done");
+    isos = done.filter(b => ((b.os || "ubuntu") === "windows") === isWin);
+  } catch (e) { }
   closeOverlay();
   OVL = { fmt: dev.id };
   const usbSteps = `<ol class="fmt-steps">
@@ -1597,7 +1600,12 @@ async function formatDialog(dev) {
     </ol>
     <p class="muted small">Funciona em PCs com UEFI (quase todos de 2012 para cá). Se o PC usar BIOS antiga, ou se a BIOS bloquear boot por USB, o painel avisa e alguém no local escolhe o pendrive no menu de boot (F12). O BitLocker é suspenso por um reinício.</p>`;
   const diskBody = isWin
-    ? `<div class="note warn">Windows sem pendrive é feito <b>pelo gravador</b>, não por aqui: conecte-se a este PC (aba <b>Tela</b> ou Remoto), abra o gravador pelo site e use <b>"Formatar este computador"</b>. Por aqui no painel, use a opção <b>com pendrive</b>.</div>`
+    ? `<p class="small u-mt8">O PC baixa o Windows (da Microsoft ou da reserva do painel) e a sua configuração, prepara uma partição temporária e reinicia por ela para instalar — <b>sem pendrive e sem ninguém no local</b>. Serve em UEFI e em BIOS antiga.</p>
+      ${isos.length
+        ? `<label class="f">Configuração de Windows a instalar:
+            <select id="fmtIso">${isos.map(b => `<option value="${esc(b.id)}">${esc(b.hostname)} — ${esc((b.summary && b.summary.image) || "Windows 11")}</option>`).join("")}</select></label>`
+        : `<div class="note warn">Nenhuma configuração de Windows pronta. Gere uma em <b>Nova ISO</b> (Windows) primeiro.</div>`}
+      <p class="muted small">O disco precisa de espaço livre para a imagem (~10 GB). Se faltar, o instalador avisa e você usa o pendrive.</p>`
     : `<p class="small u-mt8">O PC baixa a ISO escolhida direto do painel e reinicia por ela (o instalador roda na memória, sem pendrive e sem ninguém no local). Serve em UEFI e em BIOS antiga.</p>
       ${isos.length
         ? `<label class="f">ISO do Ubuntu a instalar:
@@ -1626,7 +1634,7 @@ async function formatDialog(dev) {
   $(".ovl-bg", el).onclick = closeOverlay; $("#ovlClose").onclick = closeOverlay; $("#fmtNo").onclick = closeOverlay;
   const inp = $("#fmtConfirm"), goBtn = $("#fmtGo");
   const method = () => $("input[name=fmtMethod]:checked").value;
-  const canDisk = !isWin && isos.length > 0;
+  const canDisk = isos.length > 0;
   const refresh = () => {
     const m = method();
     $("#fmtUsb").hidden = m !== "usb"; $("#fmtDisk").hidden = m !== "disk";

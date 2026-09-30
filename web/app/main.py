@@ -1006,27 +1006,36 @@ def _format_script(platform: str, token: str, method: str = "usb", iso_path: str
     rep = f"{base}/report"
     tools = _format_tools(platform)
     sums = {a: _file_sha256(os.path.join(HELPER_DIR, n)) for a, n in tools.items()}
-    if method == "disk":
-        # sem pendrive: kexec no kernel/initrd da ISO servida pelo painel (só Linux)
+    win_disk = platform == "windows" and method == "disk"
+    if method == "disk" and platform == "linux":
+        # sem pendrive (Ubuntu): kexec no kernel/initrd da ISO servida pelo painel
         kern, init = _iso_boot_files(iso_path)
         args = (f'--install-disk --url "{base}" --kernel-sha {_file_sha256(kern)} '
                 f'--initrd-sha {_file_sha256(init)} --wait {FORMAT_WAIT_H}h --report "{rep}"')
+    elif win_disk:
+        # sem pendrive (Windows): o gravador baixa a ISO e config e instala no disco (headless)
+        args = f'--auto-format --report "{rep}"'
     else:
         args = f'--boot-usb --wait {FORMAT_WAIT_H}h --report "{rep}"'
     if platform == "windows":
+        # o gravador personalizado (com o build embutido) para o "sem pendrive"; o genérico para o pendrive
+        tool_url = f"{base}/gravador?arch=" if win_disk else f"{base}/tool?arch="
         hashes = "; ".join(f"{a}='{s}'" for a, s in sums.items())
         steps = [
             "$ErrorActionPreference='Stop'",
             "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12",
             "$a=if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'arm64'}else{'x64'}",
             f"$h=@{{{hashes}}}",
-            "if(-not $h[$a]){throw ('sem isoBuilder para '+$a)}",
             "$d=Join-Path $env:ProgramData 'isoBuilder'",
             "New-Item -ItemType Directory -Force -Path $d | Out-Null",
             "$f=Join-Path $d 'isoBuilder-format.exe'",
             "Stop-ScheduledTask -TaskName 'isoBuilderFormat' -ErrorAction SilentlyContinue",
-            f"Invoke-WebRequest -UseBasicParsing -Uri ('{base}/tool?arch='+$a) -OutFile $f",
-            "if((Get-FileHash -Algorithm SHA256 $f).Hash -ne $h[$a]){Remove-Item $f -Force; throw 'o arquivo baixado não confere'}",
+            f"Invoke-WebRequest -UseBasicParsing -Uri ('{tool_url}'+$a) -OutFile $f",
+        ]
+        if not win_disk:  # o genérico tem SHA fixo; o personalizado varia (bundle embutido)
+            steps += ["if(-not $h[$a]){throw ('sem isoBuilder para '+$a)}",
+                      "if((Get-FileHash -Algorithm SHA256 $f).Hash -ne $h[$a]){Remove-Item $f -Force; throw 'o arquivo baixado não confere'}"]
+        steps += [
             f"$act=New-ScheduledTaskAction -Execute $f -Argument '{args}'",
             "$pr=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
             f"$st=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours {FORMAT_WAIT_H + 1})",
@@ -1103,14 +1112,22 @@ async def format_start(request: Request, u: core.User = Depends(admin_user)):
     method = "disk" if str(d.get("method") or "usb") == "disk" else "usb"
     iso_path, iso_label = "", ""
     if method == "disk":
-        if platform != "linux":
-            raise core.Invalid("Sem pendrive, por enquanto, só para Ubuntu/Linux. Para Windows, use a opção com pendrive.")
+        if platform not in ("linux", "windows"):
+            raise core.Invalid("Sem pendrive só funciona para Ubuntu/Linux e Windows.")
         r = _get_build(str(d.get("build_id") or ""), u)
-        if _is_win(r) or r["status"] != "done" or not r["iso_path"] or not os.path.exists(r["iso_path"]):
-            raise core.Invalid("Escolha uma ISO de Ubuntu pronta para instalar.")
-        iso_path = r["iso_path"]
-        iso_label = f"ISO {r['hostname']} ({(r['iso_size'] or 0) / 1e9:.1f} GB)"
-        _iso_boot_files(iso_path)  # extrai/valida kernel e initrd antes de disparar
+        if r["status"] != "done":
+            raise core.Invalid("Escolha uma configuração pronta para instalar.")
+        if platform == "windows":
+            if not _is_win(r):
+                raise core.Invalid("Este PC é Windows: escolha uma configuração de Windows.")
+            summ = json.loads(r["summary"] or "{}")
+            iso_label = f"Windows {summ.get('WIN_VERSION') or '11'} {summ.get('WIN_EDITION') or 'Pro'} ({summ.get('WIN_LANG') or 'pt-BR'})"
+        else:
+            if _is_win(r) or not r["iso_path"] or not os.path.exists(r["iso_path"]):
+                raise core.Invalid("Escolha uma ISO de Ubuntu pronta para instalar.")
+            iso_path = r["iso_path"]
+            iso_label = f"ISO {r['hostname']} ({(r['iso_size'] or 0) / 1e9:.1f} GB)"
+            _iso_boot_files(iso_path)  # extrai/valida kernel e initrd antes de disparar
     token = secrets.token_urlsafe(32)
     jid = secrets.token_hex(8)
     t = core.now()
@@ -1203,6 +1220,27 @@ def _format_disk_build(token: str):
     return b
 
 
+@app.get("/f/{token}/gravador")
+def format_gravador(token: str, arch: str = "x64"):
+    """Gravador personalizado (Windows, com o build embutido) para o 'sem pendrive':
+    o agente do Remoto baixa este .exe e roda `--auto-format`, que baixa a ISO/config
+    e instala no disco. Só enquanto o pedido está valendo."""
+    b = _format_disk_build(token)
+    if not _is_win(b):
+        raise HTTPException(404, "este pedido não é de Windows")
+    name, mt = HELPERS["windows"]
+    base = os.path.join(HELPER_DIR, name)
+    if not os.path.exists(base):
+        raise HTTPException(404, "gravador do Windows não compilado nesta instalação")
+    exp = min(b["expires_at"] or core.now() + 86400, core.now() + DL_TOKEN_DAYS * 86400)
+    dl = core.create_dl_token(b["id"], exp, b["user_id"])
+    cfg = json.dumps(_win_bundle_info(b, dl, exp), separators=(",", ":")).encode()
+    overlay, gen = _bundle_overlay(base, cfg)
+    return StreamingResponse(gen(), media_type=mt, headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store",
+        "Content-Length": str(os.path.getsize(base) + len(overlay))})
+
+
 @app.get("/f/{token}/iso")
 def format_iso(token: str):
     """A ISO que o PC baixa para a RAM (kexec com url=) e instala. Só no modo 'sem pendrive'."""
@@ -1256,6 +1294,36 @@ BUNDLE_MAGIC = b"UABCFG01"
 DL_TOKEN_DAYS = int(os.environ.get("DL_TOKEN_DAYS", "7"))
 
 
+def _win_bundle_info(r, token: str, exp: int) -> dict:
+    """Bundle (JSON embutido no gravador) de um build de Windows: mesma configuração
+    que /config serve (pe.js atual), com o SHA256/tamanho batendo, e a reserva de ISO
+    do painel quando houver."""
+    import hashlib as _hl
+    summ = json.loads(r["summary"] or "{}")
+    cfg_bytes = windows_config_bytes(r)
+    lang = summ.get("WIN_LANG") or "pt-BR"
+    info = {"kind": "windows", "server": PUBLIC_URL, "token": token, "config_name": _file_name(r),
+            "sha256": _hl.sha256(cfg_bytes).hexdigest(), "size": len(cfg_bytes),
+            "hostname": r["hostname"], "expires_at": exp,
+            "windows": {"version": summ.get("WIN_VERSION") or "11", "edition": summ.get("WIN_EDITION") or "Pro",
+                        "lang": lang, "arch": "x64"}}
+    if winstore.have(lang, "x64"):  # reserva no servidor (Microsoft recusou?)
+        info["win_fallback"] = f"{PUBLIC_URL}/t/{token}/win-iso"
+    return info
+
+
+def _bundle_overlay(base_exe: str, cfg: bytes):
+    """StreamingResponse do executável `base_exe` com o bundle `cfg` anexado (UABCFG01)."""
+    overlay = cfg + struct.pack(">Q", len(cfg)) + BUNDLE_MAGIC
+
+    def gen():
+        with open(base_exe, "rb") as fh:
+            while chunk := fh.read(1 << 20):
+                yield chunk
+        yield overlay
+    return overlay, gen
+
+
 @app.get("/download/bundle/{bid}/{platform}")
 def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user)):
     """Gravador personalizado: já contém um link temporário para esta ISO e a
@@ -1273,15 +1341,7 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
     token = core.create_dl_token(bid, exp, u.id)
     _record_download(bid, u.email, f"gravador-{platform}")
     if _is_win(r):  # o gravador baixa o Windows da Microsoft e aplica esta configuração
-        summ = json.loads(r["summary"] or "{}")
-        import hashlib as _hl
-        cfg_bytes = windows_config_bytes(r)  # mesmo conteúdo que /config serve (pe.js atual)
-        info = {"kind": "windows", "server": PUBLIC_URL, "token": token, "config_name": _file_name(r),
-                "sha256": _hl.sha256(cfg_bytes).hexdigest(), "size": len(cfg_bytes), "hostname": r["hostname"], "expires_at": exp,
-                "windows": {"version": summ.get("WIN_VERSION") or "11", "edition": summ.get("WIN_EDITION") or "Pro",
-                            "lang": summ.get("WIN_LANG") or "pt-BR", "arch": "x64"}}
-        if winstore.have(summ.get("WIN_LANG") or "pt-BR", "x64"):  # reserva no servidor (Microsoft recusou?)
-            info["win_fallback"] = f"{PUBLIC_URL}/t/{token}/win-iso"
+        info = _win_bundle_info(r, token, exp)
     else:
         info = {"kind": "ubuntu", "server": PUBLIC_URL, "token": token, "iso_name": _file_name(r),
                 "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp}
@@ -1299,13 +1359,7 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
             zout.writestr(ri, cfg)
         return StreamingResponse(iter([buf.getvalue()]), media_type=mt,
                                  headers={**headers, "Content-Length": str(buf.tell())})
-    overlay = cfg + struct.pack(">Q", len(cfg)) + BUNDLE_MAGIC
-
-    def gen():
-        with open(base, "rb") as fh:
-            while chunk := fh.read(1 << 20):
-                yield chunk
-        yield overlay
+    overlay, gen = _bundle_overlay(base, cfg)
     return StreamingResponse(gen(), media_type=mt,
                              headers={**headers, "Content-Length": str(os.path.getsize(base) + len(overlay))})
 

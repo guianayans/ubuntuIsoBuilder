@@ -1,0 +1,91 @@
+package main
+
+// Modo headless usado pelo PAINEL (via agente do Remoto): "Formatar esta máquina (Windows,
+// sem pendrive)". O painel manda o agente baixar o gravador personalizado (com o bundle do
+// build embutido) e rodar `--auto-format --report <.../f/token/report>`. Aqui o gravador
+// baixa a configuração e a ISO (da Microsoft ou da reserva do painel) e instala no disco,
+// reportando o andamento ao painel — o mesmo motor da tela "Formatar este computador".
+
+import (
+	"context"
+	"net/http"
+	"time"
+)
+
+// mapeia as fases internas do progresso para os estados que o painel entende (format_jobs)
+var autoFormatState = map[string]string{
+	"config": "baixando", "downloading": "baixando", "hashing": "baixando", "checking": "baixando",
+	"staging": "preparando", "rebooting": "reiniciando", "done": "reiniciando", "error": "erro",
+}
+
+// runAutoFormat: instala o Windows neste computador sem pendrive, reportando ao painel.
+// Saídas: 0 reiniciando/ok, 1 erro.
+func runAutoFormat(a *app, reportURL string, dry bool) int {
+	rep := &formatReporter{url: reportURL, c: &http.Client{Timeout: 20 * time.Second}}
+	if a.bundle == nil || !a.bundle.isWindows() {
+		rep.send("erro", "gravador sem configuração de Windows.", nil)
+		return 1
+	}
+	p := &progress{}
+	stop := make(chan struct{})
+	go func() { // ponte progresso -> painel
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		last := ""
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				st := p.get()
+				state := autoFormatState[st.Phase]
+				if state == "" {
+					state = "preparando"
+				}
+				if st.Message != "" && st.Message != last {
+					last = st.Message
+					if rep.send(state, st.Message, nil) { // painel cancelou
+						return
+					}
+				}
+			}
+		}
+	}()
+	defer close(stop)
+
+	ctx := context.Background()
+	rep.send("baixando", "Baixando a configuração do painel…", nil)
+	if err := a.loadConfig(); err != nil {
+		rep.send("erro", "não consegui baixar a configuração: "+err.Error(), nil)
+		return 1
+	}
+	w := a.bundle.Windows
+	path, sum, err := downloadWindowsISO(ctx, w, p)
+	if err != nil && a.bundle.WinFallback != "" {
+		p.set("downloading", "A Microsoft recusou; baixando a ISO de reserva do painel…", 0)
+		if fp, fs, ferr := downloadWinFallback(ctx, a.bundle, p); ferr == nil {
+			path, sum, err = fp, fs, nil
+		}
+	}
+	if err != nil {
+		rep.send("erro", "não consegui baixar o Windows (Microsoft e reserva do painel): "+err.Error(), nil)
+		return 1
+	}
+	info, err := inspectWindowsISO(path, w.Arch, w.Edition, w.Lang)
+	if err != nil {
+		rep.send("erro", "a ISO não passou na conferência: "+err.Error(), nil)
+		return 1
+	}
+	a.mu.Lock()
+	a.isoPath, a.isoHash, a.winInfo = path, sum, info
+	a.mu.Unlock()
+
+	// instala no disco (o osInstallLocal reinicia sozinho no fim; em dry, escreve o plano e volta)
+	osInstallLocal(a, path, "", a.unattendPath, dry, p)
+	if st := p.get(); st.Phase == "error" {
+		rep.send("erro", st.Message, nil)
+		return 1
+	}
+	rep.send("reiniciando", "Tudo pronto. Reiniciando para instalar o Windows; o computador volta a aparecer no painel quando terminar.", nil)
+	return 0
+}
