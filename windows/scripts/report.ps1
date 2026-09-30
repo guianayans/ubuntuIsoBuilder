@@ -11,9 +11,11 @@ $ProgressPreference = 'SilentlyContinue'
 . (Join-Path $env:ProgramData 'uab\vpn.ps1')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
 
-$conf = Get-UabConf
+# No boot o report pode disparar antes da config estar pronta: sem ela, sai quieto (sem
+# cuspir "não foi possível localizar ...uab.json" no console). A próxima repetição relata.
+$conf = try { Get-UabConf } catch { $null }
 $token = Read-UabSecret 'panel-token'
-if (-not $conf.panel_url -or -not $token) { exit 0 }
+if (-not $conf -or -not $conf.panel_url -or -not $token) { exit 0 }
 $url = $conf.panel_url.TrimEnd('/') + '/api/agent/report'
 $hdr = @{ Authorization = "Bearer $token" }
 
