@@ -320,6 +320,15 @@ def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
         "  <settings pass=\"oobeSystem\">\n"
         + _comp("Microsoft-Windows-International-Core", intl)
         + _comp("Microsoft-Windows-Shell-Setup",
+                # AutoLogon uma vez: o PC loga sozinho no admin, o OOBE "preparando tudo para
+                # você" finaliza e as tarefas de pós-instalação (SYSTEM) progridem sem ninguém no
+                # local — essencial para o "formatar sem pendrive". Depois volta a pedir senha.
+                "      <AutoLogon>\n"
+                f"        <Username>{_x(v['user'])}</Username>\n"
+                "        <Enabled>true</Enabled>\n"
+                "        <LogonCount>1</LogonCount>\n"
+                f"        <Password><Value>{_pw(v['password'], 'Password')}</Value><PlainText>false</PlainText></Password>\n"
+                "      </AutoLogon>\n"
                 "      <OOBE>\n"
                 "        <HideEULAPage>true</HideEULAPage>\n"
                 "        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>\n"
