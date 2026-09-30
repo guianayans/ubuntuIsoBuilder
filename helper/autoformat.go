@@ -64,7 +64,8 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 	if !a.bundle.isWindows() { // build de Ubuntu num PC Windows: UEFI (EFISTUB) ou BIOS (grub4dos)
 		b := a.bundle
 		base := strings.TrimRight(b.Server, "/") + "/t/" + b.Token
-		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/iso", base+"/grldr", base+"/grldr.mbr", dry, p)
+		// a URL da ISO precisa terminar em .iso: o casper só faz netboot automático com url=*.iso
+		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/image.iso", base+"/grldr", base+"/grldr.mbr", dry, p)
 		st := p.get()
 		if st.Phase == "error" {
 			rep.send("erro", st.Message, nil)

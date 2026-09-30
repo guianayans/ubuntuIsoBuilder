@@ -1409,6 +1409,13 @@ def token_iso(token: str):
                         filename=_file_name(r), headers={"Cache-Control": "no-store"})
 
 
+@app.api_route("/t/{token}/image.iso", methods=["GET", "HEAD"])
+def token_iso_dot(token: str):
+    """Mesma ISO que /iso, mas o caminho termina em '.iso': o casper só faz o netboot
+    automático quando a URL casa com 'url=*.iso' (senão cai no netboot interativo)."""
+    return token_iso(token)
+
+
 def _t_ubuntu_build(token: str):
     """Build de Ubuntu de um link temporário (para kernel/initrd do EFISTUB no Windows)."""
     bid = core.dl_token_build(token)
