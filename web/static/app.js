@@ -2009,7 +2009,7 @@ function tabResumoWin(m, r, sv, gb, svc) {
   $("#goConn").onclick = () => showTab("conectar");
 }
 // indicador do TerminalSec (monitoramento de segurança) na lista de máquinas
-const TSEC_ST = { online: ["on", "protegido"], pending: ["wait", "aguardando aprovação"], offline: ["off", "sem contato"], archived: ["gone", "arquivado"] };
+const TSEC_ST = { online: ["on", "protegido"], pending: ["wait", "aguardando"], offline: ["off", "sem contato"], archived: ["gone", "arquivado"] };
 function tsecBadge(m, inline) {
   const t = m.terminalsec;
   if (!t) return "";
