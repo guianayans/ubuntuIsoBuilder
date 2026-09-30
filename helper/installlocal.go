@@ -83,7 +83,8 @@ func neededRAMGB(kind string, isoSize int64) int {
 	return 4
 }
 
-// panelISOURL: endereço da ISO no painel (o kexec baixa por ele durante a instalação).
+// panelISOURL: endereço da ISO no painel (o kexec baixa por ele). Termina em .iso porque o
+// casper só faz netboot automático quando a URL casa com 'url=*.iso'.
 func (a *app) panelISOURL() string {
-	return strings.TrimRight(a.bundle.Server, "/") + "/t/" + a.bundle.Token + "/iso"
+	return strings.TrimRight(a.bundle.Server, "/") + "/t/" + a.bundle.Token + "/image.iso"
 }

@@ -86,7 +86,7 @@ func runInstallDisk(baseURL, kernelSHA, initrdSHA string, wait time.Duration, re
 	if rep.send("preparando", "Preparando a instalação…", nil) {
 		return 5
 	}
-	if err := osStageKexec(kern, init, baseURL+"/iso"); err != nil {
+	if err := osStageKexec(kern, init, baseURL+"/image.iso"); err != nil {  // .iso: casper netboot automático
 		rep.send("erro", "não consegui preparar o kexec: "+err.Error(), nil)
 		return 1
 	}

@@ -1266,9 +1266,11 @@ def format_gravador(token: str, arch: str = "x64"):
         "Content-Length": str(os.path.getsize(base) + len(overlay))})
 
 
-@app.get("/f/{token}/iso")
+@app.api_route("/f/{token}/iso", methods=["GET", "HEAD"])
+@app.api_route("/f/{token}/image.iso", methods=["GET", "HEAD"])
 def format_iso(token: str):
-    """A ISO que o PC baixa para a RAM (kexec com url=) e instala. Só no modo 'sem pendrive'."""
+    """A ISO que o PC baixa para a RAM (kexec com url=) e instala. Só no modo 'sem pendrive'.
+    O caminho .../image.iso termina em .iso: o casper só faz netboot automático com url=*.iso."""
     b = _format_disk_build(token)
     return FileResponse(b["iso_path"], media_type="application/octet-stream",
                         filename=f"{b['hostname']}-autoinstall.iso", headers={"Cache-Control": "no-store"})
