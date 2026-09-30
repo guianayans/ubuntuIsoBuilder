@@ -518,6 +518,7 @@ function stepHTML() {
         <div id="winsshkeys" class="${W.win_ssh_auth === "key" ? "" : "hidden"}">
           <label class="f"><span>Chave(s) SSH pública(s)</span><textarea name="win_ssh_keys" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG7kQv2m... notebook-suporte">${esc(W.win_ssh_keys)}</textarea>
           <small>Uma por linha. Arquivo <code>id_ed25519.pub</code> (nunca a chave sem .pub).</small></label>
+          <div class="row"><label class="btn sm">Carregar arquivo .pub<input type="file" id="winpubfile" accept=".pub,text/plain" class="hidden"></label></div>
         </div>
       </div>
       ${FEATURES.remote_agent ? toggle("remote_agent", "Aparecer no Remoto (MeshCentral)", "Instala o agente do Remoto: tela, terminal e arquivos pelo navegador, de qualquer lugar, sem abrir portas no roteador. Recomendado.")
@@ -842,6 +843,18 @@ function renderWizard() {
       const t = String(rd.result);
       if (/PRIVATE KEY|-----BEGIN/.test(t)) return toast("Esse é o arquivo da chave PRIVADA. Escolha o .pub.");
       const ta = $('textarea[name="ssh_keys"]'); ta.value = (ta.value.trim() + "\n" + t.trim()).trim(); toast("Chave carregada.");
+    };
+    rd.readAsText(f);
+  };
+  const wpf = $("#winpubfile");
+  if (wpf) wpf.onchange = () => {
+    const f = wpf.files[0]; if (!f) return;
+    if (f.size > 20000) return toast("Arquivo grande demais para ser uma chave pública.");
+    const rd = new FileReader();
+    rd.onload = () => {
+      const t = String(rd.result);
+      if (/PRIVATE KEY|-----BEGIN/.test(t)) return toast("Esse é o arquivo da chave PRIVADA. Escolha o .pub.");
+      const ta = $('textarea[name="win_ssh_keys"]'); ta.value = (ta.value.trim() + "\n" + t.trim()).trim(); toast("Chave carregada.");
     };
     rd.readAsText(f);
   };
