@@ -38,6 +38,8 @@ type Bundle struct {
 	Kind       string         `json:"kind,omitempty"`
 	ConfigName string         `json:"config_name,omitempty"`
 	Windows    *BundleWindows `json:"windows,omitempty"`
+	// reserva: ISO do Windows guardada no painel, usada quando a Microsoft recusa o download
+	WinFallback string `json:"win_fallback,omitempty"`
 	// Acesso remoto do técnico (conta do cliente com essa opção ligada no painel)
 	Agent *BundleAgent `json:"agent,omitempty"`
 }

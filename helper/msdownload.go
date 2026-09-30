@@ -474,3 +474,91 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	case <-time.After(d):
 	}
 }
+
+// downloadWinFallback baixa a ISO de reserva do painel (com retomada e conferência de
+// SHA256), usada quando a Microsoft recusa o download automático.
+func downloadWinFallback(ctx context.Context, b *Bundle, p *progress) (string, string, error) {
+	c := &http.Client{Timeout: 30 * time.Second}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, b.WinFallback+"-sha", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	shb, _ := io.ReadAll(io.LimitReader(resp.Body, 100))
+	resp.Body.Close()
+	want := strings.TrimSpace(string(shb))
+	if len(want) != 64 {
+		return "", "", errors.New("o painel não tem uma ISO de reserva")
+	}
+	dst := filepath.Join(downloadDir(), "Windows11_reserva.iso")
+	part := dst + ".part"
+	client := &http.Client{Timeout: 0}
+	var lastErr error
+	for attempt := 1; attempt <= 30; attempt++ {
+		if ctx.Err() != nil {
+			return "", "", ctx.Err()
+		}
+		have := int64(0)
+		if fi, e := os.Stat(part); e == nil {
+			have = fi.Size()
+		}
+		rq, _ := http.NewRequestWithContext(ctx, http.MethodGet, b.WinFallback, nil)
+		if have > 0 {
+			rq.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
+		}
+		rp, e := client.Do(rq)
+		if e != nil {
+			lastErr = e
+			p.setMessage(fmt.Sprintf("Sem conexão com o painel, tentando de novo (%d)…", attempt))
+			sleepCtx(ctx, time.Duration(min(attempt, 10))*3*time.Second)
+			continue
+		}
+		var total int64
+		if rp.StatusCode == http.StatusPartialContent && have > 0 {
+			if cr := rp.Header.Get("Content-Range"); strings.Contains(cr, "/") {
+				total, _ = strconv.ParseInt(cr[strings.LastIndex(cr, "/")+1:], 10, 64)
+			}
+		} else if rp.StatusCode == http.StatusOK {
+			have, total = 0, rp.ContentLength
+		} else {
+			rp.Body.Close()
+			return "", "", fmt.Errorf("o painel respondeu %s ao baixar a reserva", rp.Status)
+		}
+		p.set("downloading", "Baixando a ISO de reserva do painel…", total)
+		p.add(have)
+		flags := os.O_CREATE | os.O_WRONLY
+		if have > 0 {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_TRUNC
+		}
+		f, e := os.OpenFile(part, flags, 0o644)
+		if e != nil {
+			rp.Body.Close()
+			return "", "", e
+		}
+		_, ce := io.CopyBuffer(counter{f, p}, rp.Body, make([]byte, 1<<20))
+		rp.Body.Close()
+		f.Close()
+		if ce == nil {
+			if fi, e := os.Stat(part); e == nil && (total == 0 || fi.Size() >= total) {
+				break
+			}
+		}
+		lastErr = ce
+		p.setMessage("Conexão interrompida; retomando…")
+		sleepCtx(ctx, 3*time.Second)
+	}
+	sum, err := hashFile(part, p)
+	if err != nil {
+		return "", "", err
+	}
+	if sum != want {
+		os.Remove(part)
+		return "", "", fmt.Errorf("a ISO de reserva veio corrompida (SHA256 não confere): %v", lastErr)
+	}
+	if err := os.Rename(part, dst); err != nil {
+		return "", "", err
+	}
+	return dst, sum, nil
+}

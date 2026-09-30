@@ -1267,7 +1267,10 @@ async function renderRemoteFrame() {
 async function renderSystem() {
   view.innerHTML = `<h1>Sistema</h1><div class="card"><h2>WireGuard (seu servidor como ponto de encontro)</h2><div id="hubCard">Carregando…</div></div>
     <div class="card"><h2>Painel na Tailnet</h2><div id="pnl">Carregando…</div></div>
-    <div class="card"><h2>ISO oficial do Ubuntu</h2><div id="base">Carregando…</div></div>`;
+    <div class="card"><h2>ISO oficial do Ubuntu</h2><div id="base">Carregando…</div></div>
+    <div class="card"><h2>ISO do Windows (reserva)</h2>
+      <p class="muted small">Quando a Microsoft recusa o download automático (acontece com alguns provedores), o gravador usa esta ISO guardada no servidor. Deixe uma salva por idioma.</p>
+      <div id="winiso">Carregando…</div></div>`;
   api("/api/panel").then(d => {
     const h = d.wg, hs = h.hub || {};
     $("#hubCard").innerHTML = !h.enabled
@@ -1299,8 +1302,60 @@ async function renderSystem() {
     });
     $$("#base [data-s]").forEach(b => b.onclick = async () => { try { await api("/api/admin/base/" + b.dataset.s, { method: "POST" }); load(); } catch (e) { toast(e.message); } });
   };
-  await load();
-  timer = setInterval(load, 3000);
+  const loadWin = async () => {
+    let d;
+    try { d = await api("/api/admin/win-iso"); } catch (e) { $("#winiso").innerHTML = `<div class="note err">${esc(e.message)}</div>`; return; }
+    const busy = (d.isos || []).some(i => i.fetch && i.fetch.state === "running");
+    const rows = (d.isos || []).filter(i => i.present || i.fetch).map(i => {
+      const f = i.fetch;
+      const st = f ? (f.state === "running" ? `${esc(f.message || "baixando…")} <b>${Math.round(f.percent || 0)}%</b>`
+        : f.state === "error" ? `<span class="err">${esc(f.message)}</span>` : esc(f.message || "")) : (i.present ? "Pronta" : "—");
+      return `<tr><td><b>${esc(i.lang || i.key)}</b>${i.name ? `<br><span class="muted small">${esc(i.name)}</span>` : ""}</td>
+        <td>${i.present ? fmtBytes(i.size) : "<span class='muted'>—</span>"}</td>
+        <td>${i.at ? fmtDate(i.at) : ""}</td><td>${st}</td>
+        <td>${i.present ? `<button class="btn sm danger" data-winrm="${esc(i.lang)}">Apagar</button>` : ""}</td></tr>`;
+    }).join("");
+    $("#winiso").innerHTML = `${rows ? `<div class="table-wrap"><table><tr><th>Idioma</th><th>Tamanho</th><th>Salva em</th><th>Situação</th><th></th></tr>${rows}</table></div>` : "<p class='muted small'>Nenhuma ISO de reserva ainda.</p>"}
+      <div class="row u-mt12" style="flex-wrap:wrap;gap:8px;align-items:end">
+        <label class="f" style="margin:0">Idioma <select id="winLang">${(d.langs || ["pt-BR"]).map(l => `<option ${l === "pt-BR" ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+        <label class="f" style="margin:0">Edição <select id="winEd">${(d.editions || ["Pro"]).map(e => `<option ${e === "Pro" ? "selected" : ""}>${esc(e)}</option>`).join("")}</select></label>
+        <button class="btn" id="winFetch" ${busy ? "disabled" : ""}>Baixar da Microsoft (no servidor)</button>
+        <button class="btn" id="winUp" ${busy ? "disabled" : ""}>Enviar ISO…</button>
+        <input type="file" id="winFile" accept=".iso" style="display:none">
+      </div>
+      <div id="winUpProg" class="muted small u-mt8"></div>
+      <p class="muted small u-mt8">“Baixar no servidor” pode ser recusado pela Microsoft (mesmo bloqueio). Se recusar, baixe a ISO num PC (microsoft.com/software-download/windows11) e use <b>Enviar ISO</b> — o upload é conferido (Windows 11, idioma/edição) e guardado.</p>`;
+    $$("#winiso [data-winrm]").forEach(b => b.onclick = async () => {
+      if (!confirm(`Apagar a ISO de reserva (${b.dataset.winrm}) do servidor?`)) return;
+      try { await api(`/api/admin/win-iso/${encodeURIComponent(b.dataset.winrm)}/Pro`, { method: "DELETE" }); loadWin(); } catch (e) { toast(e.message); }
+    });
+    const fb = $("#winFetch"); if (fb) fb.onclick = async () => {
+      try { await api("/api/admin/win-iso/fetch", { method: "POST", body: { lang: $("#winLang").value, edition: $("#winEd").value } }); toast("Baixando no servidor…"); loadWin(); } catch (e) { toast(e.message); }
+    };
+    const ub = $("#winUp"); if (ub) ub.onclick = () => $("#winFile").click();
+    const fi = $("#winFile"); if (fi) fi.onchange = () => { if (fi.files[0]) uploadWinIso(fi.files[0], $("#winLang").value, $("#winEd").value); };
+  };
+  await load(); await loadWin();
+  timer = setInterval(() => { load(); loadWin(); }, 3000);
+}
+
+// Envio da ISO do Windows (arquivo grande) com barra de progresso, via XHR.
+function uploadWinIso(file, lang, edition) {
+  const prog = $("#winUpProg");
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/admin/win-iso/upload");
+  xhr.setRequestHeader("X-Requested-With", "uab");
+  xhr.setRequestHeader("X-UAB-Lang", lang);
+  xhr.setRequestHeader("X-UAB-Edition", edition);
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.upload.onprogress = e => { if (e.lengthComputable && prog) prog.innerHTML = `Enviando ${file.name}: <b>${Math.round(e.loaded / e.total * 100)}%</b> (${fmtBytes(e.loaded)} de ${fmtBytes(e.total)})`; };
+  xhr.onload = () => {
+    if (xhr.status === 200) { if (prog) prog.innerHTML = `<span class="ok">✔ ISO enviada e conferida.</span>`; }
+    else { let m = xhr.responseText; try { m = JSON.parse(xhr.responseText).error || m; } catch (e) { } if (prog) prog.innerHTML = `<span class="err">✖ ${esc(m)}</span>`; }
+  };
+  xhr.onerror = () => { if (prog) prog.innerHTML = `<span class="err">✖ Falha no envio.</span>`; };
+  if (prog) prog.innerHTML = `Enviando ${esc(file.name)}…`;
+  xhr.send(file);
 }
 
 

@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocke
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import builder, core, panel, remoto, terminalsec, wg
+from . import builder, core, panel, remoto, terminalsec, wg, winstore
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 HELPER_DIR = os.environ.get("HELPER_DIST", os.path.join(builder.UAB_ROOT, "helper", "dist"))
@@ -68,7 +68,9 @@ async def security(request: Request, call_next):
         host = request.headers.get("x-forwarded-host") or request.headers.get("host")
         if origin and origin.split("://", 1)[-1] != host:
             return JSONResponse({"error": "origem inválida"}, 403)
-        if int(request.headers.get("content-length") or 0) > MAX_BODY:
+        # envio da ISO do Windows (admin): arquivo grande, gravado em disco por streaming
+        big_upload = request.url.path == "/api/admin/win-iso/upload"
+        if not big_upload and int(request.headers.get("content-length") or 0) > MAX_BODY:
             return JSONResponse({"error": "requisição grande demais"}, 413)
     resp = await call_next(request)
     if request.url.path.startswith("/static/"):
@@ -632,6 +634,64 @@ def base_delete(series: str, _: core.User = Depends(admin_user)):
     if builder.base_in_use(series):
         raise HTTPException(409, "Há uma geração ou download usando esta ISO; aguarde terminar.")
     return {"ok": True, "freed": builder.delete_base_iso(series)}
+
+
+# ------------------------------------------------------------------ reserva de ISO do Windows
+# A Microsoft às vezes recusa o download automático (anti-robô). O admin deixa uma ISO salva
+# aqui (baixando no servidor ou enviando); o gravador usa como reserva quando a Microsoft nega.
+_WIN_LANGS = {"pt-BR", "en-US", "es-ES"}
+_WIN_EDITIONS = {"Pro", "Home", "Education", "Enterprise"}
+
+
+@app.get("/api/admin/win-iso")
+def win_iso_list(_: core.User = Depends(admin_user)):
+    import shutil as _sh
+    total, _u, free = _sh.disk_usage(core.DATA_DIR)
+    return {"isos": winstore.listing(), "disk": {"total": total, "free": free},
+            "langs": sorted(_WIN_LANGS), "editions": sorted(_WIN_EDITIONS)}
+
+
+@app.post("/api/admin/win-iso/fetch")
+async def win_iso_fetch(request: Request, _: core.User = Depends(admin_user)):
+    d = await body(request)
+    lang = str(d.get("lang") or "pt-BR")
+    arch = "x64"
+    edition = str(d.get("edition") or "Pro")
+    if lang not in _WIN_LANGS or edition not in _WIN_EDITIONS:
+        raise core.Invalid("Idioma ou edição inválidos.")
+    winstore.fetch_from_microsoft(lang, arch, edition)
+    return {"ok": True}
+
+
+@app.post("/api/admin/win-iso/upload")
+async def win_iso_upload(request: Request, _: core.User = Depends(admin_user)):
+    """Envio da ISO pelo admin (quando o servidor não consegue baixar da Microsoft).
+    O arquivo vem no corpo; idioma/edição nos cabeçalhos."""
+    lang = request.headers.get("x-uab-lang", "pt-BR")
+    edition = request.headers.get("x-uab-edition", "Pro")
+    arch = "x64"
+    if lang not in _WIN_LANGS or edition not in _WIN_EDITIONS:
+        raise core.Invalid("Idioma ou edição inválidos.")
+    os.makedirs(winstore.WIN_DIR, exist_ok=True)
+    tmp = winstore.iso_path(lang, arch) + ".part"
+    size = 0
+    with open(tmp, "wb") as fh:
+        async for chunk in request.stream():
+            size += len(fh.write(chunk)) if chunk else 0
+    if size < (1 << 30):
+        os.remove(tmp)
+        raise core.Invalid("Arquivo pequeno demais para ser uma ISO do Windows.")
+    try:
+        info = winstore.import_file(tmp, lang, arch, edition, source="upload")
+    except core.Invalid:
+        raise
+    return {"ok": True, **info}
+
+
+@app.delete("/api/admin/win-iso/{lang}/{edition}")
+def win_iso_delete(lang: str, edition: str, _: core.User = Depends(admin_user)):
+    winstore.delete(lang, "x64")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ builds
@@ -1202,6 +1262,8 @@ def download_bundle(bid: str, platform: str, u: core.User = Depends(current_user
                 "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp,
                 "windows": {"version": summ.get("WIN_VERSION") or "11", "edition": summ.get("WIN_EDITION") or "Pro",
                             "lang": summ.get("WIN_LANG") or "pt-BR", "arch": "x64"}}
+        if winstore.have(summ.get("WIN_LANG") or "pt-BR", "x64"):  # reserva no servidor (Microsoft recusou?)
+            info["win_fallback"] = f"{PUBLIC_URL}/t/{token}/win-iso"
     else:
         info = {"kind": "ubuntu", "server": PUBLIC_URL, "token": token, "iso_name": _file_name(r),
                 "sha256": r["sha256"], "size": r["iso_size"], "hostname": r["hostname"], "expires_at": exp}
@@ -1260,6 +1322,39 @@ def token_config(token: str):
         raise HTTPException(410, "configuração removida do servidor")
     return FileResponse(r["iso_path"], media_type="application/xml", filename=_file_name(r),
                         headers={"Cache-Control": "no-store"})
+
+
+def _win_build_langarch(token: str):
+    """Build do Windows do token + (lang, arch), ou (None, None, None)."""
+    bid = core.dl_token_build(token)
+    if not bid:
+        raise HTTPException(410, "link expirado ou inválido")
+    with core.db() as con:
+        r = con.execute("SELECT * FROM builds WHERE id=?", (bid,)).fetchone()
+    if not r or not _is_win(r):
+        raise HTTPException(404, "não é um build do Windows")
+    summ = json.loads(r["summary"] or "{}")
+    return r, (summ.get("WIN_LANG") or "pt-BR"), "x64"
+
+
+@app.api_route("/t/{token}/win-iso", methods=["GET", "HEAD"])
+def token_win_iso(token: str):
+    """Reserva: a ISO do Windows guardada no servidor, para o gravador quando a Microsoft
+    recusa o download. Só existe se o admin tiver deixado uma salva para este idioma/arch."""
+    _, lang, arch = _win_build_langarch(token)
+    if not winstore.have(lang, arch):
+        raise HTTPException(404, "sem ISO do Windows de reserva neste painel")
+    return FileResponse(winstore.iso_path(lang, arch), media_type="application/octet-stream",
+                        filename=f"Windows11_{lang}_{arch}.iso", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/t/{token}/win-iso-sha")
+def token_win_iso_sha(token: str):
+    _, lang, arch = _win_build_langarch(token)
+    sha = winstore.sha_of(lang, arch)
+    if not sha:
+        raise HTTPException(404, "sem ISO de reserva")
+    return PlainTextResponse(sha)
 
 
 @app.get("/t/{token}/tool/{platform}")

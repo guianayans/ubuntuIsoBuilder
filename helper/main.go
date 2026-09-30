@@ -400,7 +400,20 @@ func (a *app) startWindowsFetch(p *progress) {
 				p.finish("cancelled", "Download da Microsoft interrompido: usando a ISO escolhida.", "")
 				return
 			}
-			p.finish("error", "Não foi possível baixar o Windows da Microsoft: "+err.Error()+".", "")
+			// A Microsoft recusou: tenta a ISO de reserva guardada no painel.
+			if a.bundle.WinFallback != "" {
+				p.set("downloading", "A Microsoft recusou; baixando a ISO de reserva do painel…", 0)
+				if fp, fs, ferr := downloadWinFallback(ctx, a.bundle, p); ferr == nil {
+					path, sum, err = fp, fs, nil
+				} else if ctx.Err() != nil {
+					p.finish("cancelled", "Download interrompido: usando a ISO escolhida.", "")
+					return
+				}
+			}
+		}
+		if err != nil {
+			p.finish("error", "Não foi possível baixar o Windows da Microsoft: "+err.Error()+
+				". Você pode usar uma ISO do Windows 11 (pt-BR, x64) que já tenha baixado, ou pedir ao administrador para deixar uma ISO de reserva no painel.", "")
 			return
 		}
 		info, err := inspectWindowsISO(path, w.Arch, w.Edition, w.Lang)
@@ -814,10 +827,29 @@ func main() {
 	instInitrdSHA := flag.String("initrd-sha", "", "com --install-disk: SHA256 do initrd")
 	bootWait := flag.Duration("wait", 24*time.Hour, "com --boot-usb/--install-disk: por quanto tempo tentar")
 	bootReport := flag.String("report", "", "com --boot-usb/--install-disk: endereço do painel para avisar o andamento")
+	// usados pelo painel (reserva de ISO do Windows no servidor)
+	inspectWin := flag.Bool("inspect-windows", false, "confere uma ISO do Windows e imprime JSON")
+	fetchWin := flag.Bool("fetch-windows", false, "baixa a ISO do Windows da Microsoft para --out")
+	winLang := flag.String("win-lang", "pt-BR", "idioma do Windows")
+	winArch := flag.String("win-arch", "x64", "arquitetura do Windows")
+	winEdition := flag.String("win-edition", "Pro", "edição do Windows")
+	winOut := flag.String("out", "", "com --fetch-windows: onde salvar a ISO")
 	flag.Parse()
 
 	if *showVer {
 		fmt.Println(version)
+		return
+	}
+	if *inspectWin {
+		runInspectWindows(*iso, *winArch, *winEdition, *winLang)
+		return
+	}
+	if *fetchWin {
+		if *winOut == "" {
+			fmt.Fprintln(os.Stderr, "--out é obrigatório")
+			os.Exit(2)
+		}
+		runFetchWindows(*winLang, *winArch, *winEdition, *winOut)
 		return
 	}
 	if *list {
