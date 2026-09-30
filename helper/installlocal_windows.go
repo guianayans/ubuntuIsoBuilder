@@ -160,6 +160,20 @@ func deletePrevBCD() {
 	}
 }
 
+// extractPeJS reconstrói o pe.js a partir das linhas "UABPE|..." do autounattend (o mesmo
+// que o WinPE faz com find/for). As únicas linhas com "UABPE|" literal são as do pe.js.
+func extractPeJS(unattend []byte) string {
+	const pfx = "UABPE|"
+	var b strings.Builder
+	for _, line := range strings.Split(string(unattend), "\n") {
+		if i := strings.Index(line, pfx); i >= 0 {
+			b.WriteString(strings.TrimRight(line[i+len(pfx):], "\r"))
+			b.WriteString("\r\n")
+		}
+	}
+	return b.String()
+}
+
 func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *progress) {
 	fake := os.Getenv("UAB_FAKE_DISK") != ""
 	sysDrive := os.Getenv("SystemDrive")
@@ -235,19 +249,30 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 			fail("falha ao montar o WinPE: " + err.Error())
 			return
 		}
-		// o Setup, num WinPE por ramdisk, procura o arquivo de respostas em \Windows\Panther;
-		// gravamos lá (para o Setup achar) e na raiz (o extrator do pe.js também procura nas raízes).
-		panther := filepath.Join(mnt, "Windows", "Panther")
-		os.MkdirAll(panther, 0o755)
-		okAny := false
-		for _, dst := range []string{filepath.Join(mnt, "autounattend.xml"), filepath.Join(panther, "unattend.xml")} {
-			if err := copyFile(unattendPath, dst); err == nil {
-				okAny = true
-			}
+		abort := func(msg string) { hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run(); fail(msg) }
+		// O autounattend fica na raiz do WinPE: o pe.js o encontra (tem a marca uab-build) e o
+		// copia para o Windows instalado, para os passos specialize/oobeSystem rodarem.
+		if err := copyFile(unattendPath, filepath.Join(mnt, "autounattend.xml")); err != nil {
+			abort("falha ao gravar as respostas no WinPE: " + err.Error())
+			return
 		}
-		if !okAny {
-			hidden("dism.exe", "/Unmount-Wim", "/MountDir:"+mnt, "/Discard").Run()
-			fail("falha ao gravar as respostas no WinPE")
+		// Rodamos o pe.js DIRETO (não pelo Setup, cuja detecção do autounattend não é confiável
+		// no boot por ramdisk): extraímos o pe.js do autounattend e o winpeshl.ini o executa.
+		unattendBytes, _ := os.ReadFile(unattendPath)
+		pejs := extractPeJS(unattendBytes)
+		if len(pejs) < 500 {
+			abort("não consegui extrair o instalador (pe.js) do arquivo de respostas")
+			return
+		}
+		os.MkdirAll(filepath.Join(mnt, "uab"), 0o755)
+		if err := os.WriteFile(filepath.Join(mnt, "uab", "pe.js"), []byte(pejs), 0o644); err != nil {
+			abort("falha ao gravar o pe.js no WinPE: " + err.Error())
+			return
+		}
+		winpeshl := "[LaunchApps]\r\n%windir%\\system32\\wpeinit.exe\r\n" +
+			"%windir%\\system32\\cscript.exe, \"//nologo //e:jscript X:\\uab\\pe.js\"\r\n"
+		if err := os.WriteFile(filepath.Join(mnt, "Windows", "System32", "winpeshl.ini"), []byte(winpeshl), 0o644); err != nil {
+			abort("falha ao configurar o WinPE (winpeshl): " + err.Error())
 			return
 		}
 		// marcadores lidos pelo pe.js: "sem pendrive" (preserva a partição da imagem e não
