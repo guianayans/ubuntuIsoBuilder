@@ -278,12 +278,12 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 			abort("falha ao gravar o pe.js no WinPE: " + err.Error())
 			return
 		}
-		// run.cmd: roda o wpeinit e o cscript pe.js, capturando a saída (rede de segurança se o
-		// pe.js nem chegar a rodar) e reinicia. winpeshl.ini usa %SYSTEMROOT% (o winpeshl NÃO
-		// expande %windir%; com o valor errado o Setup roda no lugar e apagaria o disco).
+		// run.cmd: roda o wpeinit e o cscript pe.js SEM redirecionar (o pe.js mostra o progresso
+		// na tela com WScript.Echo; ele mesmo grava o log em pe.log e o motivo em uab-crash.txt se
+		// falhar) e reinicia. winpeshl.ini usa %SYSTEMROOT% (o winpeshl NÃO expande %windir%; com o
+		// valor errado o Setup roda no lugar e apagaria o disco).
 		runcmd := "@echo off\r\n%SYSTEMROOT%\\System32\\wpeinit.exe\r\n" +
-			"%SYSTEMROOT%\\System32\\cscript.exe //nologo //e:jscript %SYSTEMDRIVE%\\uab\\pe.js >%SYSTEMDRIVE%\\uab\\cscript-out.txt 2>&1\r\n" +
-			"for %%d in (C D E F G H I) do @copy /y %SYSTEMDRIVE%\\uab\\cscript-out.txt %%d:\\uab-cscript.txt >nul 2>nul\r\n" +
+			"%SYSTEMROOT%\\System32\\cscript.exe //nologo //e:jscript %SYSTEMDRIVE%\\uab\\pe.js\r\n" +
 			"%SYSTEMROOT%\\System32\\wpeutil.exe reboot\r\n"
 		if err := os.WriteFile(filepath.Join(mnt, "uab", "run.cmd"), []byte(runcmd), 0o644); err != nil {
 			abort("falha ao gravar o run.cmd no WinPE: " + err.Error())

@@ -57,6 +57,19 @@ function run(cmd) {
     return { code: code, out: t };
 }
 
+// Roda MOSTRANDO a saída numa janela (para o dism, que tem barra de progresso). Devolve o código.
+function runVisible(cmd) {
+    log("> (visivel) " + cmd);
+    return sh.Run("cmd.exe /c " + cmd, 1, true);
+}
+
+// say: mostra na tela do WinPE (o usuário vê o progresso, não fica no escuro) e registra no log.
+// Só ASCII nas mensagens (o console do WinPE não renderiza acentos com segurança).
+function say(s) {
+    try { WScript.Echo(s); } catch (e) { }
+    log(s);
+}
+
 // Mostra uma mensagem ao técnico (Bloco de Notas por cima do Setup) e espera fechar
 function tell(msg) {
     var p = DIR + "\\LEIA-ME.txt";
@@ -111,6 +124,10 @@ function readyRoots() {
 // ------------------------------------------------------------------ 1. mídia e respostas
 try {
 log("=== ISO Builder: instalação no WinPE (build " + UAB.build + ") ===");
+say("");
+say("=== ISO Builder - instalando o Windows ===");
+say("NAO desligue o computador. Isso pode levar alguns minutos.");
+say("");
 var roots = readyRoots();
 log("unidades: " + roots.join(" "));
 
@@ -339,18 +356,21 @@ if (DRY) {
     WScript.Quit(0);
 }
 
+say("[1/3] Preparando o disco...");
 writeText(DIR + "\\diskpart.txt", dp.join("\r\n") + "\r\n", false);
 var r = run("diskpart /s " + DIR + "\\diskpart.txt");
 if (r.code !== 0 || !fso.FolderExists(W + ":\\")) fail("O diskpart falhou ao preparar o disco " + best.index + ".\r\n\r\n" + r.out, true);
 
 // ------------------------------------------------------------------ 5. imagem + boot
+say("[2/3] Copiando o Windows para o disco (alguns minutos, aguarde)...");
 var ap = "dism /Apply-Image /ImageFile:\"" + media.file + "\"" + (media.swm ? " /SWMFile:\"" + media.swm + "\"" : "") +
     " /Name:\"" + UAB.image + "\" /ApplyDir:" + W + ":\\";
-r = run(ap);
-if (r.code !== 0) {
+var apCode = runVisible(ap);   // janela com a barra de progresso do dism
+if (apCode !== 0) {
     var info = run("dism /Get-WimInfo /WimFile:\"" + media.file + "\"");
-    fail("O dism não conseguiu aplicar a edição \"" + UAB.image + "\" (código " + r.code + ").\r\n\r\nEdições nesta mídia:\r\n" + info.out, true);
+    fail("O dism não conseguiu aplicar a edição \"" + UAB.image + "\" (código " + apCode + ").\r\n\r\nEdições nesta mídia:\r\n" + info.out, true);
 }
+say("[3/3] Configurando a inicializacao...");
 var bcd = fso.FileExists(W + ":\\Windows\\System32\\bcdboot.exe") ? W + ":\\Windows\\System32\\bcdboot.exe" : "bcdboot.exe";
 r = run(bcd + " " + W + ":\\Windows /s " + S + ": /f " + (both ? "ALL" : uefi ? "UEFI" : "BIOS"));
 if (r.code !== 0) fail("O bcdboot falhou ao criar a inicialização (código " + r.code + ").\r\n\r\n" + r.out, true);
@@ -373,6 +393,8 @@ var ud = W + ":\\ProgramData\\uab";
 if (!fso.FolderExists(ud)) fso.CreateFolder(ud);
 if (!fso.FolderExists(ud + "\\logs")) fso.CreateFolder(ud + "\\logs");
 writeText(ud + "\\build-id", UAB.build + "\r\n", false);
+say("");
+say("Concluido! Reiniciando para terminar a instalacao do Windows...");
 log("pronto: Windows aplicado no disco " + best.index + "; reiniciando");
 try { fso.CopyFile(LOG, ud + "\\logs\\pe.log", true); } catch (e) { }
 // Sem pendrive: a partição da imagem (UABMEDIA) é PRESERVADA e sobrevive ao reboot. Se o PC
