@@ -1588,14 +1588,17 @@ async def agent_report(request: Request):
             "last_seen=excluded.last_seen, report=excluded.report, source_ip=excluded.source_ip, "
             "hw_id=excluded.hw_id, off_at=NULL, off_reason=''",
             (key, b["id"], mid, host, now_, now_, json.dumps(rep_), client_ip(request), hw))
-        # se havia um pedido de "formatar à distância" para este PC (mesmo nome), a volta dele
-        # ao painel significa que a instalação terminou: marca o pedido como concluído.
+        # se havia um pedido de "formatar à distância", a volta da máquina ao painel significa
+        # que a instalação terminou: marca o pedido como concluído. Casa pelo build_id (a máquina
+        # reinstalada reporta com o token daquele build) ou, como reforço, pelo nome do pedido.
+        # (Sem pendrive o hostname muda para o do build, por isso o build_id é o sinal confiável.)
         con.execute(
             "UPDATE format_jobs SET state='concluído', "
             "message='Instalação concluída: o computador voltou ao painel.', updated_at=? "
-            "WHERE cancel=0 AND LOWER(name)=LOWER(?) AND expires_at>=? "
-            "AND state IN ('enviado','aguardando','encontrado','baixando','preparando','reiniciando')",
-            (now_, host, now_))
+            "WHERE cancel=0 AND expires_at>=? "
+            "AND state IN ('enviado','aguardando','encontrado','baixando','preparando','reiniciando') "
+            "AND (build_id=? OR LOWER(name)=LOWER(?))",
+            (now_, now_, b["id"], host))
         moved = _adopt_reinstalled(con, key, b["id"], hw) if hw else False
         replaced = _archive_replaced(con, key, b["id"], hw, host) if hw and not moved else []
         archived = bool(con.execute("SELECT archived_at FROM machines WHERE id=?", (key,)).fetchone()["archived_at"])
