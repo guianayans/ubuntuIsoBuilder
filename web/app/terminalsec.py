@@ -117,6 +117,13 @@ def status() -> dict:
     return _cache["conn"]
 
 
+# Quando o mesmo hostname aparece mais de uma vez no TerminalSec (típico ao reinstalar a
+# máquina: sobra o registro antigo "pending" ao lado do novo já aprovado), escolhemos o
+# estado mais "decidido" — um agente aprovado (online/offline) vence um "pending" residual,
+# senão o painel ficaria mostrando "aguardando aprovação" para sempre.
+_ST_RANK = {"online": 4, "offline": 3, "pending": 2, "archived": 1}
+
+
 def agents_status() -> dict[str, dict]:
     """hostname → {status, url} dos servidores vindos das ISOs (cache de 30 s; vazio se indisponível)."""
     if not configured():
@@ -125,7 +132,15 @@ def agents_status() -> dict[str, dict]:
         return _cache["status"]
     try:
         rows = _call(_base(), "/api/integration/agents")
-        st = {r["hostname"]: {"status": r["status"], "url": r["url"]} for r in rows if r.get("hostname")}
+        st: dict[str, dict] = {}
+        for r in rows:
+            h = r.get("hostname")
+            if not h:
+                continue
+            cur = st.get(h)
+            cand = {"status": r["status"], "url": r["url"]}
+            if cur is None or _ST_RANK.get(cand["status"], 0) > _ST_RANK.get(cur["status"], 0):
+                st[h] = cand
     except Exception:  # noqa: BLE001  (indicador é opcional: nunca derruba a lista de máquinas)
         st = {}
     _cache["status"], _cache["status_at"] = st, time.time()

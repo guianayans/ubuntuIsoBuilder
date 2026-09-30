@@ -1845,7 +1845,9 @@ def list_machines(u: core.User = Depends(current_user)):
 def get_machine(mid: str, u: core.User = Depends(current_user)):
     _get_machine(mid)
     _need(u, mid, core.P_VIEW)
-    return {"machine": _for_user(_machines("WHERE id=?", (mid,)), u)[0], "panel": panel.ts_status()}
+    m = _for_user(_machines("WHERE id=?", (mid,)), u)[0]
+    m["terminalsec"] = terminalsec.agents_status().get(m.get("hostname") or "")  # Resumo reflete a aprovação
+    return {"machine": m, "panel": panel.ts_status()}
 
 
 @app.post("/api/machines/{mid}")
