@@ -264,13 +264,32 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 			abort("não consegui extrair o instalador (pe.js) do arquivo de respostas")
 			return
 		}
+		// SEGURANÇA: só prossegue se o pe.js tiver as proteções (modo teste e preservação da
+		// partição). Um pe.js antigo apagaria o disco ignorando o "sem apagar". Se faltar, o
+		// painel está desatualizado — o técnico faz o Redeploy antes de qualquer coisa.
+		for _, must := range []string{"uab-dryrun", "uab-nopendrive", "PRESERVE"} {
+			if !strings.Contains(pejs, must) {
+				abort("o painel está desatualizado (instalador sem as proteções de segurança). Faça o Redeploy no Coolify e baixe o gravador de novo antes de formatar.")
+				return
+			}
+		}
 		os.MkdirAll(filepath.Join(mnt, "uab"), 0o755)
 		if err := os.WriteFile(filepath.Join(mnt, "uab", "pe.js"), []byte(pejs), 0o644); err != nil {
 			abort("falha ao gravar o pe.js no WinPE: " + err.Error())
 			return
 		}
-		winpeshl := "[LaunchApps]\r\n%windir%\\system32\\wpeinit.exe\r\n" +
-			"%windir%\\system32\\cscript.exe, \"//nologo //e:jscript X:\\uab\\pe.js\"\r\n"
+		// run.cmd: roda o wpeinit e o cscript pe.js, capturando a saída (rede de segurança se o
+		// pe.js nem chegar a rodar) e reinicia. winpeshl.ini usa %SYSTEMROOT% (o winpeshl NÃO
+		// expande %windir%; com o valor errado o Setup roda no lugar e apagaria o disco).
+		runcmd := "@echo off\r\n%SYSTEMROOT%\\System32\\wpeinit.exe\r\n" +
+			"%SYSTEMROOT%\\System32\\cscript.exe //nologo //e:jscript %SYSTEMDRIVE%\\uab\\pe.js >%SYSTEMDRIVE%\\uab\\cscript-out.txt 2>&1\r\n" +
+			"for %%d in (C D E F G H I) do @copy /y %SYSTEMDRIVE%\\uab\\cscript-out.txt %%d:\\uab-cscript.txt >nul 2>nul\r\n" +
+			"%SYSTEMROOT%\\System32\\wpeutil.exe reboot\r\n"
+		if err := os.WriteFile(filepath.Join(mnt, "uab", "run.cmd"), []byte(runcmd), 0o644); err != nil {
+			abort("falha ao gravar o run.cmd no WinPE: " + err.Error())
+			return
+		}
+		winpeshl := "[LaunchApps]\r\n%SYSTEMROOT%\\System32\\cmd.exe, \"/c %SYSTEMDRIVE%\\uab\\run.cmd\"\r\n"
 		if err := os.WriteFile(filepath.Join(mnt, "Windows", "System32", "winpeshl.ini"), []byte(winpeshl), 0o644); err != nil {
 			abort("falha ao configurar o WinPE (winpeshl): " + err.Error())
 			return
