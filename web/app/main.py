@@ -314,6 +314,28 @@ def create_temp_user(con, *, prefix: str, label: str, duration: str, mode: str, 
             "mode": mode, "iso": hostname}
 
 
+def _do_deliver(con, deliver: dict, bid: str, default_label: str) -> dict:
+    """Entrega a ISO/config a uma pessoa: vincula a uma conta 'somente download' JÁ existente
+    (deliver.existing_id) ou cria uma nova. Sócios/admin/contas 'build' não entram (não faz
+    sentido prender um sócio a uma única ISO)."""
+    existing = str(deliver.get("existing_id") or "").strip()
+    if existing:
+        r = con.execute("SELECT * FROM users WHERE id=?", (existing,)).fetchone()
+        if not r or r["mode"] != "download" or r["revoked"]:
+            raise core.Invalid("Conta inválida: escolha uma conta 'somente download' ativa.")
+        _link_build(con, bid, r["expires_at"], allow_pending=True)
+        con.execute("UPDATE users SET build_id=? WHERE id=?", (bid, r["id"]))
+        # gravadores que a pessoa baixou para a ISO antiga deixam de funcionar
+        con.execute("DELETE FROM dl_tokens WHERE created_by=? AND build_id!=?", (r["id"], bid))
+        return {"email": r["email"], "password": None, "expires_at": r["expires_at"],
+                "url": PUBLIC_URL, "mode": "download", "iso": None, "existing": True}
+    return create_temp_user(con, prefix=str(deliver.get("prefix") or ""),
+                            label=str(deliver.get("label") or default_label).strip()[:60],
+                            duration=str(deliver.get("duration") or "7d"), mode="download",
+                            build_id=bid, max_builds=0, allow_pending=True,
+                            remote_agent=bool(deliver.get("remote_agent")))
+
+
 def _agent_available() -> bool:
     """O Remoto deste painel está pronto para receber agentes (grupo criado)?"""
     return bool(REMOTE_LOCAL and remoto.available() and remoto.mesh_id())
@@ -792,11 +814,7 @@ async def create_build(request: Request, u: core.User = Depends(current_user)):
                      builder.summary_of(cfg), core.now(), core.token_hash(data["report_token"]),
                      1 if data["panel_access"] else 0))
         if deliver:
-            delivery = create_temp_user(con, prefix=str(deliver.get("prefix") or ""),
-                                        label=str(deliver.get("label") or cfg["HOSTNAME_"]).strip()[:60],
-                                        duration=str(deliver.get("duration") or "7d"), mode="download",
-                                        build_id=bid, max_builds=0, allow_pending=True,
-                                        remote_agent=bool(deliver.get("remote_agent")))
+            delivery = _do_deliver(con, deliver, bid, cfg["HOSTNAME_"])
     try:
         builder.prepare_job(bid, data)
     except Exception as exc:  # noqa: BLE001
@@ -830,11 +848,7 @@ def _create_windows(d: dict, data: dict, u: core.User) -> dict:
                      builder.summary_of(cfg, {"WIN_ACTIVATION": "key" if data["win_key_set"] else "generic"}),
                      core.now(), core.token_hash(data["report_token"]), 1 if data["panel_access"] else 0, "windows"))
         if deliver:
-            delivery = create_temp_user(con, prefix=str(deliver.get("prefix") or ""),
-                                        label=str(deliver.get("label") or cfg["HOSTNAME_"]).strip()[:60],
-                                        duration=str(deliver.get("duration") or "7d"), mode="download",
-                                        build_id=bid, max_builds=0, allow_pending=True,
-                                        remote_agent=bool(deliver.get("remote_agent")))
+            delivery = _do_deliver(con, deliver, bid, cfg["HOSTNAME_"])
     try:
         builder.make_windows(bid, data)
     except Exception as exc:  # noqa: BLE001

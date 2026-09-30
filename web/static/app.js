@@ -299,7 +299,7 @@ const W = {
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
   gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true,
   extra_packages: "", confirm_erase: "", panel_access: true,
-  deliver_on: false, deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
+  deliver_on: false, deliver_target: "new", deliver_existing: "", deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
   win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: "",
   win_tailscale: false  // no Windows o Tailscale começa desligado (precisa de auth key)
@@ -553,14 +553,34 @@ function stepHTML() {
 function deliverHTML(what) {
   if (ME.role !== "admin") return "";
   return `<div class="card u-mt16">
-    <label class="switch"><input type="checkbox" name="deliver_on" ${W.deliver_on ? "checked" : ""}><span><b>Entregar esta ${what} para uma pessoa</b><br><span class="muted small">Cria agora um acesso temporário “somente download” já vinculado a ela: a pessoa entra, baixa o gravador e grava o pendrive. A máquina aparece em “Máquinas” com esse e-mail.</span></span></label>
+    <label class="switch"><input type="checkbox" name="deliver_on" ${W.deliver_on ? "checked" : ""}><span><b>Entregar esta ${what} para uma pessoa</b><br><span class="muted small">Vincula a ISO a um acesso “somente download”: a pessoa entra, baixa o gravador e grava o pendrive. A máquina aparece em “Máquinas” com esse e-mail.</span></span></label>
     <div id="deliverBox" class="${W.deliver_on ? "" : "hidden"}">
-      <div class="grid">
-        <label class="f"><span>E-mail de acesso</span><div class="suffix"><input name="deliver_prefix" value="${esc(W.deliver_prefix)}" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small>Vazio = prefixo aleatório. A senha é gerada automaticamente.</small></label>
-        <label class="f"><span>Validade do acesso</span><select name="deliver_duration">${[["24h", "24 horas"], ["3d", "3 dias"], ["7d", "7 dias"], ["30d", "30 dias"]].map(([v, t]) => `<option value="${v}" ${W.deliver_duration === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-        ${field("deliver_label", "Para quem (opcional)", 'placeholder="ex.: Suporte da filial Centro"')}
+      ${radio("deliver_target", [
+        ["new", "Criar conta nova", "Gera agora um acesso temporário novo (e-mail e senha)."],
+        ["existing", "Usar conta existente", "Vincula esta ISO a uma conta “somente download” que você já criou (sócios não entram)."]])}
+      <div id="deliverNew" class="${W.deliver_target === "existing" ? "hidden" : ""}">
+        <div class="grid">
+          <label class="f"><span>E-mail de acesso</span><div class="suffix"><input name="deliver_prefix" value="${esc(W.deliver_prefix)}" placeholder="ex.: filial-centro" autocapitalize="off" autocomplete="off"><span>@${esc(GUEST_DOMAIN)}</span></div><small>Vazio = prefixo aleatório. A senha é gerada automaticamente.</small></label>
+          <label class="f"><span>Validade do acesso</span><select name="deliver_duration">${[["24h", "24 horas"], ["3d", "3 dias"], ["7d", "7 dias"], ["30d", "30 dias"]].map(([v, t]) => `<option value="${v}" ${W.deliver_duration === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+          ${field("deliver_label", "Para quem (opcional)", 'placeholder="ex.: Suporte da filial Centro"')}
+        </div>
+        ${agentOK() ? toggle("deliver_agent", "Instalar acesso remoto junto", "O gravador do cliente oferece instalar o agente do Remoto (a pessoa precisa permitir na tela). Assim você acessa o PC dela para gravar o pendrive e formatar.") : ""}
       </div>
-      ${agentOK() ? toggle("deliver_agent", "Instalar acesso remoto junto", "O gravador do cliente oferece instalar o agente do Remoto (a pessoa precisa permitir na tela). Assim você acessa o PC dela para gravar o pendrive e formatar.") : ""}</div></div>`;
+      <div id="deliverExisting" class="${W.deliver_target === "existing" ? "" : "hidden"}">
+        <label class="f"><span>Conta “somente download”</span><select name="deliver_existing" id="deliverExistingSel"><option value="">Carregando…</option></select>
+        <small>Só contas “somente download” ativas. A ISO que estava nela é substituída por esta (os gravadores antigos dela param de funcionar).</small></label>
+      </div></div></div>`;
+}
+let DELIVER_USERS = null;
+async function loadDeliverUsers() {
+  const sel = $("#deliverExistingSel"); if (!sel) return;
+  try { if (!DELIVER_USERS) DELIVER_USERS = (await api("/api/admin/users")).users; }
+  catch (e) { sel.innerHTML = `<option value="">(erro ao carregar contas)</option>`; return; }
+  const dl = DELIVER_USERS.filter(u => u.mode === "download" && u.state === "ativa");  // exclui sócios/admin/expiradas
+  sel.innerHTML = dl.length
+    ? dl.map(u => `<option value="${esc(String(u.id))}" ${String(W.deliver_existing) === String(u.id) ? "selected" : ""}>${esc(u.email)}${u.label ? " — " + esc(u.label) : ""}</option>`).join("")
+    : `<option value="">(nenhuma conta “somente download” ativa — crie uma nova)</option>`;
+  if (!W.deliver_existing && dl.length) W.deliver_existing = String(dl[0].id);
 }
 
 /* -------------------------------------------------- catálogo de pacotes (estilo Ninite)
@@ -694,7 +714,8 @@ function checkStep() {
   if (k === "wacc" && !e.length && !(W.remote_agent && FEATURES.remote_agent) && !(W.wireguard && FEATURES.wireguard) && !W.win_tailscale
     && !confirm("Sem Remoto, WireGuard e Tailscale, o PC só será alcançável pela rede local do cliente. Continuar?")) e.push("Escolha pelo menos uma forma de acesso (Remoto, WireGuard ou Tailscale).");
   if (k === "wapps" && W.win_apps.split(/\s+/).some(i => i && !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$/.test(i))) e.push("ID do winget inválido em “Avançado”.");
-  if (k === "wrev" && W.deliver_on && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
+  if (k === "wrev" && W.deliver_on && W.deliver_target === "new" && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
+  if (k === "wrev" && W.deliver_on && W.deliver_target === "existing" && !W.deliver_existing) e.push("Escolha uma conta existente (ou troque para “Criar conta nova”).");
   if (k === "srv") {
     if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(W.hostname)) e.push("Nome do servidor: use minúsculas, números e hífen.");
     if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(W.username)) e.push("Usuário: minúsculas, números, _ ou -.");
@@ -733,7 +754,8 @@ function checkStep() {
     else if (p !== W.coolify_password2) e.push("As senhas do Coolify não conferem.");
     if (p.includes("'")) e.push("A senha do Coolify não pode ter aspas simples.");
   }
-  if (k === "review" && W.deliver_on && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
+  if (k === "review" && W.deliver_on && W.deliver_target === "new" && W.deliver_prefix && !/^[a-z0-9]([a-z0-9._-]{0,38}[a-z0-9])?$/.test(W.deliver_prefix)) e.push("Prefixo do e-mail: letras minúsculas, números, ponto, hífen ou _.");
+  if (k === "review" && W.deliver_on && W.deliver_target === "existing" && !W.deliver_existing) e.push("Escolha uma conta existente (ou troque para “Criar conta nova”).");
   return e;
 }
 
@@ -783,7 +805,15 @@ function renderWizard() {
   $$('input[name="storage_type"]').forEach(r => r.onchange = () => $("#sval").classList.toggle("hidden", r.value === "single"));
   $$('input[name="apps"]').forEach(r => r.onchange = () => { $("#coolifyBox").classList.toggle("hidden", !r.value.startsWith("coolify")); syncPkgs(); });
   wirePkgCatalog();
-  const dl = $('input[name="deliver_on"]'); if (dl) dl.onchange = () => $("#deliverBox").classList.toggle("hidden", !dl.checked);
+  const dl = $('input[name="deliver_on"]'); if (dl) dl.onchange = () => { $("#deliverBox").classList.toggle("hidden", !dl.checked); if (dl.checked && W.deliver_target === "existing") loadDeliverUsers(); };
+  $$('input[name="deliver_target"]').forEach(r => r.onchange = () => {
+    if (!r.checked) return;
+    const ex = r.value === "existing";
+    $("#deliverNew").classList.toggle("hidden", ex);
+    $("#deliverExisting").classList.toggle("hidden", !ex);
+    if (ex) loadDeliverUsers();
+  });
+  if (W.deliver_on && W.deliver_target === "existing") loadDeliverUsers();  // ao voltar a este passo
   const ts = $('input[name="tailscale"]') || $('input[name="win_tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
   [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"]].forEach(([n, box]) => {
     const c = $(`input[name="${n}"]`); if (c) c.onchange = () => $(box).classList.toggle("hidden", !c.checked);
@@ -824,7 +854,9 @@ function renderWizard() {
             confirm_erase: W.confirm_erase }
         : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent, terminalsec: !!(W.terminalsec && FEATURES.terminalsec) };
       if (!isWin()) delete body.win_key;
-      if (W.deliver_on) body.deliver = { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label, remote_agent: !!(W.deliver_agent && agentOK()) };
+      if (W.deliver_on) body.deliver = W.deliver_target === "existing"
+        ? { existing_id: W.deliver_existing }
+        : { prefix: W.deliver_prefix, duration: W.deliver_duration, label: W.deliver_label, remote_agent: !!(W.deliver_agent && agentOK()) };
       const r = await api("/api/builds", { method: "POST", body });
       if (r.delivery) { try { sessionStorage.setItem("uab-delivery-" + r.id, JSON.stringify(r.delivery)); } catch (e) { } }
       W.password = W.password2 = W.tailscale_key = W.confirm_erase = W.coolify_password = W.coolify_password2 = W.ddns_password = W.cloudflare_token = W.win_key = ""; step = 0;
@@ -852,8 +884,8 @@ function deliveryCard(id) {
   let c = null;
   try { c = JSON.parse(sessionStorage.getItem("uab-delivery-" + id) || "null"); } catch (e) { }
   if (!c) return "";
-  return `<div class="card" id="dcard"><h2>Acesso criado para esta ISO</h2>
-    <p class="muted small">Envie para a pessoa. A senha <b>não será mostrada novamente</b> (em Contas dá para gerar outra). Ela verá o progresso e, quando pronta, o botão de download.</p>
+  return `<div class="card" id="dcard"><h2>${c.existing ? "ISO vinculada a uma conta" : "Acesso criado para esta ISO"}</h2>
+    <p class="muted small">${c.existing ? "Esta ISO foi vinculada à conta abaixo (a senha continua a mesma)." : "Envie para a pessoa. A senha <b>não será mostrada novamente</b> (em Contas dá para gerar outra)."} Ela verá o progresso e, quando pronta, o botão de download.</p>
     <div class="cred" id="dtxt">${esc(credText(c))}</div>
     <div class="row u-mt12"><button class="btn primary" id="dcopy">Copiar tudo</button><button class="btn" id="dclose">Já copiei, fechar</button></div></div>`;
 }
@@ -1046,7 +1078,8 @@ function renderWinDownload(b) {
 function credText(c) {
   const extra = c.mode === "download" && c.iso ? `\nISO:      ${c.iso} (entre e siga os passos para gravar o pendrive)` : "";
   const until = c.mode === "partner" ? "Conta de sócio (sem prazo)" : `Válido até: ${fmtDate(c.expires_at)}`;
-  return `Acesso ao ISO Builder\n\nEndereço: ${c.url}\nE-mail:   ${c.email}\nSenha:    ${c.password}\n${until}${extra}`;
+  const pw = c.password ? `Senha:    ${c.password}\n` : "Senha:    (a mesma de antes — em Contas dá para gerar outra)\n";
+  return `Acesso ao ISO Builder\n\nEndereço: ${c.url}\nE-mail:   ${c.email}\n${pw}${until}${extra}`;
 }
 function showCred(c, title) {
   $("#cred").innerHTML = `<div class="card"><h2>${esc(title)}</h2>
