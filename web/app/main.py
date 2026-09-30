@@ -355,6 +355,16 @@ def _bundle_agent(u: core.User) -> dict:
     return {"agent": {"url": PUBLIC_URL.rstrip("/") + "/remoto", "meshid": remoto.mesh_id(), "account": u.email}}
 
 
+@app.get("/api/agent-install")
+def agent_install(u: core.User = Depends(current_user)):
+    """Para a conta "somente download" com "acesso remoto junto" ligado instalar o agente do
+    Remoto DIRETO pela página (além do gravador): devolve o endereço do Remoto e o id do grupo,
+    e a página monta o link de download do agente conforme o sistema."""
+    if _bundle_agent(u).get("agent"):
+        return {"available": True, "url": PUBLIC_URL.rstrip("/") + "/remoto", "meshid": remoto.mesh_id()}
+    return {"available": False}
+
+
 @app.post("/api/admin/users/{uid}/agent")
 async def user_agent_toggle(uid: int, request: Request, _: core.User = Depends(admin_user)):
     """Liga/desliga "instalar acesso remoto junto" no gravador de uma conta "só download"."""

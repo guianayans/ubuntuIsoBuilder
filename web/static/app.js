@@ -1012,6 +1012,7 @@ function renderDownload(b) {
     : `<div class="stepbox"><span class="n">1</span><div><h2>Abra este site no computador</h2>
       <p>Para gravar o pendrive, acesse este endereço num computador Windows ou Mac com o pendrive conectado.</p>
       <div class="row"><a class="btn" href="/download/iso/${b.id}" download>⬇ Baixar só a ISO (${fmtBytes(b.iso_size)})</a></div></div></div>`}
+    ${ME.mode === "download" ? '<div id="agentBox"></div>' : ""}
     ${os !== "mobile" ? `<div class="stepbox"><span class="n">2</span><div><h2>Grave o pendrive</h2>${tutorialFor(os, b)}</div></div>` : ""}
     <div class="stepbox"><span class="n">${os !== "mobile" ? 3 : 2}</span><div><h2>No computador que vai virar servidor</h2>
       <ol><li>Conecte o <b>cabo de rede</b> e o pendrive.</li>
@@ -1045,6 +1046,31 @@ function renderDownload(b) {
   ${ME.mode === "download" ? "" : `<div class="row u-mt16"><a class="btn" href="#/isos">Voltar</a><button class="btn danger" id="del">Excluir do servidor</button></div>`}`;
   const del = $("#del"); if (del) del.onclick = () => delBuild(b.id);
   wireDelivery(b.id);
+  if (ME.mode === "download") loadAgentInstall();
+}
+
+// "Instalar acesso remoto" na página da conta (além do gravador): só para conta "somente
+// download" com "acesso remoto junto" ligado. Monta o download do agente conforme o sistema.
+async function loadAgentInstall() {
+  const box = $("#agentBox"); if (!box) return;
+  let d; try { d = await api("/api/agent-install"); } catch (e) { return; }
+  if (!d.available) return;
+  const os = detectOS(), u = d.url, mid = encodeURIComponent(d.meshid);
+  let body;
+  if (os === "windows" || os === "windows-arm64") {
+    const id = os === "windows-arm64" ? 43 : 4;
+    body = `<div class="row"><a class="btn primary" href="${esc(u)}/meshagents?id=${id}&meshid=${mid}&installflags=0" download>⬇ Baixar o acesso remoto (Windows)</a></div>
+      <p class="muted small u-mt8">Baixe e <b>execute como administrador</b> (botão direito → “Executar como administrador”). Ele instala e conecta sozinho — nada é acessado sem a sua permissão.</p>`;
+  } else if (os === "macos") {
+    body = `<div class="row"><a class="btn primary" href="${esc(u)}/meshagents?id=10005" download>⬇ Baixar o acesso remoto (Mac)</a>
+      <a class="btn sm" href="${esc(u)}/meshsettings?id=${mid}" download>configuração (.msh)</a></div>
+      <p class="muted small u-mt8">Baixe os dois na mesma pasta e rode o instalador (pede a sua senha). Ou use o gravador, que faz isso sozinho.</p>`;
+  } else if (os === "linux") {
+    body = `<div class="cred">curl -L "${esc(u)}/meshagents?script=1" -o meshinstall.sh && sudo bash meshinstall.sh "${esc(u)}" "${esc(d.meshid)}"</div>
+      <p class="muted small u-mt8">Cole no terminal (pede o sudo). Instala e conecta sozinho.</p>`;
+  } else { return; }  // celular: não se aplica
+  box.innerHTML = `<div class="stepbox"><span class="n">★</span><div><h2>Instalar acesso remoto (opcional)</h2>
+    <p class="muted small">Deixa o suporte acessar este computador para ajudar a gravar/instalar. Nada roda sem a sua permissão.</p>${body}</div></div>`;
 }
 
 /* ---------- build do Windows: o gravador baixa o Windows da Microsoft e aplica a configuração */
@@ -1077,6 +1103,7 @@ function renderWinDownload(b) {
       <div class="stepbox"><span class="n">2</span><div><h2>Grave o pendrive</h2>${winTutorial(os)}</div></div>`
     : `<div class="stepbox"><span class="n">1</span><div><h2>Abra este site no computador</h2>
       <p>Para gravar o pendrive, acesse este endereço num computador Windows, Mac ou Linux com o pendrive conectado.</p></div></div>`}
+    ${ME.mode === "download" ? '<div id="agentBox"></div>' : ""}
     <div class="stepbox"><span class="n">${os !== "mobile" ? 3 : 2}</span><div><h2>No computador que vai receber o Windows</h2>
       <ol><li>Conecte o pendrive (e, se possível, o <b>cabo de rede</b>: os programas e o OpenSSH precisam de internet).</li>
       <li>Ligue e abra o menu de boot (<b>F12</b>, F11, F8 ou Esc, conforme a marca) e escolha o pendrive (modo <b>UEFI</b>).</li>
@@ -1101,6 +1128,7 @@ function renderWinDownload(b) {
   ${ME.mode === "download" ? "" : `<div class="row u-mt16"><a class="btn" href="#/isos">Voltar</a><button class="btn danger" id="del">Excluir do servidor</button></div>`}`;
   const del = $("#del"); if (del) del.onclick = () => delBuild(b.id);
   wireDelivery(b.id);
+  if (ME.mode === "download") loadAgentInstall();
 }
 
 /* -------------------------------------------------- admin: acessos */
