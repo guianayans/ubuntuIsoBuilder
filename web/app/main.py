@@ -1871,37 +1871,54 @@ async def update_machine(mid: str, request: Request, u: core.User = Depends(curr
 
 # -------------------------------------------------- instalar o Claude Code numa máquina já pronta
 # Reusa o agente do Remoto (run_commands). Como o run_commands só confirma o envio (não devolve a
-# saída), a máquina avisa o resultado (ok/erro/agendado) em /api/machines/claude-report; a tela
-# de Configurações mostra o status. Estado em memória (some no restart do painel; é conveniência).
-_claude_jobs: dict[str, dict] = {}
-
-
+# saída), a máquina transmite o LOG e o estado para /api/machines/claude-report (guardados em
+# claude_jobs, no banco — sobrevive a restart); a aba Configurações mostra o log ao vivo por poll.
 def _claude_script(platform: str, rep: str) -> tuple[int, str]:
-    """Comandos que o agente roda para instalar o Claude Code e avisar o resultado ao painel."""
+    """Comandos que o agente roda para instalar o Claude Code, transmitindo o log ao painel."""
     if platform == "windows":
-        # o instalador é POR USUÁRIO. Se o comando rodar como o usuário logado, instala na hora;
-        # se rodar como SYSTEM (ninguém logado), agenda no RunOnce para o próximo logon.
+        # o instalador é POR USUÁRIO. Como o usuário logado (run_as=2): instala e transmite o log.
+        # Como SYSTEM (ninguém logado): agenda no RunOnce para o próximo logon.
         runonce = ('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v UABClaudeCode '
                    '/t REG_SZ /d "powershell -NoProfile -ExecutionPolicy Bypass -Command \\"try { irm '
                    'https://claude.ai/install.ps1 | iex } catch {}\\"" /f')
-        ps = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "
-              "$sys = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18'; "
-              "if ($sys) { "  # rodou como SYSTEM: ninguém logado -> agenda
-              "try { " + runonce + " | Out-Null; "
-              f"Invoke-RestMethod -Method Post -Uri '{rep}&state=agendado' | Out-Null }} "
-              f"catch {{ try {{ Invoke-RestMethod -Method Post -Uri '{rep}&state=erro' | Out-Null }} catch {{}} }} "
-              "} else { "  # rodando como o usuário logado: instala agora
-              "try { irm https://claude.ai/install.ps1 | iex; "
-              f"Invoke-RestMethod -Method Post -Uri '{rep}&state=ok' | Out-Null }} "
-              f"catch {{ try {{ Invoke-RestMethod -Method Post -Uri '{rep}&state=erro' | Out-Null }} catch {{}} }} }}")
+        ps = (
+            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\n"
+            f"$R='{rep}'\n"
+            "function Tail($p){ try { $t=Get-Content -Raw -ErrorAction SilentlyContinue $p; if($t -and $t.Length -gt 6000){ $t=$t.Substring($t.Length-6000) }; return $t } catch { return '' } }\n"
+            "function Send($st,$txt){ try { Invoke-RestMethod -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
+            "if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18') {\n"
+            "  try { " + runonce + " | Out-Null; Send 'agendado' 'Ninguem logado agora: o Claude Code sera instalado no proximo logon do usuario.' } catch { Send 'erro' 'Falha ao agendar a instalacao.' }\n"
+            "} else {\n"
+            "  $log=Join-Path $env:TEMP 'uab-claude.log'; $err=\"$log.err\"\n"
+            "  Send 'instalando' 'Baixando e instalando o Claude Code...'\n"
+            "  $p=Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','irm https://claude.ai/install.ps1 | iex' -RedirectStandardOutput $log -RedirectStandardError $err -PassThru -WindowStyle Hidden\n"
+            "  while (-not $p.HasExited) { Start-Sleep 3; Send 'instalando' (Tail $log) }\n"
+            "  $out=((Tail $log) + \"`n\" + (Tail $err)).Trim()\n"
+            "  if ($p.ExitCode -eq 0) { Send 'ok' $out } else { Send 'erro' $out }\n"
+            "}")
         return 2, ps
-    # Linux: instala para o usuário principal (UID 1000), não para o root.
-    sh = (f"R='{rep}'\n"
-          'u="$(getent passwd 1000 | cut -d: -f1)"; [ -n "$u" ] || u=root\n'
-          "command -v curl >/dev/null 2>&1 || { apt-get -q update >/dev/null 2>&1; apt-get -q install -y curl >/dev/null 2>&1; }\n"
-          "if sudo -u \"$u\" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null 2>&1; then s=ok; else s=erro; fi\n"
-          'curl -fsS -m 20 -X POST "$R&state=$s" >/dev/null 2>&1\n')
+    # Linux: instala para o usuário principal (UID 1000), não para o root, transmitindo o log.
+    sh = (
+        f"R='{rep}'\n"
+        "send(){ printf '%s' \"$2\" | curl -fsS -m 20 -X POST --data-binary @- \"$R&state=$1\" >/dev/null 2>&1; }\n"
+        'u="$(getent passwd 1000 | cut -d: -f1)"; [ -n "$u" ] || u=root\n'
+        "command -v curl >/dev/null 2>&1 || { apt-get -q update >/dev/null 2>&1; apt-get -q install -y curl >/dev/null 2>&1; }\n"
+        'out="$(mktemp)"\n'
+        "send instalando 'Baixando e instalando o Claude Code...'\n"
+        "sudo -u \"$u\" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >\"$out\" 2>&1 &\n"
+        "pid=$!\n"
+        "while kill -0 \"$pid\" 2>/dev/null; do sleep 3; send instalando \"$(tail -c 6000 \"$out\")\"; done\n"
+        "wait \"$pid\"; rc=$?\n"
+        '[ "$rc" = 0 ] && st=ok || st=erro\n'
+        "send \"$st\" \"$(tail -c 8000 \"$out\")\"\n"
+        'rm -f "$out"\n')
     return 3, sh
+
+
+def _claude_status(mid: str) -> dict:
+    with core.db() as con:
+        r = con.execute("SELECT state, log, updated_at FROM claude_jobs WHERE mid=?", (mid,)).fetchone()
+    return {"state": r["state"], "log": r["log"], "updated_at": r["updated_at"]} if r else {"state": "idle", "log": ""}
 
 
 @app.post("/api/machines/{mid}/install-claude")
@@ -1922,37 +1939,42 @@ async def machine_install_claude(mid: str, _: core.User = Depends(admin_user)):
     token = secrets.token_urlsafe(24)
     rep = f"{PUBLIC_URL}/api/machines/claude-report?t={token}"
     ctype, cmds = _claude_script(platform, rep)
-    _claude_jobs[mid] = {"state": "instalando", "message": "Instalando o Claude Code…",
-                         "th": core.token_hash(token), "at": core.now()}
+    with core.db() as con:
+        con.execute("INSERT INTO claude_jobs (mid, token_hash, state, log, updated_at) VALUES (?,?,?,?,?) "
+                    "ON CONFLICT(mid) DO UPDATE SET token_hash=excluded.token_hash, state='instalando', log='', updated_at=excluded.updated_at",
+                    (mid, core.token_hash(token), "instalando", "", core.now()))
     run_as = 2 if platform == "windows" else 0  # Windows: como o usuário logado se houver (instala no perfil certo)
     try:
         res = await remoto.run_commands(dev["id"], ctype, cmds, run_as)
     except Exception as exc:  # noqa: BLE001
         res = f"falha ({type(exc).__name__})"
     if res != "OK":
-        _claude_jobs[mid] = {"state": "erro", "message": f"O Remoto não conseguiu enviar o comando: {res}", "at": core.now()}
-    return {k: v for k, v in _claude_jobs[mid].items() if k != "th"}
+        with core.db() as con:
+            con.execute("UPDATE claude_jobs SET state='erro', log=?, updated_at=? WHERE mid=?",
+                        (f"O Remoto não conseguiu enviar o comando: {res}", core.now(), mid))
+    return _claude_status(mid)
 
 
 @app.post("/api/machines/claude-report")
-async def machine_claude_report(t: str = "", state: str = ""):
-    """A máquina avisa o resultado da instalação do Claude Code (token do pedido)."""
+async def machine_claude_report(request: Request, t: str = "", state: str = ""):
+    """A máquina transmite o log e o estado da instalação do Claude Code (token do pedido)."""
     th = core.token_hash(t) if re.fullmatch(r"[A-Za-z0-9_-]{20,64}", t or "") else ""
-    if not th or state not in ("ok", "erro", "agendado"):
+    if not th or state not in ("instalando", "ok", "erro", "agendado"):
         raise HTTPException(400, "inválido")
-    msg = {"ok": "Claude Code instalado.", "erro": "Falha ao instalar o Claude Code.",
-           "agendado": "Agendado: instala no próximo logon do usuário."}[state]
-    for mid, j in list(_claude_jobs.items()):
-        if j.get("th") == th:
-            _claude_jobs[mid] = {"state": state, "message": msg, "at": core.now()}
-            break
+    if time.time() - _agent_last.get("claude:" + th, 0) < 1:  # no máximo 1/s por pedido
+        raise HTTPException(429, "devagar")
+    _agent_last["claude:" + th] = time.time()
+    raw = (await request.body())[:20000]
+    log = raw.decode("utf-8", "replace")
+    with core.db() as con:
+        con.execute("UPDATE claude_jobs SET state=?, log=CASE WHEN ?<>'' THEN ? ELSE log END, updated_at=? WHERE token_hash=?",
+                    (state, log, log, core.now(), th))
     return {"ok": True}
 
 
 @app.get("/api/machines/{mid}/claude-status")
 def machine_claude_status(mid: str, _: core.User = Depends(admin_user)):
-    j = _claude_jobs.get(mid)
-    return {k: v for k, v in j.items() if k != "th"} if j else {"state": "idle"}
+    return _claude_status(mid)
 
 
 async def _resync_partners_of(mid: str) -> None:

@@ -169,6 +169,10 @@ def init_db() -> None:
             con.execute("ALTER TABLE format_jobs ADD COLUMN build_id TEXT NOT NULL DEFAULT ''")
         if "percent" not in fcols:  # andamento (0-100) que o gravador reporta durante a preparação
             con.execute("ALTER TABLE format_jobs ADD COLUMN percent INTEGER NOT NULL DEFAULT -1")
+        # "Instalar Claude Code" numa máquina já pronta: estado + log que a máquina reporta
+        con.execute("""CREATE TABLE IF NOT EXISTS claude_jobs (
+            mid TEXT PRIMARY KEY, token_hash TEXT NOT NULL, state TEXT NOT NULL,
+            log TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)""")
 
 
 # --------------------------------------------------------------------- senhas
