@@ -415,13 +415,13 @@ def summary_of(cfg: dict, extra: dict | None = None) -> str:
     if cfg.get("OS") == "windows":
         keep = ["OS", "WIN_VERSION", "WIN_EDITION", "WIN_LANG", "HOSTNAME_", "ADMIN_USER", "TIMEZONE_WIN",
                 "INPUT_LOCALE", "UI_LANG", "PANEL_ACCESS", "REMOTE_AGENT", "WIN_APPS", "DISK_MODE",
-                "WG_ENABLED", "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "WIN_SSH", "WIN_SSH_AUTH"]
+                "WG_ENABLED", "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "WIN_SSH", "WIN_SSH_AUTH", "WIN_CLAUDE_CODE"]
         return json.dumps({**{k: cfg.get(k, "") for k in keep}, **(extra or {})})
     keep = ["UBUNTU_SERIES", "HOSTNAME_", "ADMIN_USER", "TIMEZONE", "LOCALE", "KEYBOARD_LAYOUT", "NET_MODE",
             "NET_ADDRESS", "STORAGE_MATCH_TYPE", "STORAGE_MATCH_VALUE", "STORAGE_LAYOUT",
             "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "DOCKER_ENABLED", "EXTRA_PACKAGES", "SSH_AUTH", "SSH_PORT",
             "COOLIFY_ENABLED", "COCKPIT_ENABLED", "COOLIFY_ADMIN_EMAIL", "WG_ENABLED",
             "DDNS_ENABLED", "DDNS_HOSTNAME", "CLOUDFLARE_ENABLED", "GPU_NVIDIA", "VIRT_ENABLED", "VIRT_BRIDGE",
-            "SERVER_TWEAKS", "REMOTE_AGENT"]
+            "SERVER_TWEAKS", "REMOTE_AGENT", "CLAUDE_CODE"]
     return json.dumps({k: cfg.get(k, "") for k in keep})
 

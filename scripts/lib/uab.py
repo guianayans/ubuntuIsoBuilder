@@ -232,6 +232,7 @@ def render(args) -> None:
             "UAB_VIRT": "yes" if cfg.get("VIRT_ENABLED") == "yes" else "no",
             "UAB_VIRT_BRIDGE": "yes" if cfg.get("VIRT_ENABLED") == "yes" and cfg.get("VIRT_BRIDGE") == "yes" else "no",
             "UAB_TWEAKS": "yes" if cfg.get("SERVER_TWEAKS") == "yes" else "no",
+            "UAB_CLAUDE_CODE": "yes" if cfg.get("CLAUDE_CODE") == "yes" else "no",
             # agente do Remoto (MeshCentral) — o id do grupo vai em secrets/remote-meshid
             "UAB_REMOTE_AGENT": "yes" if cfg.get("REMOTE_AGENT") == "yes" and cfg.get("REMOTE_AGENT_URL", "").startswith(("https://", "http://")) else "no",
             "UAB_REMOTE_URL": cfg.get("REMOTE_AGENT_URL", "").rstrip("/"),

@@ -596,6 +596,7 @@ def validate_build(d: dict) -> dict:
     c["VIRT_ENABLED"] = "yes" if d.get("virt") else "no"
     c["VIRT_BRIDGE"] = "yes" if d.get("virt") and d.get("virt_bridge", True) else "no"
     c["SERVER_TWEAKS"] = "yes" if d.get("tweaks") else "no"
+    c["CLAUDE_CODE"] = "yes" if d.get("claude_code") else "no"  # instala o Claude Code (script oficial) no 1º boot
     c["REMOTE_AGENT"] = "yes" if d.get("remote_agent") else "no"  # o builder completa URL e id do grupo
     c["TSEC_AGENT"] = "yes" if d.get("terminalsec") else "no"  # o builder pede o token ao TerminalSec
     return {"os": "ubuntu", "config": c, "keys": keys, "password": pw, "ts_key": ts_key, "panel_access": panel_access,
@@ -732,6 +733,7 @@ def validate_windows(d: dict) -> dict:
     if c["WIN_SSH"] == "yes" and auth == "key":
         win_keys = validate_pubkeys(_req(d, "win_ssh_keys"))  # levanta se não houver chave válida
     c["WIN_SSH_KEYS"] = "\n".join(win_keys)
+    c["WIN_CLAUDE_CODE"] = "yes" if d.get("win_claude") else "no"  # instala o Claude Code no 1º logon do usuário
     if _req(d, "confirm_erase") != "APAGAR":
         raise Invalid("Digite APAGAR para confirmar que o maior disco interno será apagado.")
     return {"os": "windows", "config": c, "panel_access": panel_access, "win_key_set": bool(key),

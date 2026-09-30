@@ -297,13 +297,13 @@ const W = {
   ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "coolify_cockpit", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
-  gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true,
+  gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true, claude_code: false,
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_target: "new", deliver_existing: "", deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
   win_key: "", win_timezone: "E. South America Standard Time", win_keyboard: "0416:00010416", win_apps: "",
   win_tailscale: false,  // no Windows o Tailscale começa desligado (precisa de auth key)
-  win_ssh: false, win_ssh_auth: "password", win_ssh_keys: ""
+  win_ssh: false, win_ssh_auth: "password", win_ssh_keys: "", win_claude: false
 };
 let step = 0;
 let GUEST_DOMAIN = "gvtserver.online";
@@ -439,6 +439,7 @@ function stepHTML() {
       </div>
       ${toggle("panel_access", "Acesso pelo painel (terminal no navegador)", "O servidor aparece em “Máquinas” e o painel pode abrir um terminal SSH nele, com uma chave própria aceita só pela Tailnet. Sem isso, ele aparece na lista mas o acesso é só do seu computador.")}
       <p class="muted small">Sempre instalados: curl, wget, git, ca-certificates, openssh-server, htop, unzip, rsync.</p>
+      ${toggle("claude_code", "Claude Code (terminal)", "Instala o Claude Code no primeiro boot (script oficial da Anthropic), para o usuário administrador. Depois é só rodar <code>claude</code> no terminal.")}
       ${field("extra_packages", "Pacotes extras (separados por espaço)", 'placeholder="ex.: vim tmux ncdu" autocapitalize="off" spellcheck="false"')}
       ${pkgCatalog()}
       <h3>Extras</h3>
@@ -469,7 +470,7 @@ function stepHTML() {
           : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
         <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "Placa de vídeo" : "",
-          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
+          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.claude_code ? "Claude Code" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
       ${deliverHTML("ISO")}
@@ -536,6 +537,7 @@ function stepHTML() {
       return `<h2>Programas</h2>
       <p class="muted">Marque o que instalar. Tudo vem do <b>winget</b> (fontes oficiais), sozinho, depois da instalação do Windows e com internet; um programa que falhar não trava os outros.</p>
       ${winCatalog()}
+      ${toggle("win_claude", "Claude Code (terminal)", "Instala o Claude Code no primeiro logon (script oficial da Anthropic), para o usuário criado. Depois é só rodar <code>claude</code> no PowerShell.")}
       <details class="u-mt12" ${W.win_apps.split(/\s+/).some(i => i && !WINCAT.apps.some(a => a.id === i)) ? "open" : ""}><summary>Avançado: outros programas (ID do winget)</summary>
         ${field("win_apps", "IDs do winget (separados por espaço)", 'placeholder="ex.: Mozilla.Firefox Notepad++.Notepad++" autocapitalize="off" spellcheck="false"', "Marcar acima escreve aqui. Procure IDs com <code>winget search nome</code> ou em winget.run.")}</details>`;
     }
@@ -551,7 +553,7 @@ function stepHTML() {
         <tr><th>Disco</th><td>maior disco interno (nunca USB)</td></tr>
         <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.win_ssh ? "SSH (" + (W.win_ssh_auth === "password" ? "usuário e senha" : "chave") + ")" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "",
           W.wireguard && FEATURES.wireguard ? "WireGuard pelo seu servidor" : "", W.win_tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" · ") || "só aparece em Máquinas"}</td></tr>
-        <tr><th>Programas</th><td>${names.length ? esc(names.join(", ")) : "nenhum"}</td></tr>
+        <tr><th>Programas</th><td>${[names.length ? esc(names.join(", ")) : "", W.win_claude ? "Claude Code" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
       </table></div>
       <div class="note u-mt16">O painel gera só a <b>configuração</b> (alguns KB). O gravador isoBuilder baixa o Windows 11 oficial direto da Microsoft no computador de quem grava o pendrive e aplica esta configuração.</div>
       ${deliverHTML("instalação")}
@@ -880,6 +882,7 @@ function renderWizard() {
             wireguard: !!(W.wireguard && FEATURES.wireguard), tailscale: W.win_tailscale,
             ...(W.win_tailscale ? { tailscale_key: W.tailscale_key, tailscale_hostname: W.tailscale_hostname } : {}),
             win_ssh: W.win_ssh, win_ssh_auth: W.win_ssh_auth, ...(W.win_ssh && W.win_ssh_auth === "key" ? { win_ssh_keys: W.win_ssh_keys } : {}),
+            win_claude: W.win_claude,
             confirm_erase: W.confirm_erase }
         : { ...W, os: "ubuntu", storage_min_gb: +W.storage_min_gb, remote_agent, terminalsec: !!(W.terminalsec && FEATURES.terminalsec) };
       if (!isWin()) delete body.win_key;

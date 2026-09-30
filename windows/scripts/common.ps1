@@ -208,6 +208,7 @@ function Get-UabPlan($conf) {
     if ($conf.tailscale) { $plan += 'tailscale_install'; $plan += 'tailscale_login' }
     if ($conf.remote_agent -and $conf.remote_url) { $plan += 'remote_agent' }
     if (@($conf.apps).Count -gt 0) { $plan += 'apps' }
+    if ($conf.claude_code) { $plan += 'claude_code' }
     if ($conf.activate) { $plan += 'activation' }  # só com a chave informada no painel
     $plan += 'report'
     return , $plan

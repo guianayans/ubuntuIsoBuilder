@@ -45,6 +45,7 @@ DOCKER_NETS="172.16.0.0/12"
 UAB_COOLIFY="${UAB_COOLIFY:-no}"; UAB_COCKPIT="${UAB_COCKPIT:-no}"
 UAB_DDNS="${UAB_DDNS:-no}"; UAB_CLOUDFLARE="${UAB_CLOUDFLARE:-no}"; UAB_GPU="${UAB_GPU:-no}"
 UAB_VIRT="${UAB_VIRT:-no}"; UAB_VIRT_BRIDGE="${UAB_VIRT_BRIDGE:-no}"; UAB_TWEAKS="${UAB_TWEAKS:-no}"
+UAB_CLAUDE_CODE="${UAB_CLAUDE_CODE:-no}"
 UAB_REMOTE_AGENT="${UAB_REMOTE_AGENT:-no}"; UAB_REMOTE_URL="${UAB_REMOTE_URL:-}"
 UAB_TSEC_AGENT="${UAB_TSEC_AGENT:-no}"; UAB_TSEC_URL="${UAB_TSEC_URL:-}"
 UAB_HOSTNAME="${UAB_HOSTNAME:-$(hostname -s)}"
@@ -131,6 +132,7 @@ plan_steps() {
   [ "$UAB_COOLIFY" = yes ] && p="$p coolify_install"
   [ "$UAB_VIRT" = yes ] && p="$p virt_install" && [ "$UAB_VIRT_BRIDGE" = yes ] && p="$p virt_bridge"
   [ "$UAB_TWEAKS" = yes ] && p="$p server_tweaks"
+  [ "$UAB_CLAUDE_CODE" = yes ] && p="$p claude_code"
   [ "$UAB_GPU" = yes ] && p="$p gpu_driver gpu_toolkit"
   [ "$UAB_DDNS" = yes ] && p="$p ddns_setup"
   [ "$UAB_REMOTE_AGENT" = yes ] && [ -n "$UAB_REMOTE_URL" ] && p="$p remote_agent"
@@ -311,6 +313,17 @@ server_tweaks() {
   update-grub >/dev/null 2>&1 || { log "update-grub falhou"; rm -f /etc/default/grub.d/90-uab-server.cfg; return 1; }
   grep -q "consoleblank=0" /boot/grub/grub.cfg || { log "ajustes não entraram no grub.cfg"; return 1; }
   log "ajustes de boot aplicados (valem a partir do próximo boot): $extra"
+}
+
+# Claude Code (terminal) para o usuário administrador, pelo script oficial da Anthropic.
+# Instala no HOME do usuário (não do root), como o instalador recomenda.
+claude_code() {
+  command -v curl >/dev/null 2>&1 || apt_install curl || return 1
+  # instala no HOME do usuário (não do root); -H ajusta o HOME para o do usuário
+  sudo -u "$USER_NAME" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >>"$LOG" 2>&1 || return 1
+  sudo -u "$USER_NAME" -H bash -lc 'command -v claude >/dev/null 2>&1 || [ -x "$HOME/.local/bin/claude" ]' \
+    || { log "Claude Code instalado, mas o binário não apareceu"; return 1; }
+  log "Claude Code instalado para $USER_NAME"
 }
 
 # DDNS No-IP com ddclient. A senha fica só em /etc/ddclient.conf (0600, root).
@@ -882,6 +895,7 @@ if network_ready; then
     [ "$UAB_VIRT_BRIDGE" = yes ] && [ -f "$STATE/virt_install.done" ] && step virt_bridge virt_bridge
   fi
   if [ "$UAB_TWEAKS" = yes ]; then step server_tweaks server_tweaks; fi
+  if [ "$UAB_CLAUDE_CODE" = yes ]; then step claude_code claude_code; fi
   if [ "$UAB_GPU" = yes ]; then
     step gpu_driver gpu_driver
     [ -f "$STATE/gpu_driver.done" ] && step gpu_toolkit gpu_toolkit

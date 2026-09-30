@@ -363,6 +363,7 @@ def render_autounattend(cfg: dict, secrets: dict, ctx: dict) -> str:
         "panel_access": v["panel_access"], "remote_agent": v["remote_agent"], "remote_url": v["remote_url"],
         "apps": v["apps"], "activate": v["key"] != GENERIC_PRO_KEY, "wireguard": v["wireguard"], "tailscale": v["tailscale"], "tailscale_hostname": v["ts_host"],
         "ssh": v["ssh"], "ssh_password": v["ssh_password"], "ssh_keys": v["ssh_keys"],
+        "claude_code": str(cfg.get("WIN_CLAUDE_CODE") or "no") == "yes",
         "win_version": str(cfg.get("WIN_VERSION") or "11"),
         "win_edition": str(cfg.get("WIN_EDITION") or "Pro"),
     }

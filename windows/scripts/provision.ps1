@@ -314,6 +314,16 @@ function Get-UabWinLicense {
         Select-Object -First 1
 }
 
+function Step-ClaudeCode {
+    # O Claude Code instala no perfil do USUÁRIO (não do SYSTEM, que roda o provisionamento).
+    # Agenda a instalação para o próximo logon do usuário via RunOnce (HKLM roda no contexto de
+    # quem logar), com o script oficial da Anthropic. Roda uma vez; depois é só usar 'claude'.
+    $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { irm https://claude.ai/install.ps1 | iex } catch {}"'
+    $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
+    New-Item -Path $k -Force | Out-Null
+    New-ItemProperty -Path $k -Name 'UABClaudeCode' -Value $cmd -PropertyType String -Force | Out-Null
+    return 'ok (instala no próximo logon do usuário)'
+}
 function Step-Activation {
     # Ativa o Windows com a chave digitada no painel (aplicada na instalação). O Windows
     # também tentaria sozinho mais tarde; aqui a ativação é pedida já e o resultado vai
@@ -365,6 +375,7 @@ if ($net) {
     }
     if ($plan -contains 'remote_agent') { Invoke-Step 'remote_agent' { Step-RemoteAgent } }
     if ($plan -contains 'apps') { Invoke-Step 'apps' { Step-Apps } }
+    if ($plan -contains 'claude_code') { Invoke-Step 'claude_code' { Step-ClaudeCode } }
     if ($plan -contains 'activation') { Invoke-Step 'activation' { Step-Activation } }
 } else {
     Log 'sem internet'
