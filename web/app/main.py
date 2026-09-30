@@ -61,7 +61,7 @@ async def security(request: Request, call_next):
     # Exceções: chamadas de programas autenticadas por token (sem cookie), não pelo navegador:
     # relatório das máquinas (/api/agent/…), aviso do gravador sobre o agente (/t/<token>/agent)
     # e andamento do "Formatar esta máquina" (/f/<token>/report).
-    machine_call = request.url.path.startswith("/api/agent/") or bool(
+    machine_call = request.url.path.startswith("/api/agent/") or request.url.path == "/api/machines/claude-report" or bool(
         re.fullmatch(r"/t/[A-Za-z0-9_-]{20,100}/agent|/f/[A-Za-z0-9_-]{20,100}/report", request.url.path))
     if request.method in ("POST", "PUT", "PATCH", "DELETE") and not machine_call:
         if request.headers.get("x-requested-with") != "uab":
@@ -1867,6 +1867,84 @@ async def update_machine(mid: str, request: Request, u: core.User = Depends(curr
         con.execute("UPDATE machines SET label=?, notes=?, ssh_host=?, ssh_port=? WHERE id=?",
                     (label, notes, host, port, mid))
     return {"ok": True}
+
+
+# -------------------------------------------------- instalar o Claude Code numa máquina já pronta
+# Reusa o agente do Remoto (run_commands). Como o run_commands só confirma o envio (não devolve a
+# saída), a máquina avisa o resultado (ok/erro/agendado) em /api/machines/claude-report; a tela
+# de Configurações mostra o status. Estado em memória (some no restart do painel; é conveniência).
+_claude_jobs: dict[str, dict] = {}
+
+
+def _claude_script(platform: str, rep: str) -> tuple[int, str]:
+    """Comandos que o agente roda para instalar o Claude Code e avisar o resultado ao painel."""
+    if platform == "windows":
+        # o instalador é POR USUÁRIO; o agente roda como SYSTEM. Agenda no RunOnce (próximo logon).
+        runonce = ('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v UABClaudeCode '
+                   '/t REG_SZ /d "powershell -NoProfile -ExecutionPolicy Bypass -Command \\"try { irm '
+                   'https://claude.ai/install.ps1 | iex } catch {}\\"" /f')
+        ps = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { "
+              + runonce + " | Out-Null; "
+              f"Invoke-RestMethod -Method Post -Uri '{rep}&state=agendado' | Out-Null "
+              f"}} catch {{ try {{ Invoke-RestMethod -Method Post -Uri '{rep}&state=erro' | Out-Null }} catch {{}} }}")
+        return 2, ps
+    # Linux: instala para o usuário principal (UID 1000), não para o root.
+    sh = (f"R='{rep}'\n"
+          'u="$(getent passwd 1000 | cut -d: -f1)"; [ -n "$u" ] || u=root\n'
+          "command -v curl >/dev/null 2>&1 || { apt-get -q update >/dev/null 2>&1; apt-get -q install -y curl >/dev/null 2>&1; }\n"
+          "if sudo -u \"$u\" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null 2>&1; then s=ok; else s=erro; fi\n"
+          'curl -fsS -m 20 -X POST "$R&state=$s" >/dev/null 2>&1\n')
+    return 3, sh
+
+
+@app.post("/api/machines/{mid}/install-claude")
+async def machine_install_claude(mid: str, _: core.User = Depends(admin_user)):
+    """Instala o Claude Code numa máquina já provisionada, pelo agente do Remoto."""
+    m = _get_machine(mid)
+    _remoto_ready()
+    host = (m["hostname"] or "").strip().lower()
+    try:
+        dev = next((x for x in await remoto.devices() if x["name"].strip().lower() == host and x["online"]), None)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"O Remoto não respondeu ({type(exc).__name__}).")
+    if not dev:
+        raise core.Invalid("A máquina não está online no Remoto (precisa do agente do Remoto instalado e conectado).")
+    platform = _format_platform(dev["os"])
+    if platform not in ("linux", "windows"):
+        raise core.Invalid("Sistema não suportado para instalar o Claude Code por aqui.")
+    token = secrets.token_urlsafe(24)
+    rep = f"{PUBLIC_URL}/api/machines/claude-report?t={token}"
+    ctype, cmds = _claude_script(platform, rep)
+    _claude_jobs[mid] = {"state": "instalando", "message": "Instalando o Claude Code…",
+                         "th": core.token_hash(token), "at": core.now()}
+    try:
+        res = await remoto.run_commands(dev["id"], ctype, cmds)
+    except Exception as exc:  # noqa: BLE001
+        res = f"falha ({type(exc).__name__})"
+    if res != "OK":
+        _claude_jobs[mid] = {"state": "erro", "message": f"O Remoto não conseguiu enviar o comando: {res}", "at": core.now()}
+    return {k: v for k, v in _claude_jobs[mid].items() if k != "th"}
+
+
+@app.post("/api/machines/claude-report")
+async def machine_claude_report(t: str = "", state: str = ""):
+    """A máquina avisa o resultado da instalação do Claude Code (token do pedido)."""
+    th = core.token_hash(t) if re.fullmatch(r"[A-Za-z0-9_-]{20,64}", t or "") else ""
+    if not th or state not in ("ok", "erro", "agendado"):
+        raise HTTPException(400, "inválido")
+    msg = {"ok": "Claude Code instalado.", "erro": "Falha ao instalar o Claude Code.",
+           "agendado": "Agendado: instala no próximo logon do usuário."}[state]
+    for mid, j in list(_claude_jobs.items()):
+        if j.get("th") == th:
+            _claude_jobs[mid] = {"state": state, "message": msg, "at": core.now()}
+            break
+    return {"ok": True}
+
+
+@app.get("/api/machines/{mid}/claude-status")
+def machine_claude_status(mid: str, _: core.User = Depends(admin_user)):
+    j = _claude_jobs.get(mid)
+    return {k: v for k, v in j.items() if k != "th"} if j else {"state": "idle"}
 
 
 async def _resync_partners_of(mid: str) -> None:

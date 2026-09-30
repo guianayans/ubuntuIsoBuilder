@@ -1877,6 +1877,7 @@ function closeOverlay() {
   if (!OVL) return;
   stopTerminal();
   clearInterval(OVL.timer);
+  clearInterval(OVL.cpoll);
   $("#ovl")?.remove();
   document.body.classList.remove("noscroll");
   OVL = null;
@@ -2271,6 +2272,10 @@ function tabConfig() {
     </div>
     <div id="merr"></div>
     <div class="row"><button class="btn primary" type="submit">Salvar</button></div></form>
+    ${ME.role === "admin" ? `<h3>Ferramentas</h3>
+      <p class="muted small">Instala o <b>Claude Code CLI</b> nesta máquina (caso não tenha sido marcado ao gerar). Precisa do agente do Remoto ativo. ${m.platform === "windows" ? "No Windows, instala no próximo logon do usuário." : "Instala para o usuário principal."}</p>
+      <div class="row"><button class="btn" id="claudeBtn">Instalar Claude Code CLI</button></div>
+      <div id="claudeStatus" class="small u-mt8"></div>` : ""}
     <h3>Detalhes técnicos</h3>
     <div class="grid2">${kv("ID da máquina", `<span class="mono small">${esc(m.id)}</span>`)}${kv(m.build_os === "windows" ? "Configuração de origem" : "ISO de origem", m.build_hostname ? `<a href="#/iso/${esc(m.build_id)}">${esc(m.build_hostname)}</a>` : esc(m.build_id))}
       ${kv("Acesso pelo painel", m.panel_access ? (m.platform === "windows" ? "sim (chave do painel no OpenSSH)" : "sim (chave do painel na ISO)") : "não")}${kv("Último IP de origem", `<span class="mono">${esc(m.source_ip)}</span>`)}</div>
@@ -2288,6 +2293,35 @@ function tabConfig() {
   if ($("#marchive")) $("#marchive").onclick = () => machineAction(OVL.id, "archive");
   if ($("#mrestore")) $("#mrestore").onclick = () => machineAction(OVL.id, "restore");
   if ($("#mforget")) $("#mforget").onclick = () => machineAction(OVL.id, "forget");
+  wireClaude();
+}
+
+// Instalar Claude Code CLI numa máquina já pronta (aba Configurações): dispara pelo agente do
+// Remoto e mostra o status (instalando…/ok/erro/agendado), atualizando por poll.
+function wireClaude() {
+  const btn = $("#claudeBtn"), cs = $("#claudeStatus");
+  if (!btn || !cs) return;
+  const paint = j => {
+    const map = { instalando: ["muted", "⏳ Instalando o Claude Code…"], ok: ["ok", "✔ " + (j.message || "instalado")],
+      erro: ["err", "✖ " + (j.message || "erro")], agendado: ["muted", "🕒 " + (j.message || "agendado")] };
+    const [cls, txt] = map[j.state] || ["", ""];
+    cs.className = "small u-mt8 " + cls; cs.innerHTML = esc(txt);
+    btn.disabled = j.state === "instalando";
+  };
+  const poll = async () => {
+    try { const j = await api("/api/machines/" + OVL.id + "/claude-status"); paint(j);
+      if (j.state !== "instalando") { clearInterval(OVL.cpoll); OVL.cpoll = null; } } catch (e) { }
+  };
+  api("/api/machines/" + OVL.id + "/claude-status").then(j => { if (j.state !== "idle") paint(j); if (j.state === "instalando" && !OVL.cpoll) OVL.cpoll = setInterval(poll, 4000); }).catch(() => { });
+  btn.onclick = async () => {
+    if (!confirm("Instalar o Claude Code CLI nesta máquina?")) return;
+    btn.disabled = true; cs.className = "small u-mt8 muted"; cs.textContent = "Enviando…";
+    try {
+      const j = await api("/api/machines/" + OVL.id + "/install-claude", { method: "POST" });
+      paint(j);
+      if (j.state === "instalando" && !OVL.cpoll) OVL.cpoll = setInterval(poll, 4000);
+    } catch (e) { cs.className = "small u-mt8 err"; cs.textContent = "✖ " + e.message; btn.disabled = false; }
+  };
 }
 
 route();
