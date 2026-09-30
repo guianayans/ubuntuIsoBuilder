@@ -62,7 +62,7 @@ async def security(request: Request, call_next):
     # Exceções: chamadas de programas autenticadas por token (sem cookie), não pelo navegador:
     # relatório das máquinas (/api/agent/…), aviso do gravador sobre o agente (/t/<token>/agent)
     # e andamento do "Formatar esta máquina" (/f/<token>/report).
-    machine_call = request.url.path.startswith("/api/agent/") or request.url.path == "/api/machines/claude-report" or bool(
+    machine_call = request.url.path.startswith("/api/agent/") or request.url.path == "/api/claude-report" or bool(
         re.fullmatch(r"/t/[A-Za-z0-9_-]{20,100}/agent|/f/[A-Za-z0-9_-]{20,100}/report", request.url.path))
     if request.method in ("POST", "PUT", "PATCH", "DELETE") and not machine_call:
         if request.headers.get("x-requested-with") != "uab":
@@ -1931,7 +1931,7 @@ async def update_machine(mid: str, request: Request, u: core.User = Depends(curr
 
 # -------------------------------------------------- instalar o Claude Code numa máquina já pronta
 # Reusa o agente do Remoto (run_commands). Como o run_commands só confirma o envio (não devolve a
-# saída), a máquina transmite o LOG e o estado para /api/machines/claude-report (guardados em
+# saída), a máquina transmite o LOG e o estado para /api/claude-report (guardados em
 # claude_jobs, no banco — sobrevive a restart); a aba Configurações mostra o log ao vivo por poll.
 def _claude_script(platform: str, rep: str, action: str) -> tuple[int, str]:
     """Comandos que o agente roda para instalar/desinstalar o Claude Code, transmitindo o log."""
@@ -2059,7 +2059,7 @@ async def machine_claude(mid: str, action: str = "install", _: core.User = Depen
     if platform not in ("linux", "windows"):
         raise core.Invalid("Sistema não suportado para o Claude Code por aqui.")
     token = secrets.token_urlsafe(24)
-    rep = f"{PUBLIC_URL}/api/machines/claude-report?t={token}"
+    rep = f"{PUBLIC_URL}/api/claude-report?t={token}"
     ctype, cmds = _claude_script(platform, rep, action)
     start = "instalando" if action == "install" else "desinstalando"
     with core.db() as con:
@@ -2078,7 +2078,9 @@ async def machine_claude(mid: str, action: str = "install", _: core.User = Depen
     return _claude_status(mid)
 
 
-@app.post("/api/machines/claude-report")
+# NÃO usar "/api/machines/claude-report": colide com "/api/machines/{mid}" (registrada antes),
+# que exige login → o aviso da máquina levava 401 e o botão travava em "instalando".
+@app.post("/api/claude-report")
 async def machine_claude_report(request: Request, t: str = "", state: str = ""):
     """A máquina transmite o log e o estado da instalação do Claude Code (token do pedido)."""
     th = core.token_hash(t) if re.fullmatch(r"[A-Za-z0-9_-]{20,64}", t or "") else ""
