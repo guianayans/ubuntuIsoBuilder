@@ -171,6 +171,8 @@ var wmi;
 try { wmi = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2"); }
 catch (e) { fail("O WMI do Windows PE não respondeu (" + e.message + ").", false); }
 
+function indexOfArr(a, v) { for (var i = 0; i < a.length; i++) if (a[i] === v) return i; return -1; }
+
 function lettersOfDisk(dev) {
     var ls = [];
     try {
@@ -185,53 +187,65 @@ function lettersOfDisk(dev) {
     return ls;
 }
 
-// partNumberOf: número da partição (como o diskpart usa, 1-based) da unidade dada.
-function partNumberOf(letter) {
-    try {
-        var e = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_LogicalDiskToPartition"));
-        for (; !e.atEnd(); e.moveNext()) {
-            var a = e.item();
-            if (String(a.Dependent).indexOf('"' + letter + ':"') >= 0) {
-                var m = String(a.Antecedent).match(/Partition #(\d+)/);
-                if (m) return parseInt(m[1], 10) + 1; // WMI é 0-based; diskpart é 1-based
-            }
-        }
-    } catch (e) { }
-    return 0;
+// mediaDiskPart: disco e número da partição de uma unidade, pelo diskpart (a associação de
+// letras por WMI NÃO é confiável no WinPE). Devolve {disk, part} (-1/0 se não achar).
+function mediaDiskPart(letter) {
+    writeText(DIR + "\\dp-detail.txt", "select volume " + letter + "\r\ndetail partition\r\ndetail volume\r\nexit\r\n", false);
+    var out = run("diskpart /s " + DIR + "\\dp-detail.txt").out;
+    var r = { disk: -1, part: 0 };
+    var mp = out.match(/^\s*Parti\S*\s+(\d+)\s*$/im);   // "Partição 3" / "Partition 3"
+    if (mp) r.part = parseInt(mp[1], 10);
+    var md = out.match(/^\s*\*\s*Dis\S*\s+(\d+)/im);   // "* Disco 0" / "* Disk 0"
+    if (md) r.disk = parseInt(md[1], 10);
+    return r;
 }
 
-var best = null, seen = [], mediaDisk = null;
-var disks = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_DiskDrive"));
-for (; !disks.atEnd(); disks.moveNext()) {
-    var d = disks.item();
-    var idx = d.Index, size = parseFloat(d.Size || "0"), gb = Math.floor(size / 1e9);
-    var itf = String(d.InterfaceType || ""), mt = String(d.MediaType || ""), pnp = String(d.PNPDeviceID || "");
-    var ls = lettersOfDisk(d.DeviceID);
-    var why = "";
-    if (/^USB/i.test(itf) || /^USBSTOR\\/i.test(pnp) || /UASPSTOR/i.test(pnp)) why = "USB";
-    else if (/1394/i.test(itf)) why = "FireWire";
-    else if (/removable|remov|external|extern/i.test(mt)) why = "removível/externo (" + mt + ")";
-    else if (media && indexOfArr(ls, media.letter) >= 0) { why = "contém a mídia de instalação"; mediaDisk = { index: idx, size: size, gb: gb, model: String(d.Model || ""), dev: d.DeviceID }; }
-    else if (answerLetter && indexOfArr(ls, answerLetter) >= 0) why = "contém o arquivo de respostas";
-    else if (size < UAB.minGB * 1e9) why = "pequeno demais (mínimo " + UAB.minGB + " GB)";
-    var desc = "disco " + idx + ": " + (d.Model || "?") + ", " + gb + " GB, " + itf + ", " + mt + (ls.length ? ", unidades " + ls.join("") : "");
-    log(desc + (why ? " -> ignorado: " + why : " -> elegível"));
-    seen.push(desc + (why ? " (ignorado: " + why + ")" : ""));
-    if (!why && (!best || size > best.size || (size === best.size && idx < best.index)))
-        best = { index: idx, size: size, gb: gb, model: String(d.Model || "") };
+// diskInfo: modelo/tamanho/USB de um disco pelo índice (a enumeração de discos por WMI
+// funciona no WinPE; só a associação de letras que não).
+function diskInfo(idx) {
+    var e = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_DiskDrive WHERE Index=" + idx));
+    if (e.atEnd()) return null;
+    var d = e.item(), itf = String(d.InterfaceType || ""), pnp = String(d.PNPDeviceID || ""), mt = String(d.MediaType || "");
+    var usb = /^USB/i.test(itf) || /USBSTOR|UASPSTOR/i.test(pnp) || /1394/i.test(itf) || /removable|remov|external|extern/i.test(mt);
+    var sz = parseFloat(d.Size || "0");
+    return { index: idx, size: sz, gb: Math.floor(sz / 1e9), model: String(d.Model || ""), usb: usb };
 }
 
-function indexOfArr(a, v) { for (var i = 0; i < a.length; i++) if (a[i] === v) return i; return -1; }
+var best = null, seen = [], PRESERVE = false, keepPart = 0;
 
-// Sem pendrive: a imagem está numa partição reservada do próprio disco. Em vez de apagar o
-// disco todo, PRESERVA essa partição, apaga as outras, instala e (opcional) limpa depois.
-var PRESERVE = false, keepPart = 0;
-if (!best && NOPEN && mediaDisk) {
-    keepPart = partNumberOf(media.letter);
-    if (!keepPart) fail("Não consegui identificar a partição da imagem (" + media.letter + ":) para preservá-la.", false);
-    PRESERVE = true;
-    best = mediaDisk;
-    log("PRESERVAÇÃO: disco " + best.index + ", preservando a partição " + keepPart + " (" + media.letter + ":)");
+if (NOPEN) {
+    // Sem pendrive: a imagem está numa partição do PRÓPRIO disco. Acha disco+partição por
+    // diskpart, confirma que é disco interno, e entra no modo PRESERVAÇÃO (apaga o resto e
+    // MANTÉM a partição da imagem). Assim nunca apaga a imagem por engano.
+    var mdp = mediaDiskPart(media.letter);
+    if (mdp.disk < 0 || !mdp.part) fail("Não consegui identificar o disco/partição da imagem (" + media.letter + ":).", false);
+    var di = diskInfo(mdp.disk);
+    if (!di) fail("Não consegui ler o disco " + mdp.disk + ".", false);
+    if (di.usb) fail("A imagem está num disco USB; a instalação sem pendrive só apaga o disco interno.", false);
+    if (di.size < UAB.minGB * 1e9) fail("O disco é pequeno demais (mínimo " + UAB.minGB + " GB).", false);
+    PRESERVE = true; keepPart = mdp.part; best = di;
+    log("PRESERVAÇÃO: disco " + best.index + " (" + best.model + "), preservando a partição " + keepPart + " (" + media.letter + ":)");
+} else {
+    // Com pendrive: maior disco interno (exclui USB/removível e o que contém a mídia/respostas).
+    var disks = new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_DiskDrive"));
+    for (; !disks.atEnd(); disks.moveNext()) {
+        var d = disks.item();
+        var idx = d.Index, size = parseFloat(d.Size || "0"), gb = Math.floor(size / 1e9);
+        var itf = String(d.InterfaceType || ""), mt = String(d.MediaType || ""), pnp = String(d.PNPDeviceID || "");
+        var ls = lettersOfDisk(d.DeviceID);
+        var why = "";
+        if (/^USB/i.test(itf) || /^USBSTOR\\/i.test(pnp) || /UASPSTOR/i.test(pnp)) why = "USB";
+        else if (/1394/i.test(itf)) why = "FireWire";
+        else if (/removable|remov|external|extern/i.test(mt)) why = "removível/externo (" + mt + ")";
+        else if (media && indexOfArr(ls, media.letter) >= 0) why = "contém a mídia de instalação";
+        else if (answerLetter && indexOfArr(ls, answerLetter) >= 0) why = "contém o arquivo de respostas";
+        else if (size < UAB.minGB * 1e9) why = "pequeno demais (mínimo " + UAB.minGB + " GB)";
+        var desc = "disco " + idx + ": " + (d.Model || "?") + ", " + gb + " GB, " + itf + ", " + mt + (ls.length ? ", unidades " + ls.join("") : "");
+        log(desc + (why ? " -> ignorado: " + why : " -> elegível"));
+        seen.push(desc + (why ? " (ignorado: " + why + ")" : ""));
+        if (!why && (!best || size > best.size || (size === best.size && idx < best.index)))
+            best = { index: idx, size: size, gb: gb, model: String(d.Model || "") };
+    }
 }
 
 if (!best) fail("Nenhum disco interno elegível para instalar o Windows (o pendrive e discos USB nunca são usados).\r\n\r\nDiscos encontrados:\r\n  " +
