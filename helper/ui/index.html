@@ -82,7 +82,7 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
     <div id="job"></div>
   </section>
 
-  <footer><span id="foot">Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio.</span> <button class="btn" id="quit" style="margin-left:8px">Encerrar</button></footer>
+  <footer><span id="foot">Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio.</span> <button class="btn danger" id="quit" style="margin-left:8px">Encerrar</button></footer>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -119,9 +119,9 @@ function renderStick(){
     : `<div class="warn">${esc(R.note || 'Reinício automático indisponível neste sistema.')}</div>
       <p class="small">Outra forma: desligue, ligue de novo apertando a tecla do menu de boot (F12, F11, F8 ou Esc) e escolha o pendrive.</p>`}
   </section>
-  <footer><button class="btn" id="quit">Encerrar</button></footer>`;
+  <footer><button class="btn danger" id="quit">Encerrar</button></footer>`;
   wireReboot('stickBox');
-  document.getElementById('quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder fechado.</h1></main>'; }catch(e){ alert(e.message); } };
+  document.getElementById('quit').onclick = doQuit;
 }
 function wireReboot(boxId){
   const rt=document.getElementById('rbTxt'), rg=document.getElementById('rbGo');
@@ -406,7 +406,14 @@ async function selectIso(p){ try{ await api('select',{path:p}); }catch(e){ alert
 async function poll(){ try{ S = await api('state'); render(); }catch(e){} }
 $('#useIso').onclick = () => { const p=$('#isoPath').value.trim().replace(/^"|"$/g,''); if(p) selectIso(p); };
 $('#refresh').onclick = () => { VT = {}; $('#confirmBox').dataset.sig=''; poll(); };
-$('#quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder encerrado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }catch(e){ alert(e.message); } };
+// Encerrar: se o pendrive JÁ finalizou (job done), fecha direto; senão, confirma antes.
+async function doQuit(){
+  const finished = S && S.job && S.job.phase === 'done';
+  if(!finished && !confirm('Encerrar o gravador? O pendrive ainda não foi finalizado.')) return;
+  try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder encerrado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }
+  catch(e){ alert(e.message); }
+}
+$('#quit').onclick = doQuit;
 poll(); setInterval(()=>{ if(!document.hidden) poll(); }, 1500);
 </script>
 </body>
