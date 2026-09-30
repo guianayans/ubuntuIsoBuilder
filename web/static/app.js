@@ -161,7 +161,7 @@ function shell() {
   const dl = ME.mode === "download";
   const links = dl ? [[ME.build_id ? "#/iso/" + ME.build_id : "#/", "Minha ISO"]]
     : ME.mode === "partner" ? [["#/maquinas", "Máquinas"]] : [["#/", "Nova ISO"], ["#/isos", "Minhas ISOs"]];
-  if (ME.role === "admin") links.push(["#/maquinas", "Máquinas"], ["#/acessos", "Acessos"], ["#/sistema", "Sistema"]);
+  if (ME.role === "admin") links.push(["#/maquinas", "Máquinas"], ["#/acessos", "Contas"], ["#/sistema", "Sistema"]);
   const cur = curRoute();
   const isOn = h => cur === h || (!dl && h === "#/isos" && cur.startsWith("#/iso/"));
   $("#nav").innerHTML = links.map(([h, t]) => `<a href="${h}" class="${isOn(h) ? "on" : ""}">${t}</a>`).join("");
@@ -851,7 +851,7 @@ function deliveryCard(id) {
   try { c = JSON.parse(sessionStorage.getItem("uab-delivery-" + id) || "null"); } catch (e) { }
   if (!c) return "";
   return `<div class="card" id="dcard"><h2>Acesso criado para esta ISO</h2>
-    <p class="muted small">Envie para a pessoa. A senha <b>não será mostrada novamente</b> (em Acessos dá para gerar outra). Ela verá o progresso e, quando pronta, o botão de download.</p>
+    <p class="muted small">Envie para a pessoa. A senha <b>não será mostrada novamente</b> (em Contas dá para gerar outra). Ela verá o progresso e, quando pronta, o botão de download.</p>
     <div class="cred" id="dtxt">${esc(credText(c))}</div>
     <div class="row u-mt12"><button class="btn primary" id="dcopy">Copiar tudo</button><button class="btn" id="dclose">Já copiei, fechar</button></div></div>`;
 }
@@ -1057,7 +1057,7 @@ function showCred(c, title) {
 }
 
 async function renderUsers() {
-  view.innerHTML = `<h1>Acessos</h1><p class="muted">Contas temporárias para outras pessoas gerarem ISOs ou só baixarem uma ISO que você preparou. Ninguém consegue se cadastrar sozinho.</p>
+  view.innerHTML = `<h1>Contas</h1><p class="muted">Contas temporárias para outras pessoas gerarem ISOs ou só baixarem uma ISO que você preparou. Ninguém consegue se cadastrar sozinho.</p>
   <div class="card"><h2>Novo acesso temporário</h2><form id="uf">
     <div class="choice">
       <label><input type="radio" name="mode" value="build" checked><span><b>Pode gerar ISOs</b><span class="muted small">A pessoa preenche o assistente e gera as próprias ISOs.</span></span></label>
@@ -1075,7 +1075,7 @@ async function renderUsers() {
     </div>
     <div id="uerr"></div><button class="btn primary" type="submit">Criar acesso</button></form></div>
   <div id="cred"></div>
-  <div class="card"><h2>Acessos criados</h2><div id="ul">Carregando…</div></div>`;
+  <div class="card"><h2>Contas criadas</h2><div id="ul">Carregando…</div></div>`;
   const mine = (await api("/api/builds")).builds.filter(b => b.status === "done");
   $('select[name="build_id"]').innerHTML = mine.length
     ? mine.map(b => `<option value="${b.id}">${esc(b.hostname)} · ${esc(sysName(b))} · ${fmtDate(b.created_at)}</option>`).join("")
