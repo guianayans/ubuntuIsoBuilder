@@ -1873,20 +1873,31 @@ async def update_machine(mid: str, request: Request, u: core.User = Depends(curr
 # Reusa o agente do Remoto (run_commands). Como o run_commands só confirma o envio (não devolve a
 # saída), a máquina transmite o LOG e o estado para /api/machines/claude-report (guardados em
 # claude_jobs, no banco — sobrevive a restart); a aba Configurações mostra o log ao vivo por poll.
-def _claude_script(platform: str, rep: str) -> tuple[int, str]:
-    """Comandos que o agente roda para instalar o Claude Code, transmitindo o log ao painel."""
+def _claude_script(platform: str, rep: str, action: str) -> tuple[int, str]:
+    """Comandos que o agente roda para instalar/desinstalar o Claude Code, transmitindo o log."""
     if platform == "windows":
-        # o instalador é POR USUÁRIO. Como o usuário logado (run_as=2): instala e transmite o log.
-        # Como SYSTEM (ninguém logado): agenda no RunOnce para o próximo logon.
         runonce = ('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v UABClaudeCode '
                    '/t REG_SZ /d "powershell -NoProfile -ExecutionPolicy Bypass -Command \\"try { irm '
                    'https://claude.ai/install.ps1 | iex } catch {}\\"" /f')
-        ps = (
-            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\n"
-            f"$R='{rep}'\n"
-            "function Tail($p){ try { $t=Get-Content -Raw -ErrorAction SilentlyContinue $p; if($t -and $t.Length -gt 6000){ $t=$t.Substring($t.Length-6000) }; return $t } catch { return '' } }\n"
-            "function Send($st,$txt){ try { Invoke-RestMethod -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
-            "if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18') {\n"
+        head = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\n"
+                f"$R='{rep}'\n"
+                "function Tail($p){ try { $t=Get-Content -Raw -ErrorAction SilentlyContinue $p; if($t -and $t.Length -gt 6000){ $t=$t.Substring($t.Length-6000) }; return $t } catch { return '' } }\n"
+                "function Send($st,$txt){ try { Invoke-RestMethod -Method Post -Uri \"$R&state=$st\" -Body ([string]$txt) -ContentType 'text/plain; charset=utf-8' | Out-Null } catch {} }\n"
+                "$sys = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18'\n")
+        if action == "uninstall":
+            ps = head + (
+                "if ($sys) {\n"
+                "  reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce\" /v UABClaudeCode /f 2>$null | Out-Null\n"
+                "  Send 'removido' 'Instalacao agendada cancelada. Se o Claude Code ja estava instalado, abra a sessao do usuario e desinstale de novo.'\n"
+                "} else {\n"
+                "  try { Remove-Item -Recurse -Force \"$HOME\\.claude\" -ErrorAction SilentlyContinue; "
+                "Remove-Item -Force \"$HOME\\.local\\bin\\claude.exe\" -ErrorAction SilentlyContinue; "
+                "Remove-Item -Force \"$HOME\\claude.json\" -ErrorAction SilentlyContinue; "
+                "Send 'removido' 'Claude Code removido.' } catch { Send 'erro' $_.Exception.Message }\n"
+                "}")
+            return 2, ps
+        ps = head + (
+            "if ($sys) {\n"  # ninguém logado: agenda no RunOnce
             "  try { " + runonce + " | Out-Null; Send 'agendado' 'Ninguem logado agora: o Claude Code sera instalado no proximo logon do usuario.' } catch { Send 'erro' 'Falha ao agendar a instalacao.' }\n"
             "} else {\n"
             "  $log=Join-Path $env:TEMP 'uab-claude.log'; $err=\"$log.err\"\n"
@@ -1897,13 +1908,22 @@ def _claude_script(platform: str, rep: str) -> tuple[int, str]:
             "  if ($p.ExitCode -eq 0) { Send 'ok' $out } else { Send 'erro' $out }\n"
             "}")
         return 2, ps
-    # Linux: instala para o usuário principal (UID 1000), não para o root, transmitindo o log.
-    sh = (
+    # Linux: age para o usuário principal (UID 1000), não para o root, transmitindo o log.
+    shead = (
         f"R='{rep}'\n"
         "send(){ printf '%s' \"$2\" | curl -fsS -m 20 -X POST --data-binary @- \"$R&state=$1\" >/dev/null 2>&1; }\n"
         'u="$(getent passwd 1000 | cut -d: -f1)"; [ -n "$u" ] || u=root\n'
         "command -v curl >/dev/null 2>&1 || { apt-get -q update >/dev/null 2>&1; apt-get -q install -y curl >/dev/null 2>&1; }\n"
-        'out="$(mktemp)"\n'
+        'out="$(mktemp)"\n')
+    if action == "uninstall":
+        sh = shead + (
+            "send desinstalando 'Removendo o Claude Code...'\n"
+            "sudo -u \"$u\" -H bash -lc 'rm -rf ~/.local/bin/claude ~/.local/share/claude ~/.claude; rm -f ~/claude.json; echo removido' >\"$out\" 2>&1\n"
+            '[ "$?" = 0 ] && st=removido || st=erro\n'
+            "send \"$st\" \"$(tail -c 4000 \"$out\")\"\n"
+            'rm -f "$out"\n')
+        return 3, sh
+    sh = shead + (
         "send instalando 'Baixando e instalando o Claude Code...'\n"
         "sudo -u \"$u\" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >\"$out\" 2>&1 &\n"
         "pid=$!\n"
@@ -1921,9 +1941,11 @@ def _claude_status(mid: str) -> dict:
     return {"state": r["state"], "log": r["log"], "updated_at": r["updated_at"]} if r else {"state": "idle", "log": ""}
 
 
-@app.post("/api/machines/{mid}/install-claude")
-async def machine_install_claude(mid: str, _: core.User = Depends(admin_user)):
-    """Instala o Claude Code numa máquina já provisionada, pelo agente do Remoto."""
+@app.post("/api/machines/{mid}/claude")
+async def machine_claude(mid: str, action: str = "install", _: core.User = Depends(admin_user)):
+    """Instala ou desinstala o Claude Code numa máquina já provisionada, pelo agente do Remoto."""
+    if action not in ("install", "uninstall"):
+        raise core.Invalid("Ação inválida.")
     m = _get_machine(mid)
     _remoto_ready()
     host = (m["hostname"] or "").strip().lower()
@@ -1935,15 +1957,16 @@ async def machine_install_claude(mid: str, _: core.User = Depends(admin_user)):
         raise core.Invalid("A máquina não está online no Remoto (precisa do agente do Remoto instalado e conectado).")
     platform = _format_platform(dev["os"])
     if platform not in ("linux", "windows"):
-        raise core.Invalid("Sistema não suportado para instalar o Claude Code por aqui.")
+        raise core.Invalid("Sistema não suportado para o Claude Code por aqui.")
     token = secrets.token_urlsafe(24)
     rep = f"{PUBLIC_URL}/api/machines/claude-report?t={token}"
-    ctype, cmds = _claude_script(platform, rep)
+    ctype, cmds = _claude_script(platform, rep, action)
+    start = "instalando" if action == "install" else "desinstalando"
     with core.db() as con:
         con.execute("INSERT INTO claude_jobs (mid, token_hash, state, log, updated_at) VALUES (?,?,?,?,?) "
-                    "ON CONFLICT(mid) DO UPDATE SET token_hash=excluded.token_hash, state='instalando', log='', updated_at=excluded.updated_at",
-                    (mid, core.token_hash(token), "instalando", "", core.now()))
-    run_as = 2 if platform == "windows" else 0  # Windows: como o usuário logado se houver (instala no perfil certo)
+                    "ON CONFLICT(mid) DO UPDATE SET token_hash=excluded.token_hash, state=excluded.state, log='', updated_at=excluded.updated_at",
+                    (mid, core.token_hash(token), start, "", core.now()))
+    run_as = 2 if platform == "windows" else 0  # Windows: como o usuário logado se houver (perfil certo)
     try:
         res = await remoto.run_commands(dev["id"], ctype, cmds, run_as)
     except Exception as exc:  # noqa: BLE001
@@ -1959,7 +1982,7 @@ async def machine_install_claude(mid: str, _: core.User = Depends(admin_user)):
 async def machine_claude_report(request: Request, t: str = "", state: str = ""):
     """A máquina transmite o log e o estado da instalação do Claude Code (token do pedido)."""
     th = core.token_hash(t) if re.fullmatch(r"[A-Za-z0-9_-]{20,64}", t or "") else ""
-    if not th or state not in ("instalando", "ok", "erro", "agendado"):
+    if not th or state not in ("instalando", "desinstalando", "ok", "erro", "agendado", "removido"):
         raise HTTPException(400, "inválido")
     if time.time() - _agent_last.get("claude:" + th, 0) < 1:  # no máximo 1/s por pedido
         raise HTTPException(429, "devagar")

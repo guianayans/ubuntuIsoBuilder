@@ -113,6 +113,7 @@ $rep = [ordered]@{
     build_id          = [string]$conf.build_id
     platform          = 'windows'
     admin_user        = [string]$conf.admin_user
+    claude            = [bool](Test-Path ("$env:SystemDrive\Users\" + [string]$conf.admin_user + "\.local\bin\claude.exe"))
     ssh_auth          = 'key'
     ssh_port          = $ssh_port
     os                = [string]$os.Caption

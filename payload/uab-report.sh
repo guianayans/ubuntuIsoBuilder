@@ -134,6 +134,15 @@ def hw_id():
     return hashlib.sha256(("uab-hw:" + ident).encode()).hexdigest() if ident else ""
 
 
+def claude_installed():
+    """Claude Code presente para o usuário principal (UID 1000)? (~/.local/bin/claude)."""
+    try:
+        import pwd
+        return os.path.exists(os.path.join(pwd.getpwuid(1000).pw_dir, ".local", "bin", "claude"))
+    except Exception:
+        return False
+
+
 load = os.getloadavg()
 
 print(json.dumps({
@@ -142,6 +151,7 @@ print(json.dumps({
     "hostname": socket.gethostname(),
     "build_id": conf.get("UAB_BUILD_ID", ""),
     "admin_user": conf.get("UAB_ADMIN_USER", ""),
+    "claude": claude_installed(),
     "ssh_auth": conf.get("UAB_SSH_AUTH", "key"),
     "ssh_port": ssh_port(),
     "os": osname,
