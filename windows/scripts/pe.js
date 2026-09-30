@@ -327,6 +327,16 @@ var bcd = fso.FileExists(W + ":\\Windows\\System32\\bcdboot.exe") ? W + ":\\Wind
 r = run(bcd + " " + W + ":\\Windows /s " + S + ": /f " + (both ? "ALL" : uefi ? "UEFI" : "BIOS"));
 if (r.code !== 0) fail("O bcdboot falhou ao criar a inicialização (código " + r.code + ").\r\n\r\n" + r.out, true);
 
+// BIOS: garante o código de boot no MBR do disco e no VBR da partição de sistema. O bcdboot
+// grava os ARQUIVOS (bootmgr + BCD), mas ao reaproveitar um disco sem "clean" (modo
+// PRESERVAÇÃO) nem sempre reescreve o bootstrap do MBR/VBR — sem ele o BIOS mostra "Reboot
+// and select proper boot device". O bootsect é idempotente e no UEFI o MBR é irrelevante.
+if (!uefi) {
+    var bsExe = fso.FileExists(W + ":\\Windows\\System32\\bootsect.exe") ? W + ":\\Windows\\System32\\bootsect.exe" : "bootsect.exe";
+    var rbs = run(bsExe + " /nt60 " + S + ": /mbr /force");
+    if (rbs.code !== 0) log("aviso: bootsect /mbr retornou " + rbs.code + " (seguindo assim mesmo): " + rbs.out);
+}
+
 // ------------------------------------------------------------------ 6. respostas + marca
 var pan = W + ":\\Windows\\Panther";
 if (!fso.FolderExists(pan)) fso.CreateFolder(pan);
@@ -337,6 +347,14 @@ if (!fso.FolderExists(ud + "\\logs")) fso.CreateFolder(ud + "\\logs");
 writeText(ud + "\\build-id", UAB.build + "\r\n", false);
 log("pronto: Windows aplicado no disco " + best.index + "; reiniciando");
 try { fso.CopyFile(LOG, ud + "\\logs\\pe.log", true); } catch (e) { }
+// Sem pendrive: a partição da imagem (UABMEDIA) é PRESERVADA e sobrevive ao reboot. Se o PC
+// não ligar, dá para lê-la de um live USB e ver que o pe.js concluiu (log completo aqui).
+if (NOPEN) {
+    try { writeText(media.letter + ":\\uab-done.txt", "pe.js CONCLUIU a instalacao no disco " + best.index +
+        " (" + best.model + ") em " + new Date().toString() + "\r\nfirmware: " + (mode || "desconhecido") +
+        (uefi ? " (GPT/UEFI)" : " (MBR/BIOS)") + "\r\n", false); } catch (e) { }
+    try { fso.CopyFile(LOG, media.letter + ":\\uab-lastrun.log", true); } catch (e) { }
+}
 run("wpeutil reboot");
 WScript.Sleep(60000);
 } catch (uabEx) {
