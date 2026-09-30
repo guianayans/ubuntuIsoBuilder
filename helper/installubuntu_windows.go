@@ -35,10 +35,11 @@ func secureBootOn() bool {
 	return strings.TrimSpace(lastNonEmpty(out)) == "1"
 }
 
-// ubuntuEFICmdline: a mesma linha do kexec (autoinstall + seed em /cdrom/nocloud/ + url= para
-// baixar a ISO do painel), com initrd= para o EFISTUB carregar o initrd da mesma partição.
-func ubuntuEFICmdline(isoURL string) string {
-	return "initrd=\\initrd boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
+// ubuntuCmdline: a mesma linha do kexec (autoinstall + seed em /cdrom/nocloud/ + url= para o
+// casper baixar a ISO do painel). No UEFI/EFISTUB é prefixada com "initrd=\initrd"; no grub4dos
+// o initrd vai numa linha própria (initrd …).
+func ubuntuCmdline(isoURL string) string {
+	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // linuxBootPartition: reaproveita a partição FAT32 "UABLINUX" se já existir; senão encolhe o
@@ -134,22 +135,29 @@ func downloadTo(ctx context.Context, url, dest, what string, p *progress) error 
 }
 
 // osInstallUbuntuLocal instala o Ubuntu neste PC Windows sem pendrive (UEFI/EFISTUB).
-func osInstallUbuntuLocal(a *app, kernelURL, initrdURL, isoURL string, dry bool, p *progress) {
+func osInstallUbuntuLocal(a *app, kernelURL, initrdURL, isoURL, grldrURL, grldrMbrURL string, dry bool, p *progress) {
 	fail := func(msg string) { p.finish("error", msg, "") }
-	step := func(msg string) { p.set("staging", msg, 0) }
-
-	if !uefiFirmware() {
-		fail("Este PC liga em BIOS/Legacy: instalar Ubuntu sem pendrive só funciona em UEFI. Use a opção com pendrive.")
-		return
-	}
-	if secureBootOn() {
-		fail("Secure Boot está ligado: desligue-o na BIOS (Setup) e tente de novo, ou use a opção com pendrive.")
-		return
-	}
 	if osTotalRAMGB() > 0 && osTotalRAMGB() < 4 {
 		fail("Este PC tem menos de 4 GB de RAM: a ISO do Ubuntu é carregada na memória. Use a opção com pendrive.")
 		return
 	}
+	if uefiFirmware() { // UEFI: entrada de boot EFISTUB + BootNext (reversível, boot de uma vez)
+		if secureBootOn() {
+			fail("Secure Boot está ligado: desligue-o na BIOS (Setup) e tente de novo, ou use a opção com pendrive.")
+			return
+		}
+		ubuntuInstallUEFI(kernelURL, initrdURL, isoURL, dry, p)
+		return
+	}
+	// BIOS/Legacy: grub4dos encadeado pelo bootmgr do Windows (bootsequence = boot de uma vez).
+	ubuntuInstallBIOS(kernelURL, initrdURL, isoURL, grldrURL, grldrMbrURL, dry, p)
+}
+
+// ubuntuInstallUEFI: reserva uma partição FAT32, baixa kernel/initrd e cria uma entrada UEFI
+// EFISTUB (com a cmdline) + BootNext. Instala em GPT/UEFI.
+func ubuntuInstallUEFI(kernelURL, initrdURL, isoURL string, dry bool, p *progress) {
+	fail := func(msg string) { p.finish("error", msg, "") }
+	step := func(msg string) { p.set("staging", msg, 0) }
 
 	step("Reservando espaço no disco…")
 	letter, target, err := linuxBootPartition()
@@ -157,7 +165,6 @@ func osInstallUbuntuLocal(a *app, kernelURL, initrdURL, isoURL string, dry bool,
 		fail(err.Error())
 		return
 	}
-
 	if err := downloadTo(context.Background(), kernelURL, letter+`\vmlinuz`, "o instalador do Ubuntu (kernel)", p); err != nil {
 		fail("não consegui baixar o kernel do Ubuntu: " + err.Error())
 		return
@@ -168,7 +175,7 @@ func osInstallUbuntuLocal(a *app, kernelURL, initrdURL, isoURL string, dry bool,
 	}
 
 	step("Configurando a inicialização…")
-	cmdline := ubuntuEFICmdline(isoURL)
+	cmdline := "initrd=\\initrd " + ubuntuCmdline(isoURL)
 	optional := make([]byte, 0, 2*len(cmdline)+2)
 	for _, c := range utf16.Encode([]rune(cmdline + "\x00")) {
 		optional = append(optional, byte(c), byte(c>>8))
@@ -176,26 +183,101 @@ func osInstallUbuntuLocal(a *app, kernelURL, initrdURL, isoURL string, dry bool,
 	lo := efiLoadOptionData(ubuntuBootDesc, target, `\vmlinuz`, optional)
 
 	if dry {
-		plan := "=== ISO Builder: PLANO (modo teste, nada foi reiniciado) ===\r\n" +
+		plan := "=== ISO Builder: PLANO (UEFI, modo teste, nada foi reiniciado) ===\r\n" +
 			"partição de boot: " + letter + " (GPT nº " + fmt.Sprint(target.PartNum) + ")\r\n" +
 			"kernel: " + letter + "\\vmlinuz\r\ninitrd: " + letter + "\\initrd\r\n" +
 			"linha de comando: " + cmdline + "\r\n"
 		_ = os.WriteFile(letter+`\uab-plan.txt`, []byte(plan), 0o644)
-		p.finish("done", "Modo teste: kernel/initrd baixados e a entrada de boot montada (não reiniciei). Plano em "+letter+"\\uab-plan.txt.", "")
+		p.finish("done", "Modo teste (UEFI): kernel/initrd baixados e a entrada de boot montada (não reiniciei). Plano em "+letter+"\\uab-plan.txt.", "")
 		return
 	}
-
-	name, err := armBootNextLO(ubuntuBootDesc, lo)
-	if err != nil {
+	if _, err := armBootNextLO(ubuntuBootDesc, lo); err != nil {
 		fail("a placa-mãe não aceitou a entrada de boot do Ubuntu: " + err.Error())
 		return
 	}
-	_ = name
+	ubuntuReboot(p)
+}
+
+// ubuntuInstallBIOS: baixa o grub4dos (grldr/grldr.mbr) e o kernel/initrd para C:, escreve o
+// menu.lst e cria uma entrada BCD "bootsector" apontando para o grldr.mbr, disparada UMA vez
+// (bootsequence). O MBR não é tocado: se o grldr falhar, o próximo boot volta ao Windows.
+func ubuntuInstallBIOS(kernelURL, initrdURL, isoURL, grldrURL, grldrMbrURL string, dry bool, p *progress) {
+	fail := func(msg string) { p.finish("error", msg, "") }
+	step := func(msg string) { p.set("staging", msg, 0) }
+	ctx := context.Background()
+	sysDrive := os.Getenv("SystemDrive")
+	if sysDrive == "" {
+		sysDrive = "C:"
+	}
+	dir := sysDrive + `\uab-linux`
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fail("não consegui criar a pasta de trabalho: " + err.Error())
+		return
+	}
+
+	step("Baixando o carregador (grub4dos)…")
+	if err := downloadTo(ctx, grldrURL, sysDrive+`\grldr`, "o carregador", p); err != nil {
+		fail("não consegui baixar o grldr (grub4dos) do painel: " + err.Error())
+		return
+	}
+	if err := downloadTo(ctx, grldrMbrURL, sysDrive+`\grldr.mbr`, "o carregador (mbr)", p); err != nil {
+		fail("não consegui baixar o grldr.mbr do painel: " + err.Error())
+		return
+	}
+	if err := downloadTo(ctx, kernelURL, dir+`\vmlinuz`, "o instalador do Ubuntu (kernel)", p); err != nil {
+		fail("não consegui baixar o kernel do Ubuntu: " + err.Error())
+		return
+	}
+	if err := downloadTo(ctx, initrdURL, dir+`\initrd`, "o instalador do Ubuntu (initrd)", p); err != nil {
+		fail("não consegui baixar o initrd do Ubuntu: " + err.Error())
+		return
+	}
+
+	menu := "timeout 3\r\ndefault 0\r\ntitle Instalar Ubuntu (ISO Builder)\r\n" +
+		"find --set-root /uab-linux/vmlinuz\r\n" +
+		"kernel /uab-linux/vmlinuz " + ubuntuCmdline(isoURL) + "\r\n" +
+		"initrd /uab-linux/initrd\r\nboot\r\n"
+	if err := os.WriteFile(sysDrive+`\menu.lst`, []byte(menu), 0o644); err != nil {
+		fail("não consegui gravar o menu.lst: " + err.Error())
+		return
+	}
+
+	if dry {
+		_ = os.WriteFile(dir+`\uab-plan.txt`, []byte("=== ISO Builder: PLANO (BIOS/grub4dos, modo teste) ===\r\n\r\nmenu.lst:\r\n"+menu), 0o644)
+		p.finish("done", "Modo teste (BIOS): grub4dos + kernel/initrd baixados e menu.lst montado (não reiniciei). Plano em "+dir+"\\uab-plan.txt.", "")
+		return
+	}
+
+	step("Configurando a inicialização…")
+	bcd("/export", sysDrive+`\uab-bcd-backup`)
+	out, err := bcd("/create", "/d", "isoBuilder - Instalar Ubuntu", "/application", "bootsector")
+	id := reBCDGUID.FindString(out)
+	if err != nil || id == "" {
+		fail("a inicialização não aceitou a entrada do Ubuntu: " + out)
+		return
+	}
+	for _, c := range [][]string{
+		{"/set", id, "device", "partition=" + sysDrive},
+		{"/set", id, "path", `\grldr.mbr`},
+	} {
+		if o, e := bcd(c...); e != nil {
+			fail("falha ao configurar a inicialização: " + o)
+			return
+		}
+	}
+	if o, e := bcd("/set", "{bootmgr}", "bootsequence", id); e != nil {
+		fail("falha ao marcar o próximo boot: " + o)
+		return
+	}
+	ubuntuReboot(p)
+}
+
+func ubuntuReboot(p *progress) {
 	osBeforeInstallReboot()
 	p.set("rebooting", "Tudo pronto. Reiniciando para instalar o Ubuntu; o computador volta a aparecer no painel quando terminar.", 0)
 	time.Sleep(1500 * time.Millisecond)
 	if err := exec.Command("shutdown.exe", "/r", "/t", "5", "/c", "isoBuilder: reiniciando para instalar o Ubuntu").Run(); err != nil {
-		fail("não consegui reiniciar: " + err.Error())
+		p.finish("error", "não consegui reiniciar: "+err.Error(), "")
 		return
 	}
 	p.finish("done", "Reiniciando para instalar o Ubuntu…", "")

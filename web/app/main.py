@@ -19,6 +19,8 @@ from . import builder, core, panel, remoto, terminalsec, wg, winconfig, winstore
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 HELPER_DIR = os.environ.get("HELPER_DIST", os.path.join(builder.UAB_ROOT, "helper", "dist"))
+# grub4dos (grldr, grldr.mbr): usado para instalar Ubuntu num PC Windows BIOS sem pendrive
+GRUB4DOS_DIR = os.environ.get("GRUB4DOS_DIR", os.path.join(builder.UAB_ROOT, "payload", "grub4dos"))
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://iso.gvtserver.online").rstrip("/")
 # domínio dos e-mails gerados para convidados (vem de PUBLIC_URL)
 # Domínio FIXO dos e-mails das contas temporárias (o admin escolhe só o prefixo).
@@ -1432,6 +1434,26 @@ def token_initrd(token: str):
     r = _t_ubuntu_build(token)
     return FileResponse(_iso_boot_files(r["iso_path"])[1], media_type="application/octet-stream",
                         filename="initrd", headers={"Cache-Control": "no-store"})
+
+
+def _grub4dos(token: str, name: str):
+    """grldr/grldr.mbr do grub4dos para instalar Ubuntu num PC Windows BIOS (sem pendrive)."""
+    _t_ubuntu_build(token)  # valida o link
+    path = os.path.join(GRUB4DOS_DIR, name)
+    if not os.path.exists(path):
+        raise HTTPException(404, "grub4dos não está instalado neste painel (veja README: payload/grub4dos)")
+    return FileResponse(path, media_type="application/octet-stream", filename=name,
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/t/{token}/grldr")
+def token_grldr(token: str):
+    return _grub4dos(token, "grldr")
+
+
+@app.api_route("/t/{token}/grldr.mbr", methods=["GET"])
+def token_grldr_mbr(token: str):
+    return _grub4dos(token, "grldr.mbr")
 
 
 @app.api_route("/t/{token}/config", methods=["GET", "HEAD"])

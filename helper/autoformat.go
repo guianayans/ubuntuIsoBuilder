@@ -61,10 +61,10 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 
 	ctx := context.Background()
 
-	if !a.bundle.isWindows() { // build de Ubuntu num PC Windows: EFISTUB via UEFI (sem pendrive)
+	if !a.bundle.isWindows() { // build de Ubuntu num PC Windows: UEFI (EFISTUB) ou BIOS (grub4dos)
 		b := a.bundle
 		base := strings.TrimRight(b.Server, "/") + "/t/" + b.Token
-		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/iso", dry, p)
+		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/iso", base+"/grldr", base+"/grldr.mbr", dry, p)
 		if st := p.get(); st.Phase == "error" {
 			rep.send("erro", st.Message, nil)
 			return 1

@@ -1680,7 +1680,7 @@ async function formatDialog(dev) {
             <select id="fmtIso">${isos.map(b => `<option value="${esc(b.id)}">${isoOpt(b)}</option>`).join("")}</select></label>`
         : `<div class="note warn">Nenhuma configuração pronta. Gere uma em <b>Nova ISO</b> (Windows ou Ubuntu) primeiro.</div>`}
       <p class="muted small"><b>Windows:</b> usa uma partição reservada (precisa de ~10 GB livres no disco); serve em UEFI e BIOS.<br>
-      <b>Ubuntu:</b> só em PC <b>UEFI</b> com o <b>Secure Boot desligado</b> (carrega o instalador na RAM; ~4 GB de RAM e rede). Se não puder, o instalador avisa e você usa o pendrive.</p>
+      <b>Ubuntu:</b> carrega o instalador na RAM (~4 GB de RAM e rede). Serve em <b>UEFI</b> (instala GPT/UEFI; precisa do <b>Secure Boot desligado</b>) e em <b>BIOS</b> (instala MBR/BIOS, via grub4dos). Se não der, o instalador avisa e você usa o pendrive.</p>
       <label class="switch u-mt8"><input type="checkbox" id="fmtDry"><span><b>Modo teste</b> (não apaga nada): prepara, mostra o plano e volta — para conferir antes de valer.</span></label>`
     : `<p class="small u-mt8">O PC baixa a ISO escolhida direto do painel e reinicia por ela (o instalador roda na memória, sem pendrive e sem ninguém no local). Serve em UEFI e em BIOS antiga.</p>
       ${isos.length
