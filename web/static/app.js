@@ -2273,7 +2273,7 @@ function tabConfig() {
     <div id="merr"></div>
     <div class="row"><button class="btn primary" type="submit">Salvar</button></div></form>
     ${ME.role === "admin" ? `<h3>Ferramentas</h3>
-      <p class="muted small">Instala o <b>Claude Code CLI</b> nesta máquina (caso não tenha sido marcado ao gerar). Precisa do agente do Remoto ativo. ${m.platform === "windows" ? "No Windows, instala no próximo logon do usuário." : "Instala para o usuário principal."}</p>
+      <p class="muted small">Instala o <b>Claude Code CLI</b> nesta máquina (caso não tenha sido marcado ao gerar). Precisa do agente do Remoto ativo. ${m.platform === "windows" ? "No Windows, instala na hora se houver alguém logado; senão, no próximo logon." : "Instala para o usuário principal."}</p>
       <div class="row"><button class="btn" id="claudeBtn">Instalar Claude Code CLI</button></div>
       <div id="claudeStatus" class="small u-mt8"></div>` : ""}
     <h3>Detalhes técnicos</h3>

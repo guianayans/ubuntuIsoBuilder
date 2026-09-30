@@ -1879,14 +1879,21 @@ _claude_jobs: dict[str, dict] = {}
 def _claude_script(platform: str, rep: str) -> tuple[int, str]:
     """Comandos que o agente roda para instalar o Claude Code e avisar o resultado ao painel."""
     if platform == "windows":
-        # o instalador é POR USUÁRIO; o agente roda como SYSTEM. Agenda no RunOnce (próximo logon).
+        # o instalador é POR USUÁRIO. Se o comando rodar como o usuário logado, instala na hora;
+        # se rodar como SYSTEM (ninguém logado), agenda no RunOnce para o próximo logon.
         runonce = ('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" /v UABClaudeCode '
                    '/t REG_SZ /d "powershell -NoProfile -ExecutionPolicy Bypass -Command \\"try { irm '
                    'https://claude.ai/install.ps1 | iex } catch {}\\"" /f')
-        ps = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { "
-              + runonce + " | Out-Null; "
-              f"Invoke-RestMethod -Method Post -Uri '{rep}&state=agendado' | Out-Null "
-              f"}} catch {{ try {{ Invoke-RestMethod -Method Post -Uri '{rep}&state=erro' | Out-Null }} catch {{}} }}")
+        ps = ("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "
+              "$sys = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18'; "
+              "if ($sys) { "  # rodou como SYSTEM: ninguém logado -> agenda
+              "try { " + runonce + " | Out-Null; "
+              f"Invoke-RestMethod -Method Post -Uri '{rep}&state=agendado' | Out-Null }} "
+              f"catch {{ try {{ Invoke-RestMethod -Method Post -Uri '{rep}&state=erro' | Out-Null }} catch {{}} }} "
+              "} else { "  # rodando como o usuário logado: instala agora
+              "try { irm https://claude.ai/install.ps1 | iex; "
+              f"Invoke-RestMethod -Method Post -Uri '{rep}&state=ok' | Out-Null }} "
+              f"catch {{ try {{ Invoke-RestMethod -Method Post -Uri '{rep}&state=erro' | Out-Null }} catch {{}} }} }}")
         return 2, ps
     # Linux: instala para o usuário principal (UID 1000), não para o root.
     sh = (f"R='{rep}'\n"
@@ -1917,8 +1924,9 @@ async def machine_install_claude(mid: str, _: core.User = Depends(admin_user)):
     ctype, cmds = _claude_script(platform, rep)
     _claude_jobs[mid] = {"state": "instalando", "message": "Instalando o Claude Code…",
                          "th": core.token_hash(token), "at": core.now()}
+    run_as = 2 if platform == "windows" else 0  # Windows: como o usuário logado se houver (instala no perfil certo)
     try:
-        res = await remoto.run_commands(dev["id"], ctype, cmds)
+        res = await remoto.run_commands(dev["id"], ctype, cmds, run_as)
     except Exception as exc:  # noqa: BLE001
         res = f"falha ({type(exc).__name__})"
     if res != "OK":
