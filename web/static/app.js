@@ -1628,7 +1628,8 @@ function agentLine(u) {           // estado do PC do cliente numa conta "só dow
 const FMT_ST = {
   enviado: ["running", "preparando o PC"], aguardando: ["running", "esperando o pendrive"],
   encontrado: ["queued", "pendrive conectado"], baixando: ["running", "baixando o instalador"],
-  preparando: ["queued", "preparando a instalação"], reiniciando: ["done", "reiniciando para instalar"],
+  preparando: ["queued", "preparando a instalação"], reiniciando: ["running", "reiniciando para instalar"],
+  instalando: ["running", "instalando no disco"],
   "concluído": ["done", "instalação concluída"],
   erro: ["error", "falhou"], bios: ["error", "BIOS antiga"], expirou: ["", "expirou"], cancelado: ["", "cancelado"],
 };

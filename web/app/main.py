@@ -971,8 +971,11 @@ def download_helper(platform: str, _: core.User = Depends(current_user)):
 # isoBuilder deste painel (hash conferido), fica esperando alguém conectar o pendrive
 # gravado pelo isoBuilder, avisa aqui e reinicia por ele (entrada UEFI própria + BootNext).
 FORMAT_WAIT_H = 24
-# estados "em andamento": usb espera o pendrive; disk baixa o instalador e prepara o kexec
-FORMAT_LIVE = ("enviado", "aguardando", "encontrado", "baixando", "preparando")
+# estados "em andamento": usb espera o pendrive; disk baixa o instalador e prepara o kexec.
+# "reiniciando" e "instalando" também contam como em andamento: sem pendrive, depois do kexec
+# a máquina ainda baixa a ISO e instala (o painel acompanha pelo download da ISO) — assim o
+# card mostra "instalando…" com progresso e não some/vira dispensável antes da máquina voltar.
+FORMAT_LIVE = ("enviado", "aguardando", "encontrado", "baixando", "preparando", "reiniciando", "instalando")
 FORMAT_FROM_PC = {"aguardando", "encontrado", "baixando", "preparando", "reiniciando", "erro", "bios",
                   "expirou", "cancelado"}
 _sha_cache: dict[str, tuple[float, str]] = {}
@@ -1289,14 +1292,56 @@ def format_gravador(token: str, arch: str = "x64"):
         "Content-Length": str(os.path.getsize(base) + len(overlay))})
 
 
+def _format_set_progress(token: str, state: str, message: str | None, percent: int) -> None:
+    """Atualiza o andamento do pedido 'sem pendrive' (não mexe em pedido cancelado/terminado)."""
+    with core.db() as con:
+        if message is None:
+            con.execute("UPDATE format_jobs SET state=?, percent=?, updated_at=? "
+                        "WHERE token_hash=? AND cancel=0 AND state IN " + str(FORMAT_LIVE),
+                        (state, percent, core.now(), core.token_hash(token)))
+        else:
+            con.execute("UPDATE format_jobs SET state=?, message=?, percent=?, updated_at=? "
+                        "WHERE token_hash=? AND cancel=0 AND state IN " + str(FORMAT_LIVE),
+                        (state, message, percent, core.now(), core.token_hash(token)))
+
+
 @app.api_route("/f/{token}/iso", methods=["GET", "HEAD"])
 @app.api_route("/f/{token}/image.iso", methods=["GET", "HEAD"])
-def format_iso(token: str):
+def format_iso(token: str, request: Request):
     """A ISO que o PC baixa para a RAM (kexec com url=) e instala. Só no modo 'sem pendrive'.
-    O caminho .../image.iso termina em .iso: o casper só faz netboot automático com url=*.iso."""
+    O caminho .../image.iso termina em .iso: o casper só faz netboot automático com url=*.iso.
+    O download é acompanhado (o gravador já sumiu após o kexec): enquanto a ISO baixa, o card
+    mostra 'baixando ISO %'; ao terminar de enviar, passa para 'instalando'."""
     b = _format_disk_build(token)
-    return FileResponse(b["iso_path"], media_type="application/octet-stream",
-                        filename=f"{b['hostname']}-autoinstall.iso", headers={"Cache-Control": "no-store"})
+    path, fname = b["iso_path"], f"{b['hostname']}-autoinstall.iso"
+    # HEAD ou download parcial (Range): serve direto, sem acompanhar (o casper baixa a ISO
+    # inteira num GET simples; só nesse caso dá para medir o progresso com segurança).
+    if request.method == "HEAD" or request.headers.get("range"):
+        return FileResponse(path, media_type="application/octet-stream", filename=fname,
+                            headers={"Cache-Control": "no-store"})
+    size = os.path.getsize(path)
+    _format_set_progress(token, "baixando", "Baixando a ISO para a memória (sem pendrive)…", 0)
+
+    def gen():
+        sent, last = 0, 0.0
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                sent += len(chunk)
+                now = time.time()
+                if now - last >= 3:  # no máximo uma atualização a cada 3 s
+                    last = now
+                    _format_set_progress(token, "baixando", None, int(sent * 100 / size) if size else 0)
+                yield chunk
+        # ISO enviada por completo: começa a instalação (sem mais contato até a máquina voltar)
+        _format_set_progress(token, "instalando",
+                             "ISO recebida; instalando no disco. A máquina volta ao painel quando terminar.", 100)
+
+    return StreamingResponse(gen(), media_type="application/octet-stream",
+                             headers={"Content-Length": str(size), "Cache-Control": "no-store",
+                                      "Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @app.get("/f/{token}/kernel")
@@ -1619,7 +1664,7 @@ async def agent_report(request: Request):
             "UPDATE format_jobs SET state='concluído', "
             "message='Instalação concluída: o computador voltou ao painel.', updated_at=? "
             "WHERE cancel=0 AND expires_at>=? "
-            "AND state IN ('enviado','aguardando','encontrado','baixando','preparando','reiniciando') "
+            "AND state IN ('enviado','aguardando','encontrado','baixando','preparando','reiniciando','instalando') "
             "AND (build_id=? OR LOWER(name)=LOWER(?))",
             (now_, now_, b["id"], host))
         moved = _adopt_reinstalled(con, key, b["id"], hw) if hw else False
