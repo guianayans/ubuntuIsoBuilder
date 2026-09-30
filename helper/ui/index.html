@@ -49,12 +49,9 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
 #sAgent{border-color:var(--accent)}
 #sAgent h2{margin:0 0 6px}
 #sAgent .who{font-weight:600}
-#killbtn{position:fixed;top:12px;right:12px;z-index:1000;padding:8px 12px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--muted);font:inherit;font-size:13px;cursor:pointer}
-#killbtn:hover{color:#fff;background:var(--err);border-color:var(--err)}
 </style>
 </head>
 <body>
-<button id="killbtn" title="Encerra o programa gravador nesta máquina">Encerrar gravador</button>
 <main>
   <h1 class="brand"><img src="icon.png" alt="" width="40" height="40">isoBuilder</h1>
   <p class="sub" id="subtitle">Grava a ISO do instalador automático do Ubuntu Server no seu pendrive.</p>
@@ -85,7 +82,7 @@ footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
     <div id="job"></div>
   </section>
 
-  <footer><span id="foot">Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio.</span> <button class="btn" id="quit" style="margin-left:8px">Fechar o isoBuilder</button></footer>
+  <footer><span id="foot">Nenhum dado seu é enviado; o gravador só baixa a ISO do servidor de onde veio.</span> <button class="btn" id="quit" style="margin-left:8px">Encerrar</button></footer>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -122,7 +119,7 @@ function renderStick(){
     : `<div class="warn">${esc(R.note || 'Reinício automático indisponível neste sistema.')}</div>
       <p class="small">Outra forma: desligue, ligue de novo apertando a tecla do menu de boot (F12, F11, F8 ou Esc) e escolha o pendrive.</p>`}
   </section>
-  <footer><button class="btn" id="quit">Fechar</button></footer>`;
+  <footer><button class="btn" id="quit">Encerrar</button></footer>`;
   wireReboot('stickBox');
   document.getElementById('quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder fechado.</h1></main>'; }catch(e){ alert(e.message); } };
 }
@@ -409,19 +406,7 @@ async function selectIso(p){ try{ await api('select',{path:p}); }catch(e){ alert
 async function poll(){ try{ S = await api('state'); render(); }catch(e){} }
 $('#useIso').onclick = () => { const p=$('#isoPath').value.trim().replace(/^"|"$/g,''); if(p) selectIso(p); };
 $('#refresh').onclick = () => { VT = {}; $('#confirmBox').dataset.sig=''; poll(); };
-$('#quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder fechado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }catch(e){ alert(e.message); } };
-// Encerrar gravador (sempre visível): mata o processo do gravador nesta máquina; se estiver
-// ocupado (baixando/gravando), pergunta antes e encerra à força.
-$('#killbtn').onclick = async () => {
-  const done = () => { document.body.innerHTML='<main><h1>Gravador encerrado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; };
-  try { await api('quit',{}); done(); }
-  catch(e){
-    if (confirm('O gravador está ocupado (baixando ou gravando). Encerrar mesmo assim? A operação em andamento será interrompida.')) {
-      try { await api('quit',{force:true}); } catch(e2){}
-      done();
-    }
-  }
-};
+$('#quit').onclick = async () => { try{ await api('quit',{}); document.body.innerHTML='<main><h1>isoBuilder encerrado.</h1><p class="sub">Você já pode fechar esta aba.</p></main>'; }catch(e){ alert(e.message); } };
 poll(); setInterval(()=>{ if(!document.hidden) poll(); }, 1500);
 </script>
 </body>
