@@ -378,6 +378,8 @@ if ($failed.Count) {
 } else {
     Set-UabStatus 'provisioned' ("ok " + (Get-UabNow))
     Log '=== pós-instalação concluída ==='
+    Disable-UabAutoLogon  # tudo instalado: volta a pedir a senha e apaga a senha do registro
+    Log 'login automático desligado; o Windows volta a pedir a senha no próximo boot'
     Disable-ScheduledTask -TaskName 'UAB Provision' -ErrorAction SilentlyContinue | Out-Null
 }
 & $UabPS -NoProfile -ExecutionPolicy Bypass -File (Join-Path $UabRoot 'report.ps1') 2>$null | Out-Null

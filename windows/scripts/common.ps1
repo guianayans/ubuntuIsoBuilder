@@ -58,6 +58,17 @@ function Save-UabStatus($st) {
     Write-UabFileAtomic $UabStatusFile (ConvertTo-Json -InputObject $out -Depth 5)
 }
 
+function Disable-UabAutoLogon {
+    # O login automático (AutoLogon do unattend) serve só para o OOBE finalizar sozinho, sem
+    # ninguém logar. Depois de tudo instalado, desligamos: o Windows volta a pedir a senha e a
+    # senha em texto claro que o unattend deixa no registro é removida.
+    $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    try { Set-ItemProperty -Path $k -Name AutoAdminLogon -Value '0' -Force -ErrorAction SilentlyContinue } catch { }
+    foreach ($n in 'DefaultPassword', 'AutoLogonCount', 'DefaultPasswordExpiration') {
+        try { Remove-ItemProperty -Path $k -Name $n -Force -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
 function Set-UabStatus([string]$Key, $Value) {
     $st = Get-UabStatus
     $st[$Key] = $Value
