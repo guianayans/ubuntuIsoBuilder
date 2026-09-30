@@ -65,9 +65,14 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 		b := a.bundle
 		base := strings.TrimRight(b.Server, "/") + "/t/" + b.Token
 		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/iso", base+"/grldr", base+"/grldr.mbr", dry, p)
-		if st := p.get(); st.Phase == "error" {
+		st := p.get()
+		if st.Phase == "error" {
 			rep.send("erro", st.Message, nil)
 			return 1
+		}
+		if dry { // modo teste: usa a mensagem do próprio motor (…não reiniciei; plano em …)
+			rep.send("reiniciando", st.Message, nil)
+			return 0
 		}
 		rep.send("reiniciando", "Tudo pronto. Reiniciando para instalar o Ubuntu; o computador volta a aparecer no painel quando terminar.", nil)
 		return 0
@@ -101,9 +106,14 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 
 	// instala no disco (o osInstallLocal reinicia sozinho no fim; em dry, escreve o plano e volta)
 	osInstallLocal(a, path, "", a.unattendPath, dry, p)
-	if st := p.get(); st.Phase == "error" {
+	st := p.get()
+	if st.Phase == "error" {
 		rep.send("erro", st.Message, nil)
 		return 1
+	}
+	if dry { // modo teste: mensagem do próprio motor
+		rep.send("reiniciando", st.Message, nil)
+		return 0
 	}
 	rep.send("reiniciando", "Tudo pronto. Reiniciando para instalar o Windows; o computador volta a aparecer no painel quando terminar.", nil)
 	return 0
