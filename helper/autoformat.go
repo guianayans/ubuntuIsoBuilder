@@ -85,15 +85,22 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 		return 1
 	}
 	w := a.bundle.Windows
-	path, sum, err := downloadWindowsISO(ctx, w, p)
-	if err != nil && a.bundle.WinFallback != "" {
-		p.set("downloading", "A Microsoft recusou; baixando a ISO de reserva do painel…", 0)
-		if fp, fs, ferr := downloadWinFallback(ctx, a.bundle, p); ferr == nil {
-			path, sum, err = fp, fs, nil
+	// Prefere a RESERVA do painel quando existe (controlada e sem depender da Microsoft); só
+	// baixa da Microsoft se não houver reserva — ou se a reserva falhar.
+	var path, sum string
+	var err error
+	if a.bundle.WinFallback != "" {
+		p.set("downloading", "Baixando a ISO de reserva do painel…", 0)
+		path, sum, err = downloadWinFallback(ctx, a.bundle, p)
+		if err != nil {
+			p.set("downloading", "Reserva indisponível; baixando da Microsoft…", 0)
+			path, sum, err = downloadWindowsISO(ctx, w, p)
 		}
+	} else {
+		path, sum, err = downloadWindowsISO(ctx, w, p)
 	}
 	if err != nil {
-		rep.send("erro", "não consegui baixar o Windows (Microsoft e reserva do painel): "+err.Error(), nil)
+		rep.send("erro", "não consegui baixar o Windows (reserva do painel e Microsoft): "+err.Error(), nil)
 		return 1
 	}
 	info, err := inspectWindowsISO(path, w.Arch, w.Edition, w.Lang)
