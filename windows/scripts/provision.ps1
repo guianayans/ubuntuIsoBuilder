@@ -358,28 +358,24 @@ function Step-Report {
     }
 }
 
-function Remove-UabMedia {
-    # "Sem pendrive" (Windows): a imagem fica numa partição reservada rotulada UABMEDIA, logo
-    # depois do C:. Terminado o provisionamento (Windows já de pé), ela não é mais necessária:
-    # apaga a partição e estende o C: no espaço liberado. No modo pendrive a partição não existe
-    # (no-op). Idempotente: na 2ª vez não acha UABMEDIA e não faz nada.
+function Hide-UabMedia {
+    # "Sem pendrive" (Windows): a imagem fica numa partição reservada rotulada UABMEDIA.
+    # Terminado o provisionamento, MANTEMOS a partição (para poder reformatar sem pendrive à
+    # distância de novo — o gravador a reaproveita) e só REMOVEMOS a letra de unidade, para o
+    # cliente não vê-la no Explorer. No modo pendrive a partição não existe (no-op). Idempotente.
     try {
         $part = Get-Partition -ErrorAction Stop | Where-Object {
             ($_ | Get-Volume -ErrorAction SilentlyContinue).FileSystemLabel -eq 'UABMEDIA'
         } | Select-Object -First 1
         if (-not $part) { return }
-        Log "limpando a partição UABMEDIA (disco $($part.DiskNumber), part. $($part.PartitionNumber))…"
-        Remove-Partition -DiskNumber $part.DiskNumber -PartitionNumber $part.PartitionNumber -Confirm:$false -ErrorAction Stop
-        $sys = ($env:SystemDrive).TrimEnd(':')  # normalmente C
-        $max = (Get-PartitionSupportedSize -DriveLetter $sys -ErrorAction Stop).SizeMax
-        $cur = (Get-Partition -DriveLetter $sys -ErrorAction Stop).Size
-        if ($max -gt $cur + 100MB) {  # só estende se liberou espaço adjacente (UABMEDIA fica após o C:)
-            Resize-Partition -DriveLetter $sys -Size $max -ErrorAction Stop
-            Log "UABMEDIA removida; ${sys}: estendido para $([math]::Round($max/1GB,1)) GB"
+        if ($part.DriveLetter) {
+            Remove-PartitionAccessPath -DiskNumber $part.DiskNumber -PartitionNumber $part.PartitionNumber `
+                -AccessPath ("$($part.DriveLetter):\") -ErrorAction Stop
+            Log "UABMEDIA mantida para reinstalação sem pendrive; letra de unidade removida (oculta ao cliente)"
         } else {
-            Log 'UABMEDIA removida (espaço não adjacente ao C:; não estendi)'
+            Log 'UABMEDIA mantida; já estava sem letra de unidade'
         }
-    } catch { Log "limpeza da UABMEDIA falhou (segue normal): $($_.Exception.Message)" }
+    } catch { Log "ocultar a UABMEDIA falhou (segue normal): $($_.Exception.Message)" }
 }
 
 # ---------------------------------------------------------------- execução
@@ -413,7 +409,7 @@ if ($failed.Count) {
 } else {
     Set-UabStatus 'provisioned' ("ok " + (Get-UabNow))
     Log '=== pós-instalação concluída ==='
-    Remove-UabMedia  # "sem pendrive": apaga a partição UABMEDIA da imagem e estende o C:
+    Hide-UabMedia  # "sem pendrive": mantém a partição da imagem (reinstalação futura) e só tira a letra
     Disable-UabAutoLogon  # tudo instalado: volta a pedir a senha e apaga a senha do registro
     Log 'login automático desligado; o Windows volta a pedir a senha no próximo boot'
     Disable-ScheduledTask -TaskName 'UAB Provision' -ErrorAction SilentlyContinue | Out-Null

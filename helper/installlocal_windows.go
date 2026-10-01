@@ -108,8 +108,14 @@ func dismRun(args ...string) error {
 // mediaPartitionLetter: reaproveita a partição UABMEDIA se já existe; senão encolhe o maior
 // volume fixo e cria uma nova (NTFS, rótulo UABMEDIA) com espaço para a imagem. Devolve "P:".
 func mediaPartitionLetter(needBytes int64) (string, error) {
-	if l, _ := psOut("(Get-Volume -FileSystemLabel '" + mediaLabel + "' -ErrorAction SilentlyContinue).DriveLetter"); len(strings.TrimSpace(l)) == 1 {
-		return strings.TrimSpace(l) + ":", nil // já existe: reusa
+	// Reaproveita a UABMEDIA se já existir — inclusive SEM letra de unidade (a pós-instalação
+	// remove a letra mas mantém a partição, para reformatar sem pendrive à distância de novo):
+	// acha pela etiqueta e, se estiver sem letra, atribui uma na hora.
+	reuse := "$p = Get-Partition | ? { ($_ | Get-Volume -EA SilentlyContinue).FileSystemLabel -eq '" + mediaLabel + "' } | select -First 1; " +
+		"if ($p) { if (-not $p.DriveLetter) { $p | Add-PartitionAccessPath -AssignDriveLetter -EA SilentlyContinue | Out-Null; " +
+		"$p = Get-Partition -DiskNumber $p.DiskNumber -PartitionNumber $p.PartitionNumber }; $p.DriveLetter }"
+	if l, _ := psOut(reuse); len(lastNonEmpty(l)) == 1 {
+		return lastNonEmpty(l) + ":", nil // já existe: reusa (com letra atribuída se preciso)
 	}
 	needMB := needBytes/(1<<20) + 1536 // imagem + folga
 	sd := strings.TrimSuffix(os.Getenv("SystemDrive"), ":")
