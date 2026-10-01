@@ -330,11 +330,14 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 		}
 	}
 
-	// 5. entradas de boot (ramdisk do WinPE pequeno em C:), modeladas na entrada do WinRE
+	// 5. entradas de boot (ramdisk do WinPE pequeno em C:), modeladas na entrada do WinRE.
+	// bootsequence vai SEMPRE no {bootmgr} (Windows Boot Manager): a nossa entrada é um osloader
+	// do BCD, e é assim que o WinRE faz o boot único — em BIOS e em UEFI. O {fwbootmgr} (UEFI)
+	// só aceita entradas de firmware (NVRAM), não um osloader → dava "Elemento não encontrado".
 	step("Configurando a inicialização…")
-	winload, mgr := `\windows\system32\winload.efi`, "{fwbootmgr}"
+	winload, mgr := `\windows\system32\winload.efi`, "{bootmgr}"
 	if !uefiFirmware() {
-		winload, mgr = `\windows\system32\winload.exe`, "{bootmgr}"
+		winload = `\windows\system32\winload.exe`
 	}
 	ramdisk := "ramdisk=[" + sysDrive + `]\uab-reinstall\sources\boot.wim,`
 	if fake {
