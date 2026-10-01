@@ -2066,8 +2066,8 @@ async def machine_claude(mid: str, action: str = "install", _: core.User = Depen
     if not dev:
         raise core.Invalid("A máquina não está online no Remoto (precisa do agente do Remoto instalado e conectado).")
     platform = _format_platform(dev["os"])
-    if platform not in ("linux", "windows"):
-        raise core.Invalid("Sistema não suportado para o Claude Code por aqui.")
+    if platform != "linux":  # Claude Code pelo painel só no Linux (no Windows era instável)
+        raise core.Invalid("Instalar o Claude Code pelo painel só está disponível no Linux.")
     token = secrets.token_urlsafe(24)
     rep = f"{PUBLIC_URL}/api/claude-report?t={token}"
     ctype, cmds = _claude_script(platform, rep, action)

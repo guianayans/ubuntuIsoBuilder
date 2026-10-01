@@ -537,7 +537,6 @@ function stepHTML() {
       return `<h2>Programas</h2>
       <p class="muted">Marque o que instalar. Tudo vem do <b>winget</b> (fontes oficiais), sozinho, depois da instalação do Windows e com internet; um programa que falhar não trava os outros.</p>
       ${winCatalog()}
-      ${toggle("win_claude", "Claude Code (terminal)", "Instala o Claude Code no primeiro logon (script oficial da Anthropic), para o usuário criado. Depois é só rodar <code>claude</code> no PowerShell.")}
       <details class="u-mt12" ${W.win_apps.split(/\s+/).some(i => i && !WINCAT.apps.some(a => a.id === i)) ? "open" : ""}><summary>Avançado: outros programas (ID do winget)</summary>
         ${field("win_apps", "IDs do winget (separados por espaço)", 'placeholder="ex.: Mozilla.Firefox Notepad++.Notepad++" autocapitalize="off" spellcheck="false"', "Marcar acima escreve aqui. Procure IDs com <code>winget search nome</code> ou em winget.run.")}</details>`;
     }
@@ -553,7 +552,7 @@ function stepHTML() {
         <tr><th>Disco</th><td>maior disco interno (nunca USB)</td></tr>
         <tr><th>Acesso</th><td>${[W.panel_access ? "terminal pelo painel (OpenSSH)" : "", W.win_ssh ? "SSH (" + (W.win_ssh_auth === "password" ? "usuário e senha" : "chave") + ")" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "",
           W.wireguard && FEATURES.wireguard ? "WireGuard pelo seu servidor" : "", W.win_tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" · ") || "só aparece em Máquinas"}</td></tr>
-        <tr><th>Programas</th><td>${[names.length ? esc(names.join(", ")) : "", W.win_claude ? "Claude Code" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
+        <tr><th>Programas</th><td>${(names.length ? esc(names.join(", ")) : "") || "nenhum"}</td></tr>
       </table></div>
       <div class="note u-mt16">O painel gera só a <b>configuração</b> (alguns KB). O gravador isoBuilder baixa o Windows 11 oficial direto da Microsoft no computador de quem grava o pendrive e aplica esta configuração.</div>
       ${deliverHTML("instalação")}
@@ -2287,8 +2286,8 @@ function tabConfig() {
     </div>
     <div id="merr"></div>
     <div class="row"><button class="btn primary" type="submit">Salvar</button></div></form>
-    ${ME.role === "admin" ? `<h3>Ferramentas</h3>
-      <p class="muted small">${(m.report && m.report.claude) ? "O <b>Claude Code CLI</b> está instalado nesta máquina." : "Instalar o <b>Claude Code CLI</b> nesta máquina (caso não tenha sido marcado ao gerar)."} Precisa do agente do Remoto ativo. ${m.platform === "windows" ? "No Windows, age na hora se houver alguém logado; senão, no próximo logon." : "Age para o usuário principal."}</p>
+    ${(ME.role === "admin" && m.platform !== "windows") ? `<h3>Ferramentas</h3>
+      <p class="muted small">${(m.report && m.report.claude) ? "O <b>Claude Code CLI</b> está instalado nesta máquina." : "Instalar o <b>Claude Code CLI</b> nesta máquina (caso não tenha sido marcado ao gerar)."} Precisa do agente do Remoto ativo. Age para o usuário principal.</p>
       <div class="row">${(m.report && m.report.claude)
         ? `<button class="btn danger" id="claudeBtn">Desinstalar Claude Code CLI</button>`
         : `<button class="btn" id="claudeBtn" style="background:var(--ok);border-color:var(--ok);color:#fff">Instalar Claude Code CLI</button>`}</div>
