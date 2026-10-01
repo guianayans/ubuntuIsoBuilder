@@ -394,28 +394,26 @@ func (a *app) startWindowsFetch(p *progress) {
 			return
 		}
 		w := a.bundle.Windows
-		// Prefere a ISO de RESERVA do painel quando existe: é a que o admin curou e não depende
-		// da Microsoft (lenta e que às vezes bloqueia). Só baixa da Microsoft se não houver
-		// reserva — ou se a reserva falhar.
-		var path, sum string
-		var err error
-		if a.bundle.WinFallback != "" {
-			p.set("downloading", "Baixando a ISO de reserva do painel…", 0)
-			path, sum, err = downloadWinFallback(ctx, a.bundle, p)
-			if err != nil && ctx.Err() == nil {
-				p.set("downloading", "Reserva indisponível; baixando da Microsoft…", 0)
-				path, sum, err = downloadWindowsISO(ctx, w, p)
-			}
-		} else {
-			path, sum, err = downloadWindowsISO(ctx, w, p)
-		}
+		path, sum, err := downloadWindowsISO(ctx, w, p)
 		if err != nil {
 			if ctx.Err() != nil {
-				p.finish("cancelled", "Download interrompido: usando a ISO escolhida.", "")
+				p.finish("cancelled", "Download da Microsoft interrompido: usando a ISO escolhida.", "")
 				return
 			}
-			p.finish("error", "Não foi possível baixar o Windows (reserva do painel e Microsoft): "+err.Error()+
-				". Você pode usar uma ISO do Windows 11 (pt-BR, x64) que já tenha baixado, ou pedir ao administrador para atualizar a reserva no painel.", "")
+			// A Microsoft recusou: tenta a ISO de reserva guardada no painel.
+			if a.bundle.WinFallback != "" {
+				p.set("downloading", "A Microsoft recusou; baixando a ISO de reserva do painel…", 0)
+				if fp, fs, ferr := downloadWinFallback(ctx, a.bundle, p); ferr == nil {
+					path, sum, err = fp, fs, nil
+				} else if ctx.Err() != nil {
+					p.finish("cancelled", "Download interrompido: usando a ISO escolhida.", "")
+					return
+				}
+			}
+		}
+		if err != nil {
+			p.finish("error", "Não foi possível baixar o Windows da Microsoft: "+err.Error()+
+				". Você pode usar uma ISO do Windows 11 (pt-BR, x64) que já tenha baixado, ou pedir ao administrador para deixar uma ISO de reserva no painel.", "")
 			return
 		}
 		info, err := inspectWindowsISO(path, w.Arch, w.Edition, w.Lang)
