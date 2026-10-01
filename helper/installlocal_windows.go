@@ -112,20 +112,29 @@ func mediaPartitionLetter(needBytes int64) (string, error) {
 		return strings.TrimSpace(l) + ":", nil // já existe: reusa
 	}
 	needMB := needBytes/(1<<20) + 1536 // imagem + folga
-	// encolhe o volume do sistema e cria a partição reservada no espaço liberado
+	sd := strings.TrimSuffix(os.Getenv("SystemDrive"), ":")
+	// Encolhe o volume do sistema e cria a partição reservada no espaço liberado. Antes, desliga
+	// a hibernação (hiberfil.sys costuma travar o encolhimento) — reversível, sem reiniciar.
+	// Se mesmo assim não couber, devolve um erro CLARO (pagefile/restauração seguram o fim do C:).
 	script := strings.Join([]string{
-		"$d = (Get-Partition -DriveLetter " + strings.TrimSuffix(os.Getenv("SystemDrive"), ":") + ").DiskNumber",
-		fmt.Sprintf("$s = Get-PartitionSupportedSize -DriveLetter %s", strings.TrimSuffix(os.Getenv("SystemDrive"), ":")),
-		fmt.Sprintf("$cur = (Get-Partition -DriveLetter %s).Size", strings.TrimSuffix(os.Getenv("SystemDrive"), ":")),
+		"powercfg /h off 2>$null | Out-Null",
+		"$d = (Get-Partition -DriveLetter " + sd + ").DiskNumber",
+		"$s = Get-PartitionSupportedSize -DriveLetter " + sd,
+		"$cur = (Get-Partition -DriveLetter " + sd + ").Size",
 		fmt.Sprintf("$new = $cur - %dMB", needMB),
-		"if ($new -lt $s.SizeMin) { Write-Error 'sem espaco para encolher'; exit 1 }",
-		fmt.Sprintf("Resize-Partition -DriveLetter %s -Size $new", strings.TrimSuffix(os.Getenv("SystemDrive"), ":")),
+		"if ($new -lt $s.SizeMin) { Write-Output ('UABNOSPACE ' + [int](($cur - $s.SizeMin)/1MB)); exit 1 }",
+		"Resize-Partition -DriveLetter " + sd + " -Size $new",
 		"$p = New-Partition -DiskNumber $d -UseMaximumSize",
 		"Format-Volume -Partition $p -FileSystem NTFS -NewFileSystemLabel '" + mediaLabel + "' -Confirm:$false | Out-Null",
 		"$p | Add-PartitionAccessPath -AssignDriveLetter",
 		"(Get-Volume -FileSystemLabel '" + mediaLabel + "').DriveLetter",
 	}, "; ")
 	out, err := psOut(script)
+	if strings.Contains(out, "UABNOSPACE") {
+		free := strings.TrimSpace(strings.TrimPrefix(lastNonEmpty(out), "UABNOSPACE"))
+		return "", fmt.Errorf("o %s: não tem espaço livre para reservar a partição da imagem (~%d MB): só dá para encolher %s MB. "+
+			"Libere espaço no Windows (desligar o arquivo de paginação e a restauração do sistema e reiniciar) ou use a opção com pendrive", sd, needMB, free)
+	}
 	letter := strings.TrimSpace(lastNonEmpty(out))
 	if err != nil || len(letter) != 1 {
 		return "", fmt.Errorf("não consegui reservar a partição: %s", out)
