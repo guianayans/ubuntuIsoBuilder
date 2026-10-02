@@ -32,6 +32,10 @@ output/*
 *.img
 *.fd
 
+# ---- Anotações locais do trabalho (NÃO versionar)
+DIARIO.md
+CLAUDE.md
+
 # ---- Diversos
 *.log
 *.tmp
