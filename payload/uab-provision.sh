@@ -899,6 +899,7 @@ update_issue() {
                           █████████████████                         
                               ████████                              
 UAB_SHIELD
+    printf '\n'  # espaço vertical entre o escudo e os textos
     printf '                       T E R M I N A L  S E C\n'
     printf '                    Seu servidor esta protegido.\n'
     printf '\033[0m\n'  # volta a cor padrao para as linhas de status
