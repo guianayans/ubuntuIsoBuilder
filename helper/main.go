@@ -831,7 +831,6 @@ func main() {
 	bootReport := flag.String("report", "", "com --boot-usb/--install-disk: endereço do painel para avisar o andamento")
 	// usados pelo painel (reserva de ISO do Windows no servidor)
 	inspectWin := flag.Bool("inspect-windows", false, "confere uma ISO do Windows e imprime JSON")
-	inspectISO := flag.Bool("inspect-iso", false, "lista as edições de uma ISO do Windows (qualquer versão: 7/8/10/11) em JSON")
 	fetchWin := flag.Bool("fetch-windows", false, "baixa a ISO do Windows da Microsoft para --out")
 	winLang := flag.String("win-lang", "pt-BR", "idioma do Windows")
 	winArch := flag.String("win-arch", "x64", "arquitetura do Windows")
@@ -847,15 +846,6 @@ func main() {
 	}
 	if *inspectWin {
 		runInspectWindows(*iso, *winArch, *winEdition, *winLang)
-		return
-	}
-	if *inspectISO {
-		info, err := inspectWindowsISOList(*iso)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		_ = json.NewEncoder(os.Stdout).Encode(info)
 		return
 	}
 	if *fetchWin {
