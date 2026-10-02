@@ -16,7 +16,7 @@ import (
 )
 
 func TestKexecCmdlineMatchesUSB(t *testing.T) {
-	c := kexecCmdline("https://iso.exemplo.com/f/tok/iso", false)
+	c := kexecCmdline("https://iso.exemplo.com/f/tok/iso")
 	// mesma seed embutida do pendrive + url= e ip=dhcp
 	for _, want := range []string{"autoinstall", "ds=nocloud;s=/cdrom/nocloud/", "url=https://iso.exemplo.com/f/tok/iso", "ip=dhcp", "boot=casper"} {
 		if !strings.Contains(c, want) {
@@ -25,14 +25,6 @@ func TestKexecCmdlineMatchesUSB(t *testing.T) {
 	}
 	if !strings.HasSuffix(c, "---") {
 		t.Fatalf("cmdline não termina em ---: %s", c)
-	}
-	if strings.Contains(c, "toram") {
-		t.Fatalf("toram=false não deveria incluir toram: %s", c)
-	}
-	// com toram: a flag aparece e a linha continua terminando em ---
-	ct := kexecCmdline("https://iso.exemplo.com/f/tok/iso", true)
-	if !strings.Contains(ct, " toram ") || !strings.HasSuffix(ct, "---") {
-		t.Fatalf("toram=true deveria incluir ' toram ' e terminar em ---: %s", ct)
 	}
 }
 
