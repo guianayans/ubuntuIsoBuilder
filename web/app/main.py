@@ -1902,8 +1902,26 @@ def list_machines(u: core.User = Depends(current_user)):
     tsec = terminalsec.agents_status()  # {} se não configurado/indisponível (cache de 30 s)
     for m in ms:
         m["terminalsec"] = tsec.get(m.get("hostname") or "")
-    return {"machines": ms, "panel": panel.ts_status() if u.is_admin else None,
-            "hub": wg.hub_status() if wg.enabled() else None}
+    out = {"machines": ms, "panel": panel.ts_status() if u.is_admin else None,
+           "hub": wg.hub_status() if wg.enabled() else None}
+    if u.is_admin:  # máquinas "esquecidas de vez" (relatórios recusados) — para trazer de volta
+        with core.db() as con:
+            out["forgotten"] = [dict(r) for r in con.execute(
+                "SELECT id, hostname, build_id, forgotten_at FROM forgotten_machines ORDER BY forgotten_at DESC")]
+    return out
+
+
+@app.post("/api/admin/forgotten/{fid}/restore")
+def restore_forgotten(fid: str, _: core.User = Depends(admin_user)):
+    """Tira uma máquina da lista de 'esquecidas de vez': o painel volta a aceitar os relatórios
+    dela, e ela reaparece sozinha no próximo relatório (no boot ou em até ~10 min)."""
+    if not re.fullmatch(r"[0-9a-f]{16}", fid or ""):
+        raise core.Invalid("Identificador inválido.")
+    with core.db() as con:
+        n = con.execute("DELETE FROM forgotten_machines WHERE id=?", (fid,)).rowcount
+    if not n:
+        raise core.Invalid("Essa máquina não está na lista de esquecidas.")
+    return {"ok": True}
 
 
 @app.get("/api/machines/{mid}")

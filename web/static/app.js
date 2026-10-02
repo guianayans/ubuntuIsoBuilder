@@ -1523,15 +1523,24 @@ async function loadMachines() {
         <td class="small nowrap" data-label="Arquivada">${fmtDate(m.archived_at)}</td>
         <td class="small" data-label="Visto">${m.online ? `<span class="ok">ligada agora</span>` : fmtAgo(m.last_seen)}</td>
         <td class="rt-actions"><div class="row"><button class="btn sm" data-restore="${m.id}">Restaurar</button>
-          ${kebab(`<button class="danger" data-forget="${m.id}">Esquecer de vez</button>`)}</div></td></tr>`).join("")}</table></div></details>` : "");
+          ${kebab(`<button class="danger" data-forget="${m.id}">Esquecer de vez</button>`)}</div></td></tr>`).join("")}</table></div></details>` : "")
+    + (d.forgotten && d.forgotten.length ? `<details class="archived" id="fgtBox" ${FGT_OPEN ? "open" : ""}><summary>Esquecidas (${d.forgotten.length})</summary>
+      <p class="muted small">Removidas "de vez": o painel ignora os relatórios delas. <b>Trazer de volta</b> faz a máquina reaparecer sozinha no próximo relatório (no boot ou em até ~10 min). Nome, anotações e acessos antigos não voltam.</p>
+      <div class="table-wrap"><table class="rtable"><tr><th>Servidor</th><th>Esquecida</th><th></th></tr>
+      ${d.forgotten.map(f => `<tr><td class="rt-title"><div class="mname"><div><b>${esc(f.hostname || "(sem nome)")}</b></div></div></td>
+        <td class="small nowrap" data-label="Esquecida">${fmtDate(f.forgotten_at)}</td>
+        <td class="rt-actions"><button class="btn sm" data-unforget="${esc(f.id)}">Trazer de volta</button></td></tr>`).join("")}</table></div></details>` : "");
   $$("#ml [data-m]").forEach(tr => tr.onclick = e => { if (!e.target.closest(".rt-actions")) openMachine(tr.dataset.m); });
   $$("#ml [data-open]").forEach(b => b.onclick = () => openMachine(b.dataset.open));
   $$("#ml [data-fmt]").forEach(b => b.onclick = () => formatDialog(b.dataset.fmt));
   const ab = $("#archBox"); if (ab) ab.ontoggle = () => { ARCH_OPEN = ab.open; };
+  const fb = $("#fgtBox"); if (fb) fb.ontoggle = () => { FGT_OPEN = fb.open; };
   $$("#ml [data-restore]").forEach(b => b.onclick = () => machineAction(b.dataset.restore, "restore"));
   $$("#ml [data-forget]").forEach(b => b.onclick = () => machineAction(b.dataset.forget, "forget"));
+  $$("#ml [data-unforget]").forEach(b => b.onclick = () => unforgetMachine(b.dataset.unforget));
 }
 let ARCH_OPEN = false;
+let FGT_OPEN = false;
 
 // Arquivar / restaurar / esquecer de vez (lista e janela da máquina)
 async function machineAction(id, action) {
@@ -1545,6 +1554,16 @@ async function machineAction(id, action) {
     else await api(`/api/machines/${id}/${action}`, { method: "POST" });
     toast({ archive: "Máquina arquivada.", restore: "Máquina restaurada: terminal, VPN e sócios voltaram.", forget: "Máquina esquecida." }[action]);
     if ($("#ovl")) closeOverlay();
+    loadMachines();
+  } catch (e) { toast(e.message); }
+}
+
+// "Trazer de volta" uma máquina esquecida de vez: o painel volta a aceitar os relatórios dela.
+async function unforgetMachine(id) {
+  if (!confirm("Trazer esta máquina de volta?\n\nO painel volta a aceitar os relatórios dela e ela reaparece sozinha no próximo relatório (no boot ou em até ~10 min). Nome, anotações e acessos antigos não voltam.")) return;
+  try {
+    await api(`/api/admin/forgotten/${id}/restore`, { method: "POST" });
+    toast("Pronto! A máquina reaparece no próximo relatório (no boot ou em até ~10 min).");
     loadMachines();
   } catch (e) { toast(e.message); }
 }
