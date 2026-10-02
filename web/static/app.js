@@ -1500,7 +1500,7 @@ async function loadMachines() {
     ? `<div class="note ok">Terminal no navegador pelo <b>WireGuard do seu servidor</b>${d.panel.state === "Running" ? " e pelo Tailscale" : ""}. Máquinas com o túnel conectado abrem direto.</div>`
     : panelBanner(d.panel);
   const active = d.machines.filter(m => !m.archived_at), arch = d.machines.filter(m => m.archived_at);
-  if (!d.machines.length) {
+  if (!d.machines.length && !(d.forgotten && d.forgotten.length)) {
     $("#ml").innerHTML = `<p class="muted">Nenhuma máquina se reportou ainda. As ISOs geradas a partir de agora fazem o servidor aparecer aqui alguns minutos depois do primeiro boot.</p>`;
     return;
   }
@@ -1514,7 +1514,7 @@ async function loadMachines() {
       <td data-label="Provisionamento">${m.provisioned.startsWith("ok") ? `<span class="pill done">concluído</span>` : `<span class="pill running">${esc(m.provisioned || "em andamento")}</span>`}</td>
       <td class="small" data-label="Visto">${fmtAgo(m.last_seen)}</td>
       <td class="rt-actions"><div class="row"><button class="btn sm primary" data-open="${m.id}">Abrir</button>${fmtReady() ? kebab(`<button class="danger" data-fmt="${esc(m.hostname)}">Formatar esta máquina…</button>`) : ""}</div></td></tr>`).join("")}</table></div>`
-    : `<p class="muted">Nenhuma máquina ativa. As arquivadas estão logo abaixo.</p>`)
+    : `<p class="muted">Nenhuma máquina ativa no momento.</p>`)
     + (arch.length ? `<details class="archived" id="archBox" ${ARCH_OPEN ? "open" : ""}><summary>Arquivadas (${arch.length})</summary>
       <p class="muted small">Fora da lista principal. Se ligarem, os relatórios continuam chegando, mas terminal, VPN (túnel pausado) e acesso de sócios ficam bloqueados até restaurar.</p>
       <div class="table-wrap"><table class="rtable"><tr><th></th><th>Servidor</th><th>Arquivada</th><th>Visto</th><th></th></tr>
