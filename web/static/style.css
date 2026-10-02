@@ -108,7 +108,7 @@ th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);verti
 th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
 .table-wrap{overflow-x:auto}
 /* tabelas de lista: conteúdo centralizado na linha (texto, selos e botões na mesma altura) */
-.rtable td{vertical-align:middle}
+.rtable td{vertical-align:middle;overflow-wrap:anywhere}
 .rtable th{vertical-align:bottom}
 .rtable td.rt-actions{width:1%;white-space:nowrap}
 .rtable td.rt-actions .row{flex-wrap:nowrap;justify-content:flex-end;gap:8px}
