@@ -2314,7 +2314,7 @@ function tabConfig() {
         : `<button class="btn" id="claudeBtn" style="background:var(--ok);border-color:var(--ok);color:#fff">Instalar Claude Code CLI</button>`}</div>
       <div id="claudeStatus" class="small u-mt8"></div>
       <pre class="log hidden" id="claudeLog" style="max-height:220px"></pre>
-      <p class="muted small u-mt12">Marca <b>TerminalSec</b> (escudo) no banner do console, em toda tela de login. Aparece na próxima tela de login/boot.</p>
+      <p class="muted small u-mt12">Marca <b>TerminalSec</b> (escudo) no <b>console</b> e no <b>login SSH</b> — aparece ao conectar. Aplica/remove nos dois lugares.</p>
       <div class="row"><button class="btn" id="brandApply">Aplicar marca no console</button><button class="btn" id="brandRemove">Remover marca</button></div>
       <div id="brandStatus" class="small u-mt8"></div>` : ""}
     <h3>Detalhes técnicos</h3>

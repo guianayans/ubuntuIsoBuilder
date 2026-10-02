@@ -2148,7 +2148,7 @@ def _console_brand_payload() -> bytes:
 
 @app.post("/api/machines/{mid}/console-brand")
 async def machine_console_brand(mid: str, action: str = "apply", _: core.User = Depends(admin_user)):
-    """Aplica/remove a marca TerminalSec no banner do console (toda tela de login), pelo agente do
+    """Aplica/remove a marca TerminalSec no console E no login SSH, pelo agente do
     Remoto. Só Linux (o /etc/issue.d é do Linux). Aparece na próxima tela de login/boot."""
     if action not in ("apply", "remove"):
         raise core.Invalid("Ação inválida.")
@@ -2163,13 +2163,21 @@ async def machine_console_brand(mid: str, action: str = "apply", _: core.User = 
         raise core.Invalid("A máquina não está online no Remoto (precisa do agente do Remoto conectado).")
     if _format_platform(dev["os"]) != "linux":
         raise core.Invalid("A marca no console só vale para máquinas Linux.")
-    restart = "systemctl restart getty@tty1 2>/dev/null || true"
+    # recarrega o SSH (aplica o Banner) e o getty do console
+    reload_ssh = "sshd -t 2>/dev/null && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null; } || true"
+    restart_tty = "systemctl restart getty@tty1 2>/dev/null || true"
     if action == "apply":
         b64 = base64.b64encode(_console_brand_payload()).decode()
-        cmd = ("mkdir -p /etc/issue.d; printf %s '" + b64
-               + "' | base64 -d > /etc/issue.d/00-uab-brand.issue; " + restart + "; echo ok")
+        cmd = ("mkdir -p /etc/issue.d; printf %s '" + b64 + "' | base64 -d | "
+               "tee /etc/issue.d/00-uab-brand.issue /etc/ssh/uab-brand.banner >/dev/null; "
+               "if [ -f /etc/ssh/sshd_config ] && ! grep -q '^Banner /etc/ssh/uab-brand.banner' /etc/ssh/sshd_config; then "
+               "sed -i 's|^#*Banner .*|Banner /etc/ssh/uab-brand.banner|' /etc/ssh/sshd_config; "
+               "grep -q '^Banner /etc/ssh/uab-brand.banner' /etc/ssh/sshd_config || echo 'Banner /etc/ssh/uab-brand.banner' >> /etc/ssh/sshd_config; fi; "
+               + reload_ssh + "; " + restart_tty + "; echo ok")
     else:
-        cmd = "rm -f /etc/issue.d/00-uab-brand.issue; " + restart + "; echo ok"
+        cmd = ("rm -f /etc/issue.d/00-uab-brand.issue /etc/ssh/uab-brand.banner; "
+               "if [ -f /etc/ssh/sshd_config ]; then sed -i '\\|^Banner /etc/ssh/uab-brand.banner|d' /etc/ssh/sshd_config; "
+               + reload_ssh + "; fi; " + restart_tty + "; echo ok")
     try:
         res = await remoto.run_commands(dev["id"], 3, cmd, 0)  # ctype 3 = sh (root)
     except Exception as exc:  # noqa: BLE001

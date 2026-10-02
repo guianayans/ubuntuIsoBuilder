@@ -852,14 +852,10 @@ coolify_install() {
   log "Coolify: http://<ip>:8000 (admin: ${UAB_COOLIFY_EMAIL:-definido no primeiro acesso})"
 }
 
-update_issue() {
-  # Mensagem no console local (útil para quem estiver na frente da máquina).
-  local ip
-  ip="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
-  mkdir -p /etc/issue.d
-  {
-    printf '\033[1;32m\n'  # marca TerminalSec em verde neon (negrito)
-    cat <<'UAB_SHIELD'
+brand_banner() {
+  # Banner da marca TerminalSec (escudo + textos) em verde neon — usado no console e no SSH.
+  printf '\033[1;32m\n'
+  cat <<'UAB_SHIELD'
                                ████████                             
                         █████████████████████                       
                    ██████████████████ ████████████                  
@@ -899,10 +895,31 @@ update_issue() {
                           █████████████████                         
                               ████████                              
 UAB_SHIELD
-    printf '\n'  # espaço vertical entre o escudo e os textos
-    printf '                       T E R M I N A L  S E C\n'
-    printf '                    Seu servidor esta protegido.\n'
-    printf '\033[0m\n'  # volta a cor padrao para as linhas de status
+  printf '\n'
+  printf '                       T E R M I N A L  S E C\n'
+  printf '                    Seu servidor esta protegido.\n'
+  printf '\033[0m\n'
+}
+
+install_brand() {
+  # Marca no console (/etc/issue.d) e no login SSH (Banner). Idempotente.
+  mkdir -p /etc/issue.d
+  brand_banner > /etc/issue.d/00-uab-brand.issue
+  brand_banner > /etc/ssh/uab-brand.banner 2>/dev/null || true
+  if [ -f /etc/ssh/sshd_config ] && ! grep -q '^Banner /etc/ssh/uab-brand.banner' /etc/ssh/sshd_config; then
+    sed -i 's|^#*Banner .*|Banner /etc/ssh/uab-brand.banner|' /etc/ssh/sshd_config
+    grep -q '^Banner /etc/ssh/uab-brand.banner' /etc/ssh/sshd_config || printf 'Banner /etc/ssh/uab-brand.banner\n' >> /etc/ssh/sshd_config
+    sshd -t 2>/dev/null && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
+  fi
+}
+
+update_issue() {
+  # Status do provisionamento no console (o escudo vem de 00-uab-brand.issue, via install_brand).
+  local ip
+  ip="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+  install_brand
+  mkdir -p /etc/issue.d
+  {
     echo "ubuntu-autoinstall-builder: $UAB_HOSTNAME"
     echo "IP local: \\4"
     [ -n "$ip" ] && echo "Tailscale: $ip"
@@ -910,7 +927,6 @@ UAB_SHIELD
     echo
   } >/etc/issue.d/uab.issue
 }
-
 # ------------------------------------------------------------------ execução
 if grep -q '^provisioned=ok' "$STATE/status" 2>/dev/null; then
   update_issue
