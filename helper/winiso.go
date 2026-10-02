@@ -49,6 +49,98 @@ func inspectWindowsISO(isoPath, arch, edition, lang string) (*winISOInfo, error)
 	return inspectUDF(u, arch, edition, lang)
 }
 
+// winVersionFromBuild: nome comercial do Windows pelo número de build do install.wim.
+func winVersionFromBuild(b int) string {
+	switch {
+	case b >= 22000:
+		return "11"
+	case b >= 10240:
+		return "10"
+	case b >= 9600:
+		return "8.1"
+	case b >= 9200:
+		return "8"
+	case b >= 7600:
+		return "7"
+	default:
+		return ""
+	}
+}
+
+// inspectWindowsISOList lista TODAS as edições de uma ISO do Windows (qualquer versão: 7/8/10/11),
+// SEM travar por build nem por edição. Base da "biblioteca de ISOs do Windows" do painel: o painel
+// chama isto no upload para saber versão/edições e deixar o admin escolher.
+func inspectWindowsISOList(isoPath string) (map[string]any, error) {
+	f, err := os.Open(isoPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	u, err := OpenUDF(f)
+	if err != nil {
+		return nil, errors.New("esta ISO não é um instalador do Windows (" + err.Error() + ")")
+	}
+	if u.Lookup("sources/boot.wim") == nil {
+		return nil, errors.New("esta ISO não é um instalador do Windows (falta sources/boot.wim)")
+	}
+	var inst *UDFFile
+	for _, n := range []string{"sources/install.wim", "sources/install.esd"} {
+		if inst = u.Lookup(n); inst != nil {
+			break
+		}
+	}
+	if inst == nil {
+		return nil, errors.New("esta ISO não tem sources/install.wim (não é a ISO de instalação do Windows)")
+	}
+	r := u.Open(inst)
+	h, err := readWIMHeader(r)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", inst.Path, err)
+	}
+	xml, err := readWIMXML(r, h)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", inst.Path, err)
+	}
+	imgs := wimImages(xml)
+	if len(imgs) == 0 {
+		return nil, errors.New("não encontrei edições no install.wim")
+	}
+	archName := map[int]string{0: "x86", 9: "x64", 12: "arm64"}
+	maxBuild, lang := 0, ""
+	archSeen := map[string]bool{}
+	eds := make([]map[string]any, 0, len(imgs))
+	for _, im := range imgs {
+		if im.Build > maxBuild {
+			maxBuild = im.Build
+		}
+		if lang == "" {
+			lang = im.Lang
+		}
+		if a := archName[im.Arch]; a != "" {
+			archSeen[a] = true
+		}
+		eds = append(eds, map[string]any{
+			"index": im.Index, "name": im.Name, "edition_id": im.EditionID,
+			"build": im.Build, "lang": im.Lang, "arch": archName[im.Arch],
+		})
+	}
+	archs := make([]string, 0, len(archSeen))
+	for a := range archSeen {
+		archs = append(archs, a)
+	}
+	var total int64
+	for _, fl := range u.Files {
+		if !fl.Dir {
+			total += fl.Size
+		}
+	}
+	return map[string]any{
+		"version": winVersionFromBuild(maxBuild), "build": maxBuild, "lang": lang,
+		"archs": archs, "install": inst.Path, "install_size": inst.Size, "total_bytes": total,
+		"editions": eds,
+	}, nil
+}
+
 func inspectUDF(u *UDF, arch, edition, lang string) (*winISOInfo, error) {
 	if arch == "" {
 		arch = "x64"
