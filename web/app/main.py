@@ -2136,6 +2136,49 @@ def machine_claude_status(mid: str, _: core.User = Depends(admin_user)):
     return _claude_status(mid)
 
 
+# -------------------------------------------------- marca TerminalSec no console (/etc/issue.d)
+_BRAND_FILE = os.path.join(os.path.dirname(__file__), "console-brand.txt")
+
+
+def _console_brand_payload() -> bytes:
+    """Banner da marca (escudo + textos) em verde neon, para gravar em /etc/issue.d/00-uab-brand.issue."""
+    with open(_BRAND_FILE, "rb") as fh:
+        return b"\033[1;32m\n" + fh.read() + b"\033[0m\n"
+
+
+@app.post("/api/machines/{mid}/console-brand")
+async def machine_console_brand(mid: str, action: str = "apply", _: core.User = Depends(admin_user)):
+    """Aplica/remove a marca TerminalSec no banner do console (toda tela de login), pelo agente do
+    Remoto. Só Linux (o /etc/issue.d é do Linux). Aparece na próxima tela de login/boot."""
+    if action not in ("apply", "remove"):
+        raise core.Invalid("Ação inválida.")
+    m = _get_machine(mid)
+    _remoto_ready()
+    host = (m["hostname"] or "").strip().lower()
+    try:
+        dev = next((x for x in await remoto.devices() if x["name"].strip().lower() == host and x["online"]), None)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"O Remoto não respondeu ({type(exc).__name__}).")
+    if not dev:
+        raise core.Invalid("A máquina não está online no Remoto (precisa do agente do Remoto conectado).")
+    if _format_platform(dev["os"]) != "linux":
+        raise core.Invalid("A marca no console só vale para máquinas Linux.")
+    restart = "systemctl restart getty@tty1 2>/dev/null || true"
+    if action == "apply":
+        b64 = base64.b64encode(_console_brand_payload()).decode()
+        cmd = ("mkdir -p /etc/issue.d; printf %s '" + b64
+               + "' | base64 -d > /etc/issue.d/00-uab-brand.issue; " + restart + "; echo ok")
+    else:
+        cmd = "rm -f /etc/issue.d/00-uab-brand.issue; " + restart + "; echo ok"
+    try:
+        res = await remoto.run_commands(dev["id"], 3, cmd, 0)  # ctype 3 = sh (root)
+    except Exception as exc:  # noqa: BLE001
+        res = f"falha ({type(exc).__name__})"
+    if res != "OK":
+        raise HTTPException(502, f"O Remoto não conseguiu enviar o comando: {res}")
+    return {"ok": True}
+
+
 async def _resync_partners_of(mid: str) -> None:
     """Sócios com permissão nesta máquina: reaplica no Remoto (arquivar/restaurar)."""
     with core.db() as con:

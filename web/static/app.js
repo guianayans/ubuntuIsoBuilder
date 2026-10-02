@@ -2313,7 +2313,10 @@ function tabConfig() {
         ? `<button class="btn danger" id="claudeBtn">Desinstalar Claude Code CLI</button>`
         : `<button class="btn" id="claudeBtn" style="background:var(--ok);border-color:var(--ok);color:#fff">Instalar Claude Code CLI</button>`}</div>
       <div id="claudeStatus" class="small u-mt8"></div>
-      <pre class="log hidden" id="claudeLog" style="max-height:220px"></pre>` : ""}
+      <pre class="log hidden" id="claudeLog" style="max-height:220px"></pre>
+      <p class="muted small u-mt12">Marca <b>TerminalSec</b> (escudo) no banner do console, em toda tela de login. Aparece na próxima tela de login/boot.</p>
+      <div class="row"><button class="btn" id="brandApply">Aplicar marca no console</button><button class="btn" id="brandRemove">Remover marca</button></div>
+      <div id="brandStatus" class="small u-mt8"></div>` : ""}
     <h3>Detalhes técnicos</h3>
     <div class="grid2">${kv("ID da máquina", `<span class="mono small">${esc(m.id)}</span>`)}${kv(m.build_os === "windows" ? "Configuração de origem" : "ISO de origem", m.build_hostname ? `<a href="#/iso/${esc(m.build_id)}">${esc(m.build_hostname)}</a>` : esc(m.build_id))}
       ${kv("Acesso pelo painel", m.panel_access ? (m.platform === "windows" ? "sim (chave do painel no OpenSSH)" : "sim (chave do painel na ISO)") : "não")}${kv("Último IP de origem", `<span class="mono">${esc(m.source_ip)}</span>`)}</div>
@@ -2332,6 +2335,24 @@ function tabConfig() {
   if ($("#mrestore")) $("#mrestore").onclick = () => machineAction(OVL.id, "restore");
   if ($("#mforget")) $("#mforget").onclick = () => machineAction(OVL.id, "forget");
   wireClaude();
+  wireConsoleBrand();
+}
+
+// Aplicar/remover a marca TerminalSec no banner do console da máquina, pelo agente do Remoto.
+function wireConsoleBrand() {
+  const st = $("#brandStatus"), a = $("#brandApply"), r = $("#brandRemove");
+  if (!st) return;
+  const go = async (action, label, btn) => {
+    const bs = [a, r].filter(Boolean); bs.forEach(b => b.disabled = true);
+    st.className = "small u-mt8 muted"; st.textContent = "Enviando ao Remoto…";
+    try {
+      await api(`/api/machines/${OVL.id}/console-brand?action=${action}`, { method: "POST" });
+      st.className = "small u-mt8 ok"; st.textContent = `✔ ${label}. Aparece na próxima tela de login (ou reinicie).`;
+    } catch (e) { st.className = "small u-mt8 err"; st.textContent = "✖ " + e.message; }
+    bs.forEach(b => b.disabled = false);
+  };
+  if (a) a.onclick = () => go("apply", "Marca aplicada no console");
+  if (r) r.onclick = () => go("remove", "Marca removida");
 }
 
 // Instalar Claude Code CLI numa máquina já pronta (aba Configurações): dispara pelo agente do
