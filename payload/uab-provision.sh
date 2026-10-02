@@ -899,7 +899,7 @@ update_issue() {
                           █████████████████                         
                               ████████                              
 UAB_SHIELD
-    printf '                            TerminalSec\n'
+    printf '                       T E R M I N A L  S E C\n'
     printf '                    Seu servidor esta protegido.\n'
     printf '\033[0m\n'  # volta a cor padrao para as linhas de status
     echo "ubuntu-autoinstall-builder: $UAB_HOSTNAME"
