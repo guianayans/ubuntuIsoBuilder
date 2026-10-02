@@ -1526,10 +1526,12 @@ async function loadMachines() {
           ${kebab(`<button class="danger" data-forget="${m.id}">Esquecer de vez</button>`)}</div></td></tr>`).join("")}</table></div></details>` : "")
     + (d.forgotten && d.forgotten.length ? `<details class="archived" id="fgtBox" ${FGT_OPEN ? "open" : ""}><summary>Esquecidas (${d.forgotten.length})</summary>
       <p class="muted small">Removidas "de vez": o painel ignora os relatórios delas. <b>Trazer de volta</b> faz a máquina reaparecer sozinha no próximo relatório (no boot ou em até ~10 min). Nome, anotações e acessos antigos não voltam.</p>
-      <div class="table-wrap"><table class="rtable"><tr><th>Servidor</th><th>Esquecida</th><th></th></tr>
-      ${d.forgotten.map(f => `<tr><td class="rt-title"><div class="mname"><div><b>${esc(f.hostname || "(sem nome)")}</b></div></div></td>
+      <div class="table-wrap"><table class="rtable"><tr><th>Servidor</th><th>Esquecida</th><th>Status</th><th></th></tr>
+      ${d.forgotten.map(f => { const alive = f.last_try && (Date.now() / 1000 - f.last_try < 1500);
+        return `<tr><td class="rt-title"><div class="mname"><div><b>${esc(f.hostname || "(sem nome)")}</b></div></div></td>
         <td class="small nowrap" data-label="Esquecida">${fmtDate(f.forgotten_at)}</td>
-        <td class="rt-actions"><button class="btn sm" data-unforget="${esc(f.id)}">Trazer de volta</button></td></tr>`).join("")}</table></div></details>` : "");
+        <td class="small" data-label="Status">${alive ? `<span class="ok">ligada agora</span>` : (f.last_try ? `tentou ${fmtAgo(f.last_try)}` : `<span class="muted">—</span>`)}</td>
+        <td class="rt-actions"><button class="btn sm" data-unforget="${esc(f.id)}">Trazer de volta</button></td></tr>`; }).join("")}</table></div></details>` : "");
   $$("#ml [data-m]").forEach(tr => tr.onclick = e => { if (!e.target.closest(".rt-actions")) openMachine(tr.dataset.m); });
   $$("#ml [data-open]").forEach(b => b.onclick = () => openMachine(b.dataset.open));
   $$("#ml [data-fmt]").forEach(b => b.onclick = () => formatDialog(b.dataset.fmt));

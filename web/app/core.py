@@ -155,6 +155,9 @@ def init_db() -> None:
         # "esquecer de vez": os relatórios desta instalação passam a ser recusados
         con.execute("""CREATE TABLE IF NOT EXISTS forgotten_machines (
             id TEXT PRIMARY KEY, build_id TEXT NOT NULL, hostname TEXT NOT NULL, forgotten_at INTEGER NOT NULL)""")
+        gcols = {r[1] for r in con.execute("PRAGMA table_info(forgotten_machines)")}
+        if "last_try" not in gcols:  # última vez que a máquina esquecida tentou reportar (recusada)
+            con.execute("ALTER TABLE forgotten_machines ADD COLUMN last_try INTEGER")
         # "Formatar esta máquina": o PC (pelo agente do Remoto) espera o pendrive e reinicia por ele
         con.execute("""CREATE TABLE IF NOT EXISTS format_jobs (
             id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, node TEXT NOT NULL, name TEXT NOT NULL,

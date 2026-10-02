@@ -1643,9 +1643,12 @@ async def agent_report(request: Request):
     if not re.match(r"^[0-9a-f]{32}$", mid) or not core.HOSTNAME_RE.match(host):
         raise HTTPException(400, "machine_id/hostname inválidos")
     key = core.token_hash(f"{b['id']}:{mid}")[:16]
-    with core.db() as con:
-        if con.execute("SELECT 1 FROM forgotten_machines WHERE id=?", (key,)).fetchone():
-            raise HTTPException(410, "máquina esquecida no painel")
+    with core.db() as con:  # registra a tentativa (para ordenar/mostrar "ligada agora" em Esquecidas)
+        forgotten = con.execute("SELECT 1 FROM forgotten_machines WHERE id=?", (key,)).fetchone()
+        if forgotten:
+            con.execute("UPDATE forgotten_machines SET last_try=? WHERE id=?", (core.now(), key))
+    if forgotten:  # fora do 'with' para o UPDATE ser commitado antes do 410 (exceção faz rollback)
+        raise HTTPException(410, "máquina esquecida no painel")
     hw = str(rep_.get("hw_id") or "")
     hw = hw if re.fullmatch(r"[0-9a-f]{64}", hw) else ""
     now_ = core.now()
@@ -1904,10 +1907,13 @@ def list_machines(u: core.User = Depends(current_user)):
         m["terminalsec"] = tsec.get(m.get("hostname") or "")
     out = {"machines": ms, "panel": panel.ts_status() if u.is_admin else None,
            "hub": wg.hub_status() if wg.enabled() else None}
-    if u.is_admin:  # máquinas "esquecidas de vez" (relatórios recusados) — para trazer de volta
+    if u.is_admin:  # máquinas "esquecidas de vez" (relatórios recusados) — para trazer de volta.
+        # Ordem por ÚLTIMA APARIÇÃO: a última vez que tentaram reportar (se ligadas), senão quando
+        # foram esquecidas. Assim as que estão ligadas/ativas aparecem no topo.
         with core.db() as con:
             out["forgotten"] = [dict(r) for r in con.execute(
-                "SELECT id, hostname, build_id, forgotten_at FROM forgotten_machines ORDER BY forgotten_at DESC")]
+                "SELECT id, hostname, build_id, forgotten_at, last_try FROM forgotten_machines "
+                "ORDER BY COALESCE(last_try, forgotten_at) DESC")]
     return out
 
 
