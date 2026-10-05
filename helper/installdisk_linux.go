@@ -58,16 +58,8 @@ func kexecBin() string {
 
 // kexecCmdline: a MESMA linha do pendrive (autoinstall + seed embutido em /cdrom/nocloud/),
 // mais url= para o casper baixar a ISO do painel e ip=dhcp para a rede subir no instalador.
-//
-// *** BUILD DE DEBUG (TEMPORÁRIO) — REVERTER APÓS O DIAGNÓSTICO ***
-// netconsole envia as mensagens do kernel por UDP para 192.168.0.174:6666 (Mac do usuário,
-// ouvinte `nc -u -l 6666`), para capturar ONDE o instalador trava numa máquina headless.
-// MAC de destino = broadcast (ff:ff:ff:ff:ff:ff) para não depender de saber o MAC do Mac.
-// ignore_loglevel manda TODAS as mensagens do kernel para o console (e, portanto, para o netconsole).
 func kexecCmdline(isoURL string) string {
-	return "boot=casper url=" + isoURL +
-		" ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/" +
-		" netconsole=6665@/,6666@192.168.0.174/ff:ff:ff:ff:ff:ff ignore_loglevel ---"
+	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
