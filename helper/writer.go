@@ -38,6 +38,8 @@ type progress struct {
 	start  time.Time
 	file   string // se definido, o status também é gravado em arquivo (worker privilegiado)
 	lastFS time.Time
+
+	canceled bool // o painel pediu cancelamento (ver cancel/cancelled)
 }
 
 func (p *progress) set(phase, msg string, total int64) {
@@ -82,6 +84,22 @@ func (p *progress) get() Status {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.st
+}
+
+// cancel marca o pedido como cancelado pelo painel. A ponte de progresso chama isto
+// quando o painel responde "cancel"; o motor de instalação consulta cancelled() antes
+// do ponto de não-retorno (armar o boot / reiniciar) para abortar sem reiniciar.
+func (p *progress) cancel() {
+	p.mu.Lock()
+	p.canceled = true
+	p.mu.Unlock()
+}
+
+// cancelled diz se o painel pediu cancelamento.
+func (p *progress) cancelled() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.canceled
 }
 
 func (p *progress) flush(force bool) {

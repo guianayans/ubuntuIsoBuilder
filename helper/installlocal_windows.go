@@ -349,6 +349,10 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 	// bootsequence vai SEMPRE no {bootmgr} (Windows Boot Manager): a nossa entrada é um osloader
 	// do BCD, e é assim que o WinRE faz o boot único — em BIOS e em UEFI. O {fwbootmgr} (UEFI)
 	// só aceita entradas de firmware (NVRAM), não um osloader → dava "Elemento não encontrado".
+	if p.cancelled() { // painel cancelou: aborta ANTES de tocar no BCD (nada é reiniciado)
+		p.set("staging", "Cancelado pelo painel; o Windows atual foi mantido.", 0)
+		return
+	}
 	step("Configurando a inicialização…")
 	winload, mgr := `\windows\system32\winload.efi`, "{bootmgr}"
 	if !uefiFirmware() {

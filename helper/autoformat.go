@@ -20,7 +20,7 @@ var autoFormatState = map[string]string{
 }
 
 // runAutoFormat: instala o Windows neste computador sem pendrive, reportando ao painel.
-// Saídas: 0 reiniciando/ok, 1 erro.
+// Saídas: 0 reiniciando/ok, 1 erro, 5 cancelado pelo painel (nada foi reiniciado).
 func runAutoFormat(a *app, reportURL string, dry bool) int {
 	rep := &formatReporter{url: reportURL, c: &http.Client{Timeout: 20 * time.Second}}
 	if a.bundle == nil {
@@ -28,11 +28,15 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 		return 1
 	}
 	p := &progress{}
+	// ctx cancelável: quando o painel cancela, abortamos o download em andamento na hora
+	// (downloadWindowsISO/Fallback honram ctx) e marcamos p.cancel() para o motor parar
+	// ANTES de reiniciar.
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
 	stop := make(chan struct{})
 	go func() { // ponte progresso -> painel
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
-		lastMsg, lastPct := "", -1
 		for {
 			select {
 			case <-stop:
@@ -47,25 +51,32 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 				if state == "baixando" && st.Percent > 0 { // só o download tem porcentagem confiável
 					pct = int(st.Percent + 0.5)
 				}
-				// avisa quando a mensagem muda ou a porcentagem anda ao menos 1 ponto
-				if st.Message != "" && (st.Message != lastMsg || pct != lastPct) {
-					lastMsg, lastPct = st.Message, pct
-					if rep.sendProgress(state, st.Message, pct) { // painel cancelou
-						return
-					}
+				msg := st.Message
+				if msg == "" {
+					msg = "Trabalhando…"
+				}
+				// Consulta o painel a cada tick (mesmo sem mudança de mensagem) para
+				// detectar o cancelamento em até ~3s em QUALQUER fase — inclusive na cópia
+				// longa da imagem, que não muda a mensagem. Sem isto, um cancelamento
+				// durante a cópia só seria notado tarde demais (após o ponto de não-retorno).
+				if rep.sendProgress(state, msg, pct) { // painel cancelou
+					p.cancel()
+					cancelCtx()
+					return
 				}
 			}
 		}
 	}()
 	defer close(stop)
 
-	ctx := context.Background()
-
 	if !a.bundle.isWindows() { // build de Ubuntu num PC Windows: UEFI (EFISTUB) ou BIOS (grub4dos)
 		b := a.bundle
 		base := strings.TrimRight(b.Server, "/") + "/t/" + b.Token
 		// a URL da ISO precisa terminar em .iso: o casper só faz netboot automático com url=*.iso
 		osInstallUbuntuLocal(a, base+"/kernel", base+"/initrd", base+"/image.iso", base+"/grldr", base+"/grldr.mbr", dry, p)
+		if p.cancelled() { // painel cancelou antes do reboot: o motor não reiniciou
+			return 5
+		}
 		st := p.get()
 		if st.Phase == "error" {
 			rep.send("erro", st.Message, nil)
@@ -79,10 +90,15 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 		return 0
 	}
 
-	rep.send("baixando", "Baixando a configuração do painel…", nil)
+	if rep.send("baixando", "Baixando a configuração do painel…", nil) {
+		return 5
+	}
 	if err := a.loadConfig(); err != nil {
 		rep.send("erro", "não consegui baixar a configuração: "+err.Error(), nil)
 		return 1
+	}
+	if p.cancelled() {
+		return 5
 	}
 	w := a.bundle.Windows
 	path, sum, err := downloadWindowsISO(ctx, w, p)
@@ -91,6 +107,9 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 		if fp, fs, ferr := downloadWinFallback(ctx, a.bundle, p); ferr == nil {
 			path, sum, err = fp, fs, nil
 		}
+	}
+	if p.cancelled() { // cancelado durante o download: o ctx abortou o download
+		return 5
 	}
 	if err != nil {
 		rep.send("erro", "não consegui baixar o Windows (Microsoft e reserva do painel): "+err.Error(), nil)
@@ -107,6 +126,9 @@ func runAutoFormat(a *app, reportURL string, dry bool) int {
 
 	// instala no disco (o osInstallLocal reinicia sozinho no fim; em dry, escreve o plano e volta)
 	osInstallLocal(a, path, "", a.unattendPath, dry, p)
+	if p.cancelled() { // painel cancelou antes do reboot: o motor não reiniciou
+		return 5
+	}
 	st := p.get()
 	if st.Phase == "error" {
 		rep.send("erro", st.Message, nil)

@@ -67,6 +67,10 @@ func osInstallLocal(a *app, isoPath, isoURL, unattendPath string, dry bool, p *p
 		p.finish("error", err.Error(), "")
 		return
 	}
+	if p.cancelled() { // painel cancelou: não carrega o kexec nem reinicia
+		p.set("staging", "Cancelado pelo painel; o sistema atual foi mantido.", 0)
+		return
+	}
 	if err := osStageKexec(kern, init, isoURL); err != nil {
 		p.finish("error", "não consegui preparar o kexec: "+err.Error(), "")
 		return

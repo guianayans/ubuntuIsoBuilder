@@ -191,6 +191,10 @@ func ubuntuInstallUEFI(kernelURL, initrdURL, isoURL string, dry bool, p *progres
 		p.finish("done", "Modo teste (UEFI): kernel/initrd baixados e a entrada de boot montada (não reiniciei). Plano em "+letter+"\\uab-plan.txt.", "")
 		return
 	}
+	if p.cancelled() { // painel cancelou: não arma o boot nem reinicia
+		p.set("staging", "Cancelado pelo painel; o Windows atual foi mantido.", 0)
+		return
+	}
 	if _, err := armBootNextLO(ubuntuBootDesc, lo); err != nil {
 		fail("a placa-mãe não aceitou a entrada de boot do Ubuntu: " + err.Error())
 		return
@@ -264,6 +268,10 @@ func ubuntuInstallBIOS(kernelURL, initrdURL, isoURL, grldrURL, grldrMbrURL strin
 			fail("falha ao configurar a inicialização: " + o)
 			return
 		}
+	}
+	if p.cancelled() { // painel cancelou: não arma o bootsequence nem reinicia
+		p.set("staging", "Cancelado pelo painel; o Windows atual foi mantido.", 0)
+		return
 	}
 	if o, e := bcd("/set", "{bootmgr}", "bootsequence", id); e != nil {
 		fail("falha ao marcar o próximo boot: " + o)
