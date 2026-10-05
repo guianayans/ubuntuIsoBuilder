@@ -971,6 +971,14 @@ def download_helper(platform: str, _: core.User = Depends(current_user)):
 # isoBuilder deste painel (hash conferido), fica esperando alguém conectar o pendrive
 # gravado pelo isoBuilder, avisa aqui e reinicia por ele (entrada UEFI própria + BootNext).
 FORMAT_WAIT_H = 24
+# Prazo (horas) para o card considerar FALHA quando o PC não volta a se reportar, no modo
+# SEM PENDRIVE (disk). Conta a partir do último sinal de vida (updated_at): enquanto o
+# gravador reporta (download/preparo) o prazo se renova; depois do reboot, o silêncio corre
+# contra ele. É só o prazo de EXIBIÇÃO/falha do card — o token e a ISO seguem valendo por
+# expires_at (bem mais longo, FORMAT_WAIT_H), e se a máquina voltar depois o pedido ainda
+# reconcilia para 'concluído'. Com pendrive o prazo continua sendo expires_at (um humano
+# pode demorar a conectar o pendrive).
+FORMAT_REPORT_WAIT_H = 2
 # estados "em andamento": usb espera o pendrive; disk baixa o instalador e prepara o kexec.
 # "reiniciando" e "instalando" também contam como em andamento: sem pendrive, depois do kexec
 # a máquina ainda baixa a ISO e instala (o painel acompanha pelo download da ISO) — assim o
@@ -1103,13 +1111,28 @@ systemd-run --unit=isobuilder-format --collect "$f" {args} >/dev/null 2>&1 || {{
     return 3, sh
 
 
+def _format_deadline(r) -> int:
+    """Prazo para o card considerar FALHA (o PC não voltou a se reportar).
+    Sem pendrive (disk) é automático: conta a partir do último sinal de vida (updated_at) —
+    enquanto o gravador reporta (download/preparo) o prazo se renova; depois do reboot o
+    silêncio corre contra ele. Com pendrive mantém o prazo longo do token (expires_at), pois
+    um humano pode demorar a conectar o pendrive. Em ambos, o token/ISO seguem valendo por
+    expires_at e um relatório tardio da máquina ainda reconcilia o pedido para 'concluído'."""
+    method = (r["method"] if "method" in r.keys() else "usb")
+    if method == "disk":
+        return r["updated_at"] + FORMAT_REPORT_WAIT_H * 3600
+    return r["expires_at"]
+
+
 def _format_row(r) -> dict:
     state, msg = r["state"], r["message"]
     method = (r["method"] if "method" in r.keys() else "usb")
     t = core.now()
-    if state in FORMAT_LIVE and t > r["expires_at"]:
+    if state in FORMAT_LIVE and t > _format_deadline(r):
         state = "expirou"
-        msg = "O PC não ficou pronto a tempo." if method == "disk" else "Ninguém conectou o pendrive a tempo."
+        msg = ("O PC não voltou a se reportar no tempo esperado. Se ele formatou mesmo assim, "
+               "ao ligar ele reaparece sozinho em Máquinas e este pedido vira 'concluído'."
+               if method == "disk" else "Ninguém conectou o pendrive a tempo.")
     elif state == "enviado" and t - r["updated_at"] > 180:
         msg = ("O PC ainda não respondeu. Ele pode estar sem internet, ou o antivírus bloqueou o isoBuilder. "
                "Abra o terminal do PC no Remoto para conferir.")
@@ -1118,7 +1141,7 @@ def _format_row(r) -> dict:
             "message": msg, "stick": r["stick"], "method": method, "iso": r["stick"] if method == "disk" else "",
             "percent": pct if state in FORMAT_LIVE else -1,
             "created_at": r["created_at"], "updated_at": r["updated_at"],
-            "expires_at": r["expires_at"], "live": state in FORMAT_LIVE}
+            "expires_at": _format_deadline(r), "live": state in FORMAT_LIVE}
 
 
 @app.get("/api/admin/format")
@@ -1214,8 +1237,8 @@ def format_cancel(jid: str, _: core.User = Depends(admin_user)):
 def format_dismiss(jid: str, _: core.User = Depends(admin_user)):
     """Remove um aviso de formatação já terminada (erro, BIOS antiga, concluída…)."""
     with core.db() as con:
-        r = con.execute("SELECT state, expires_at FROM format_jobs WHERE id=?", (jid,)).fetchone()
-        if r and (r["state"] not in FORMAT_LIVE or core.now() > r["expires_at"]):
+        r = con.execute("SELECT * FROM format_jobs WHERE id=?", (jid,)).fetchone()
+        if r and (r["state"] not in FORMAT_LIVE or core.now() > _format_deadline(r)):
             con.execute("DELETE FROM format_jobs WHERE id=?", (jid,))
         elif r:
             raise core.Invalid("Esse pedido ainda está em andamento; use Cancelar.")
@@ -1225,8 +1248,13 @@ def format_dismiss(jid: str, _: core.User = Depends(admin_user)):
 @app.post("/api/admin/format/clear")
 def format_clear(_: core.User = Depends(admin_user)):
     """Remove todos os avisos de formatações já terminadas."""
+    t = core.now()
     with core.db() as con:
-        con.execute("DELETE FROM format_jobs WHERE state NOT IN " + str(FORMAT_LIVE) + " OR expires_at<?", (core.now(),))
+        con.execute(
+            "DELETE FROM format_jobs WHERE state NOT IN " + str(FORMAT_LIVE) +
+            " OR (method='disk' AND updated_at + ? < ?)" +
+            " OR ((method IS NULL OR method <> 'disk') AND expires_at < ?)",
+            (FORMAT_REPORT_WAIT_H * 3600, t, t))
     return {"ok": True}
 
 

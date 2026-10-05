@@ -1667,7 +1667,10 @@ function fmtJobHTML(j) {
 }
 // cartão no topo de Máquinas e Remoto: pedidos em andamento e os que terminaram há pouco
 function fmtCard() {
-  const recent = FMT.jobs.filter(j => j.live || Date.now() / 1000 - j.updated_at < 3600);
+  // mantém os em andamento + os que terminaram há < 1h. Em "expirou" (falha por não voltar),
+  // o fim é o prazo (expires_at), não o updated_at — senão a falha some assim que aparece.
+  const endedAt = j => (j.state === "expirou" ? Math.max(j.updated_at, j.expires_at) : j.updated_at);
+  const recent = FMT.jobs.filter(j => j.live || Date.now() / 1000 - endedAt(j) < 3600);
   if (!recent.length) return "";
   const done = recent.filter(j => !j.live);
   return `<div class="card fmt-card"><div class="spread"><b>Formatações à distância</b>${done.length > 1
