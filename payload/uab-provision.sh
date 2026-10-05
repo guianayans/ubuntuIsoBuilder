@@ -263,9 +263,12 @@ ssh_harden() {
   if ! sshd -t; then
     log "sshd -t falhou; removendo endurecimento para não perder acesso"; rm -f "$SSHD_DROPIN"; return 1
   fi
-  local eff
+  local eff rootpat
   eff="$(sshd -T -C "user=$USER_NAME,host=localhost,addr=127.0.0.1" 2>/dev/null)"
-  printf '%s\n' "$eff" | grep -qi "^permitrootlogin $rootline" || { rm -f "$SSHD_DROPIN"; log "PermitRootLogin não ficou '$rootline'; revertendo"; return 1; }
+  # prohibit-password e without-password são sinônimos; o sshd -T pode imprimir qualquer um.
+  rootpat="permitrootlogin $rootline"
+  [ "$rootline" = prohibit-password ] && rootpat='permitrootlogin (without-password|prohibit-password)'
+  printf '%s\n' "$eff" | grep -qiE "^$rootpat" || { rm -f "$SSHD_DROPIN"; log "PermitRootLogin não ficou '$rootline'; revertendo"; return 1; }
   if [ "$SSH_AUTH" = password ]; then
     # rede local: senha aceita; IP público: senha recusada
     sshd -T -C "user=$USER_NAME,host=lan,addr=192.168.1.10" 2>/dev/null | grep -qi '^passwordauthentication yes' \
