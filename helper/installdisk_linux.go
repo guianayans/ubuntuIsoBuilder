@@ -58,8 +58,15 @@ func kexecBin() string {
 
 // kexecCmdline: a MESMA linha do pendrive (autoinstall + seed embutido em /cdrom/nocloud/),
 // mais url= para o casper baixar a ISO do painel e ip=dhcp para a rede subir no instalador.
+//
+// nomodeset: o kexec NÃO faz o re-POST da GPU (ao contrário de um boot normal pela firmware),
+// então em placas NVIDIA/nouveau o mode setting (KMS) do instalador apaga a tela — às vezes só
+// perde o vídeo (instala headless), às vezes trava o kernel. Com nomodeset o instalador usa o
+// framebuffer básico (efifb/vesafb): a tela volta a mostrar o progresso e some o travamento por
+// GPU. Afeta SÓ o instalador kexec; o sistema instalado e o caminho com pendrive têm cmdline
+// própria e não mudam.
 func kexecCmdline(isoURL string) string {
-	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
+	return "boot=casper nomodeset url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
