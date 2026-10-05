@@ -71,11 +71,9 @@ func kexecCmdline(isoURL string) string {
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
 // grava a linha de comando pretendida em UAB_FAKE_KEXEC, sem tocar no kexec real.
-//
-// --reset-vga / --console-vga: tentam recuperar o console LOCAL (vídeo) após o kexec, que pula o
-// POST da firmware. --reset-vga põe a VGA (legada, presente em BIOS) em modo texto são; com
-// nomodeset no cmdline, o console de texto fica visível. É best-effort: se o kexec desta máquina
-// não aceitar as flags, cai no kexec simples (a instalação segue headless + progresso no card).
+// (--reset-vga/--console-vga foram tentados p/ recuperar o vídeo local e REMOVIDOS: em NVIDIA
+// pioraram o handoff — a tela foi de "piscando" para "sem sinal". A instalação roda headless;
+// acompanhe pelo progresso no card.)
 func osStageKexec(kernel, initrd, isoURL string) error {
 	cmdline := kexecCmdline(isoURL)
 	if f := os.Getenv("UAB_FAKE_KEXEC"); f != "" {
@@ -84,13 +82,7 @@ func osStageKexec(kernel, initrd, isoURL string) error {
 	if _, err := os.Stat(kernel); err != nil {
 		return err
 	}
-	base := []string{"-l", kernel, "--initrd=" + initrd, "--command-line=" + cmdline}
-	// 1ª tentativa: com as flags de VGA (recupera o vídeo local quando a máquina tem VGA legada).
-	if _, err := exec.Command(kexecBin(), append([]string{"--reset-vga", "--console-vga"}, base...)...).CombinedOutput(); err == nil {
-		return nil
-	}
-	// fallback: kexec simples (sem as flags de VGA) — instala headless.
-	out, err := exec.Command(kexecBin(), base...).CombinedOutput()
+	out, err := exec.Command(kexecBin(), "-l", kernel, "--initrd="+initrd, "--command-line="+cmdline).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if len(msg) > 200 {
