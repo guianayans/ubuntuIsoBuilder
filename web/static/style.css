@@ -94,6 +94,15 @@ input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(
 .fmt-m input{margin-top:3px;flex:none;width:auto}
 .fmt-m>span{flex:1;min-width:0}
 .fmt-steps{margin:12px 0;padding-left:20px;line-height:1.55} .fmt-steps li{margin:4px 0}
+.fmt-checklist{margin:12px 0;display:flex;flex-direction:column;gap:7px}
+.fmt-cstep{display:flex;gap:9px;align-items:center;font-size:14px;color:var(--muted)}
+.fmt-cstep .fmt-ck{flex:none;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;font-size:11px;line-height:1;color:transparent;box-sizing:border-box}
+.fmt-cstep.done{color:var(--text)}
+.fmt-cstep.done .fmt-ck{background:var(--ok);border-color:var(--ok);color:#fff}
+.fmt-cstep.active{color:var(--text);font-weight:600}
+.fmt-cstep.active .fmt-ck{border-color:var(--accent);border-right-color:transparent;animation:fmt-spin .8s linear infinite}
+.fmt-cstep.pending{opacity:.65}
+@keyframes fmt-spin{to{transform:rotate(360deg)}}
 .tsec-pill{display:inline-flex;align-items:center;gap:6px;margin-top:5px;padding:2px 9px 2px 7px;border-radius:99px;font-size:12px;font-weight:600;line-height:18px;text-decoration:none;white-space:nowrap;background:var(--soft);color:var(--muted);border:1px solid transparent}
 .tsec-pill i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
 .tsec-pill.on{background:var(--ok-soft);color:var(--ok)} .tsec-pill.on i{box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}

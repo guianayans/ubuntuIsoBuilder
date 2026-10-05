@@ -1363,9 +1363,11 @@ def format_iso(token: str, request: Request):
                     last = now
                     _format_set_progress(token, "baixando", None, int(sent * 100 / size) if size else 0)
                 yield chunk
-        # ISO enviada por completo: começa a instalação (sem mais contato até a máquina voltar)
-        _format_set_progress(token, "instalando",
-                             "ISO recebida; instalando no disco. A máquina volta ao painel quando terminar.", 100)
+        # ISO enviada por completo: o PC agora inicia o instalador. Estado "preparando" (o próprio
+        # instalador reporta "instalando" quando o subiquity começa, via early-command). Mantém a
+        # sequência linear no card: baixando → preparando → instalando → reiniciando → concluído.
+        _format_set_progress(token, "preparando",
+                             "ISO recebida; iniciando o instalador no disco…", -1)
 
     return StreamingResponse(gen(), media_type="application/octet-stream",
                              headers={"Content-Length": str(size), "Cache-Control": "no-store",

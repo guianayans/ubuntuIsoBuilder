@@ -1660,13 +1660,31 @@ const FMT_ST = {
 let FMT = { jobs: [], poll: null };
 const fmtReady = () => ME && ME.role === "admin" && FEATURES.remote_sso;
 const fmtPill = j => { const [c, t] = FMT_ST[j.state] || ["", j.state]; return `<span class="pill ${c}">${t}</span>`; };
+// Sem pendrive (disk): sequência linear de passos → checklist com checkboxes no card.
+const FMT_STEPS_DISK = [
+  ["enviado", "Preparando o PC"], ["baixando", "Baixando a ISO"],
+  ["preparando", "Iniciando o instalador"], ["instalando", "Instalando no disco"],
+  ["reiniciando", "Reiniciando"], ["concluído", "No painel (concluído)"],
+];
+function fmtChecklist(j) {
+  const order = FMT_STEPS_DISK.map(s => s[0]);
+  let cur = j.state === "concluído" ? order.length : order.indexOf(j.state);
+  if (cur < 0) cur = 0;
+  return `<div class="fmt-checklist">` + FMT_STEPS_DISK.map(([, label], i) => {
+    const done = i < cur, active = i === cur;
+    const cls = done ? "done" : active ? "active" : "pending";
+    return `<div class="fmt-cstep ${cls}"><span class="fmt-ck">${done ? "✓" : ""}</span><span>${esc(label)}${active && j.percent >= 0 ? ` · <b>${j.percent}%</b>` : ""}</span></div>`;
+  }).join("") + `</div>`;
+}
 function fmtJobHTML(j) {
+  const checklist = j.method === "disk" && (j.live || j.state === "concluído");
   return `<div class="fmt-job" data-fj="${esc(j.id)}"><div class="spread"><div>${fmtPill(j)} <b>${esc(j.name)}</b>
       <span class="muted small">· pedido ${fmtAgo(j.created_at)}${j.live ? ` · espera até ${fmtDate(j.expires_at)}` : ""}</span></div>
       ${j.live ? `<button class="btn sm danger" data-fcancel="${esc(j.id)}" type="button">Cancelar</button>`
         : `<button class="btn sm" data-fdismiss="${esc(j.id)}" type="button" title="Remover este aviso">✕</button>`}</div>
-    ${j.message ? `<p class="small u-mt8 ${j.state === "erro" || j.state === "bios" ? "err" : ""}">${esc(j.message)}${j.live && j.percent >= 0 ? ` <b>${j.percent}%</b>` : ""}</p>` : ""}
-    ${j.live && j.percent >= 0 ? `<div class="bar"><i style="width:${j.percent}%"></i></div>` : ""}
+    ${checklist ? fmtChecklist(j) : ""}
+    ${j.message ? `<p class="small u-mt8 ${j.state === "erro" || j.state === "bios" ? "err" : ""}">${esc(j.message)}${j.live && !checklist && j.percent >= 0 ? ` <b>${j.percent}%</b>` : ""}</p>` : ""}
+    ${j.live && !checklist && j.percent >= 0 ? `<div class="bar"><i style="width:${j.percent}%"></i></div>` : ""}
     ${j.stick ? `<p class="muted small">${esc(j.stick)}</p>` : ""}</div>`;
 }
 // cartão no topo de Máquinas e Remoto: pedidos em andamento e os que terminaram há pouco
