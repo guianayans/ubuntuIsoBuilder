@@ -58,15 +58,27 @@ func kexecBin() string {
 
 // kexecCmdline: a MESMA linha do pendrive (autoinstall + seed embutido em /cdrom/nocloud/),
 // mais url= para o casper baixar a ISO do painel e ip=dhcp para a rede subir no instalador.
-// Parâmetros de vídeo (nomodeset/blacklist/console=tty0/plymouth/--reset-vga) foram tentados em
-// 2026-10-05 para recuperar a tela em NVIDIA e REMOVIDOS — pioraram (de "piscando" para "sem
-// sinal"). Em NVIDIA a instalação roda headless; acompanhe pelo progresso no card.
+//
+// nomodeset + modprobe.blacklist=nouveau: o kexec pula o POST da firmware; em placas NVIDIA o
+// nouveau do instalador trava o kernel (confirmado que o instalador em si conclui numa VM sem
+// GPU, 2026-10-05 — a falha era a GPU). Mantendo o nouveau fora, o instalador roda estável
+// (headless; acompanhe pelo progresso no card). Afeta só o instalador kexec; o sistema instalado
+// e o caminho com pendrive têm cmdline própria e não mudam.
 func kexecCmdline(isoURL string) string {
-	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
+	// console=tty0 + plymouth.enable=0: no teste em hardware (kexec do kernel instalado com
+	// esses parâmetros, 2026-10-05) a tela mostrou boot verbose + login. O cmdline de produção
+	// não tinha console=tty0 (saída não ia pra VGA) e o casper sobe o plymouth, que sequestra o
+	// framebuffer e apaga a tela em NVIDIA. console=tty0 força a saída pro monitor e
+	// plymouth.enable=0 tira o splash → console de texto visível durante a instalação.
+	return "boot=casper nomodeset modprobe.blacklist=nouveau nouveau.modeset=0 console=tty0 plymouth.enable=0 url=" + isoURL +
+		" ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
 // grava a linha de comando pretendida em UAB_FAKE_KEXEC, sem tocar no kexec real.
+// (--reset-vga/--console-vga foram tentados p/ recuperar o vídeo local e REMOVIDOS: em NVIDIA
+// pioraram o handoff — a tela foi de "piscando" para "sem sinal". A instalação roda headless;
+// acompanhe pelo progresso no card.)
 func osStageKexec(kernel, initrd, isoURL string) error {
 	cmdline := kexecCmdline(isoURL)
 	if f := os.Getenv("UAB_FAKE_KEXEC"); f != "" {

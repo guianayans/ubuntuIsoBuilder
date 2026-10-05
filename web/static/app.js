@@ -1662,7 +1662,7 @@ const fmtReady = () => ME && ME.role === "admin" && FEATURES.remote_sso;
 const fmtPill = j => { const [c, t] = FMT_ST[j.state] || ["", j.state]; return `<span class="pill ${c}">${t}</span>`; };
 // Sem pendrive (disk): sequência linear de passos → checklist com checkboxes no card.
 const FMT_STEPS_DISK = [
-  ["enviado", "Preparando o PC"], ["baixando", "Baixando a ISO"],
+  ["enviado", "Preparando o PC"], ["baixando", "Baixando o instalador"],
   ["preparando", "Iniciando o instalador"], ["instalando", "Instalando no disco"],
   ["reiniciando", "Reiniciando"], ["concluído", "No painel (concluído)"],
 ];

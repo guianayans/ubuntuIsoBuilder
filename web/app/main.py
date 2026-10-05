@@ -1348,7 +1348,7 @@ def format_iso(token: str, request: Request):
         return FileResponse(path, media_type="application/octet-stream", filename=fname,
                             headers={"Cache-Control": "no-store"})
     size = os.path.getsize(path)
-    _format_set_progress(token, "baixando", "Baixando a ISO para a memória (sem pendrive)…", 0)
+    _format_set_progress(token, "baixando", "Baixando o instalador para a memória (sem pendrive)…", 0)
 
     def gen():
         sent, last = 0, 0.0
@@ -1367,7 +1367,7 @@ def format_iso(token: str, request: Request):
         # instalador reporta "instalando" quando o subiquity começa, via early-command). Mantém a
         # sequência linear no card: baixando → preparando → instalando → reiniciando → concluído.
         _format_set_progress(token, "preparando",
-                             "ISO recebida; iniciando o instalador no disco…", -1)
+                             "Instalador recebido; iniciando no disco…", -1)
 
     return StreamingResponse(gen(), media_type="application/octet-stream",
                              headers={"Content-Length": str(size), "Cache-Control": "no-store",
