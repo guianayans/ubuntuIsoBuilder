@@ -58,25 +58,8 @@ func kexecBin() string {
 
 // kexecCmdline: a MESMA linha do pendrive (autoinstall + seed embutido em /cdrom/nocloud/),
 // mais url= para o casper baixar a ISO do painel e ip=dhcp para a rede subir no instalador.
-//
-// Vídeo após o kexec: o kexec NÃO passa pela firmware, então NÃO há re-POST da GPU e o efifb
-// (framebuffer da UEFI) não sobe. A única fonte de vídeo que resta é o nouveau com KMS — mas
-// ele precisa POSTar a placa, coisa que a firmware faria num boot normal. `nomodeset` só piora
-// (desliga o nouveau e aí não sobra framebuffer nenhum → tela preta). A solução é mandar o
-// nouveau POSTar a GPU sozinho: `nouveau.config=NvForcePost=1`. Com a placa POSTada, o KMS seta
-// o modo e a tela volta a mostrar o instalador (e some o travamento por falta de POST).
-// `console=tty0` garante que o kernel/instalador escreva no monitor. Afeta SÓ o instalador
-// kexec; o sistema instalado e o caminho com pendrive têm cmdline própria e não mudam.
 func kexecCmdline(isoURL string) string {
-	// Vídeo/estabilidade após o kexec: o kexec pula o POST da firmware. Em placas NVIDIA, o
-	// nouveau do instalador (casper) trava o kernel (ex.: Turing/GTX 16xx) ou apaga a tela.
-	// nomodeset + blacklist mantêm o nouveau FORA: o instalador roda estável e, em BIOS/Legacy,
-	// usa o console de texto VGA — a tela mostra o boot/instalação (validado em hardware GTX 1650
-	// via SSH/kexec em 2026-10-05: boot verbose + login na tela). Em UEFI não há framebuffer após
-	// o kexec (o efifb não sobrevive), então instala headless — acompanhe pelo progresso no card
-	// do painel. O sistema instalado e o caminho com pendrive têm cmdline própria e não mudam.
-	return "boot=casper nomodeset modprobe.blacklist=nouveau url=" + isoURL +
-		" ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
+	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
