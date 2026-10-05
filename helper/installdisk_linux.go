@@ -58,21 +58,15 @@ func kexecBin() string {
 
 // kexecCmdline: a MESMA linha do pendrive (autoinstall + seed embutido em /cdrom/nocloud/),
 // mais url= para o casper baixar a ISO do painel e ip=dhcp para a rede subir no instalador.
-//
-// nomodeset + modprobe.blacklist=nouveau: o kexec pula o POST da firmware; em placas NVIDIA o
-// nouveau do instalador trava o kernel (confirmado que o instalador em si conclui numa VM sem
-// GPU, 2026-10-05 — a falha era a GPU). Mantendo o nouveau fora, o instalador roda estável
-// (headless; acompanhe pelo progresso no card). Afeta só o instalador kexec; o sistema instalado
-// e o caminho com pendrive têm cmdline própria e não mudam.
+// Parâmetros de vídeo (nomodeset/blacklist/console=tty0/plymouth/--reset-vga) foram tentados em
+// 2026-10-05 para recuperar a tela em NVIDIA e REMOVIDOS — pioraram (de "piscando" para "sem
+// sinal"). Em NVIDIA a instalação roda headless; acompanhe pelo progresso no card.
 func kexecCmdline(isoURL string) string {
 	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
 // grava a linha de comando pretendida em UAB_FAKE_KEXEC, sem tocar no kexec real.
-// (--reset-vga/--console-vga foram tentados p/ recuperar o vídeo local e REMOVIDOS: em NVIDIA
-// pioraram o handoff — a tela foi de "piscando" para "sem sinal". A instalação roda headless;
-// acompanhe pelo progresso no card.)
 func osStageKexec(kernel, initrd, isoURL string) error {
 	cmdline := kexecCmdline(isoURL)
 	if f := os.Getenv("UAB_FAKE_KEXEC"); f != "" {
