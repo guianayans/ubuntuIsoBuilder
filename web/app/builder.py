@@ -422,6 +422,6 @@ def summary_of(cfg: dict, extra: dict | None = None) -> str:
             "TAILSCALE_ENABLED", "TAILSCALE_HOSTNAME", "DOCKER_ENABLED", "EXTRA_PACKAGES", "SSH_AUTH", "SSH_ROOT", "SSH_PORT",
             "COOLIFY_ENABLED", "COCKPIT_ENABLED", "COOLIFY_ADMIN_EMAIL", "WG_ENABLED",
             "DDNS_ENABLED", "DDNS_HOSTNAME", "CLOUDFLARE_ENABLED", "GPU_NVIDIA", "VIRT_ENABLED", "VIRT_BRIDGE",
-            "SERVER_TWEAKS", "REMOTE_AGENT", "CLAUDE_CODE"]
+            "SERVER_TWEAKS", "REMOTE_AGENT", "CLAUDE_CODE", "CLAUDE_ALL_USERS"]
     return json.dumps({k: cfg.get(k, "") for k in keep})
 

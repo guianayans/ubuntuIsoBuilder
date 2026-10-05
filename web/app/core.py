@@ -610,6 +610,9 @@ def validate_build(d: dict) -> dict:
     c["VIRT_BRIDGE"] = "yes" if d.get("virt") and d.get("virt_bridge", True) else "no"
     c["SERVER_TWEAKS"] = "yes" if d.get("tweaks") else "no"
     c["CLAUDE_CODE"] = "yes" if d.get("claude_code") else "no"  # instala o Claude Code (script oficial) no 1º boot
+    # escopo do Claude Code: "all" = disponível p/ todos os usuários (link no PATH, inclui root);
+    # qualquer outro = só o usuário administrador (padrão). Só tem efeito com CLAUDE_CODE=yes.
+    c["CLAUDE_ALL_USERS"] = "yes" if d.get("claude_code") and str(d.get("claude_scope") or "admin") == "all" else "no"
     c["REMOTE_AGENT"] = "yes" if d.get("remote_agent") else "no"  # o builder completa URL e id do grupo
     c["TSEC_AGENT"] = "yes" if d.get("terminalsec") else "no"  # o builder pede o token ao TerminalSec
     return {"os": "ubuntu", "config": c, "keys": keys, "password": pw, "ts_key": ts_key, "panel_access": panel_access,

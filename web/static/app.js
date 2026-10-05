@@ -297,7 +297,7 @@ const W = {
   ssh_auth: "key", ssh_root: false, ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "coolify_cockpit", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
-  gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true, claude_code: false,
+  gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true, claude_code: false, claude_scope: "admin",
   extra_packages: "", confirm_erase: "", panel_access: true,
   deliver_on: false, deliver_target: "new", deliver_existing: "", deliver_prefix: "", deliver_duration: "7d", deliver_label: "", deliver_agent: true,
   // Windows 11 Pro (só a configuração; a ISO vem da Microsoft pelo gravador)
@@ -440,7 +440,10 @@ function stepHTML() {
       </div>
       ${toggle("panel_access", "Acesso pelo painel (terminal no navegador)", "O servidor aparece em “Máquinas” e o painel pode abrir um terminal SSH nele, com uma chave própria aceita só pela Tailnet. Sem isso, ele aparece na lista mas o acesso é só do seu computador.")}
       <p class="muted small">Sempre instalados: curl, wget, git, ca-certificates, openssh-server, htop, unzip, rsync.</p>
-      ${toggle("claude_code", "Claude Code (terminal)", "Instala o Claude Code no primeiro boot (script oficial da Anthropic), para o usuário administrador. Depois é só rodar <code>claude</code> no terminal.")}
+      ${toggle("claude_code", "Claude Code (terminal)", "Instala o Claude Code no primeiro boot (script oficial da Anthropic). Depois é só rodar <code>claude</code> no terminal.")}
+      <div id="claudeBox" class="${W.claude_code ? "" : "hidden"}">${radio("claude_scope", [
+        ["admin", "Só o usuário administrador", "Como hoje: o <code>claude</code> fica na conta do admin."],
+        ["all", "Todos os usuários (inclui root)", "Link em <code>/usr/local/bin</code>: qualquer usuário e o <code>root</code> rodam <code>claude</code>, cada um com a própria config em <code>~/.claude</code>."]])}</div>
       ${field("extra_packages", "Pacotes extras (separados por espaço)", 'placeholder="ex.: vim tmux ncdu" autocapitalize="off" spellcheck="false"')}
       ${pkgCatalog()}
       <h3>Extras</h3>
@@ -471,7 +474,7 @@ function stepHTML() {
           : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}${W.ssh_root ? " · root por SSH: só chave" : ""}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
         <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "Placa de vídeo" : "",
-          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.claude_code ? "Claude Code" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
+          W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.claude_code ? ("Claude Code" + (W.claude_scope === "all" ? " (todos, inclui root)" : "")) : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>
         <tr><th>Programas</th><td>${{ none: "Nenhum", docker: "Docker + Compose", coolify: "Coolify (com Docker)", coolify_cockpit: "Coolify + Cockpit completo" }[W.apps]}${W.extra_packages ? " · extras: " + esc(W.extra_packages) : ""}</td></tr>
       </table></div>
       ${deliverHTML("ISO")}
@@ -833,7 +836,7 @@ function renderWizard() {
   const ts = $('input[name="tailscale"]') || $('input[name="win_tailscale"]'); if (ts) ts.onchange = () => $("#ts").classList.toggle("hidden", !ts.checked);
   const ws = $('input[name="win_ssh"]'); if (ws) ws.onchange = () => $("#winssh").classList.toggle("hidden", !ws.checked);
   $$('input[name="win_ssh_auth"]').forEach(r => r.onchange = () => { if (r.checked) $("#winsshkeys").classList.toggle("hidden", r.value !== "key"); });
-  [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"]].forEach(([n, box]) => {
+  [["ddns", "#ddnsBox"], ["cloudflare", "#cfBox"], ["virt", "#virtBox"], ["claude_code", "#claudeBox"]].forEach(([n, box]) => {
     const c = $(`input[name="${n}"]`); if (c) c.onchange = () => $(box).classList.toggle("hidden", !c.checked);
   });
   const pf = $("#pubfile");

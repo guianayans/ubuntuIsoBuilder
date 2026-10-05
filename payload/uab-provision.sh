@@ -47,6 +47,7 @@ UAB_COOLIFY="${UAB_COOLIFY:-no}"; UAB_COCKPIT="${UAB_COCKPIT:-no}"
 UAB_DDNS="${UAB_DDNS:-no}"; UAB_CLOUDFLARE="${UAB_CLOUDFLARE:-no}"; UAB_GPU="${UAB_GPU:-no}"
 UAB_VIRT="${UAB_VIRT:-no}"; UAB_VIRT_BRIDGE="${UAB_VIRT_BRIDGE:-no}"; UAB_TWEAKS="${UAB_TWEAKS:-no}"
 UAB_CLAUDE_CODE="${UAB_CLAUDE_CODE:-no}"
+CLAUDE_ALL="${UAB_CLAUDE_ALL:-no}"   # yes = 'claude' para todos os usuários (link em /usr/local/bin, inclui root)
 UAB_REMOTE_AGENT="${UAB_REMOTE_AGENT:-no}"; UAB_REMOTE_URL="${UAB_REMOTE_URL:-}"
 UAB_TSEC_AGENT="${UAB_TSEC_AGENT:-no}"; UAB_TSEC_URL="${UAB_TSEC_URL:-}"
 UAB_HOSTNAME="${UAB_HOSTNAME:-$(hostname -s)}"
@@ -346,11 +347,23 @@ server_tweaks() {
 # Instala no HOME do usuário (não do root), como o instalador recomenda.
 claude_code() {
   command -v curl >/dev/null 2>&1 || apt_install curl || return 1
+  local home bin
+  home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
   # instala no HOME do usuário (não do root); -H ajusta o HOME para o do usuário
   sudo -u "$USER_NAME" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >>"$LOG" 2>&1 || return 1
   sudo -u "$USER_NAME" -H bash -lc 'command -v claude >/dev/null 2>&1 || [ -x "$HOME/.local/bin/claude" ]' \
     || { log "Claude Code instalado, mas o binário não apareceu"; return 1; }
   log "Claude Code instalado para $USER_NAME"
+  # Opção da ISO: disponibilizar o 'claude' para TODOS os usuários — inclusive root (via
+  # 'sudo -i' ou root por SSH) — com um link em /usr/local/bin (PATH padrão, até em shell
+  # não-interativo). É um só binário; cada usuário tem sua própria config em ~/.claude e faz
+  # seu login (nada compartilhado além do executável). Sem a opção, fica só no $USER_NAME.
+  if [ "$CLAUDE_ALL" = yes ]; then
+    bin="$home/.local/bin/claude"
+    [ -x "$bin" ] && { ln -sf "$bin" /usr/local/bin/claude; log "Claude Code em /usr/local/bin/claude (todos os usuários, inclusive root)"; }
+  else
+    rm -f /usr/local/bin/claude 2>/dev/null  # garante que não sobrou link de uma config anterior
+  fi
 }
 
 # DDNS No-IP com ddclient. A senha fica só em /etc/ddclient.conf (0600, root).
