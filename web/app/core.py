@@ -444,6 +444,9 @@ def validate_build(d: dict) -> dict:
     if ssh_auth not in ("key", "password"):
         raise Invalid("Modo de acesso SSH inválido.")
     c["SSH_AUTH"] = ssh_auth
+    # Login de root por SSH: desligado por padrão. Quando marcado, o root entra SOMENTE por
+    # chave pública (nunca por senha) — PermitRootLogin prohibit-password + a mesma chave no root.
+    c["SSH_ROOT"] = "yes" if d.get("ssh_root") else "no"
     port = str(d.get("ssh_port") or "22").strip()
     if not (port.isdigit() and (int(port) == 22 or (1024 <= int(port) <= 65535
                                                     and int(port) not in (6001, 6002, 8000, 8080, 9090)))):
@@ -526,6 +529,9 @@ def validate_build(d: dict) -> dict:
         keys = []  # modo senha: chave SSH opcional
     else:
         keys = validate_pubkeys(keys_text)
+    if c["SSH_ROOT"] == "yes" and not keys:
+        raise Invalid("Para permitir o login de root por SSH é preciso ao menos uma chave pública "
+                      "(o root entra só por chave, nunca por senha).")
 
     # WireGuard pelo seu servidor (ponto de encontro)
     c["WG_ENABLED"] = "yes" if d.get("wireguard") else "no"

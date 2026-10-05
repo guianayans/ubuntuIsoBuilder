@@ -294,7 +294,7 @@ const W = {
   timezone: "America/Sao_Paulo", locale: "pt_BR.UTF-8", keyboard: "br", keyboard_variant: "",
   net_mode: "dhcp", net_match_type: "mac", net_match_value: "", net_address: "", net_gateway: "", net_dns: "1.1.1.1,8.8.8.8", net_search: "",
   storage_type: "single", storage_value: "", storage_min_gb: 20, storage_layout: "lvm", storage_allow_usb: false,
-  ssh_auth: "key", ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
+  ssh_auth: "key", ssh_root: false, ssh_port: "22", ssh_keys: "", tailscale: true, wireguard: false, tailscale_hostname: "", tailscale_extra: "", tailscale_key: "",
   docker: true, apps: "coolify_cockpit", coolify_email: "", coolify_password: "", coolify_password2: "",
   ddns: false, ddns_hostname: "", ddns_login: "", ddns_password: "", cloudflare: false, cloudflare_token: "",
   gpu: true, virt: false, virt_bridge: true, tweaks: true, remote_agent: true, terminalsec: true, claude_code: false,
@@ -393,7 +393,8 @@ function stepHTML() {
         <p class="small">No <b>Windows</b> (PowerShell) ou <b>Mac</b> (Terminal):</p>
         <pre class="log">ssh-keygen -t ed25519 -C "notebook-suporte"</pre>
         <p class="small">Aperte Enter nas perguntas. Depois carregue o arquivo <code>id_ed25519.pub</code> da pasta <code>.ssh</code> da sua pasta de usuário (no Mac: <code>cat ~/.ssh/id_ed25519.pub</code>; no Windows: <code>type $env:USERPROFILE\\.ssh\\id_ed25519.pub</code>) e cole acima.</p>
-      </details></div>`;
+      </details>
+      ${toggle("ssh_root", "Permitir login de root por SSH (só com chave)", "Libera entrar como <code>root</code> por SSH usando a(s) mesma(s) chave(s) acima — <b>só por chave, nunca por senha</b> (prohibit-password), em qualquer rede. Sem marcar (padrão), o root por SSH fica bloqueado: você entra como usuário e usa <code>sudo</code>. Exige ao menos uma chave pública.")}</div>`;
     }
     case "net": return `<h2>Rede</h2>
       <p class="muted">Use cabo de rede. Wi-Fi não é configurado.</p>
@@ -467,7 +468,7 @@ function stepHTML() {
         <tr><th>Disco</th><td>${esc(disk)} · mín. ${esc(W.storage_min_gb)} GB · ${esc(W.storage_layout)}</td></tr>
         <tr><th>SSH</th><td>Porta ${esc(String(W.ssh_port || 22))} · ${W.ssh_auth === "password"
           ? "Usuário e senha (só rede local e Tailscale; fail2ban)" + (W.ssh_keys.trim() ? ` + ${W.ssh_keys.split("\n").filter(l => l.trim()).length} chave(s)` : "")
-          : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}</td></tr>
+          : W.ssh_keys.split("\n").filter(l => l.trim()).length + " chave(s); senha desativada no SSH"}${W.ssh_root ? " · root por SSH: só chave" : ""}</td></tr>
         <tr><th>Acesso remoto</th><td>${[W.wireguard ? "WireGuard pelo seu servidor" : "", W.tailscale ? "Tailscale (" + esc(W.tailscale_hostname || W.hostname) + ")" : ""].filter(Boolean).join(" + ") || "só rede local"}</td></tr>
         <tr><th>Extras</th><td>${[W.ddns ? "DDNS " + esc(W.ddns_hostname) : "", W.cloudflare ? "Cloudflare Tunnel" : "", W.gpu ? "Placa de vídeo" : "",
           W.virt ? "Virtualização" + (W.virt_bridge ? " + br0" : "") : "", W.tweaks ? "ajustes de servidor" : "", W.claude_code ? "Claude Code" : "", W.remote_agent && FEATURES.remote_agent ? "Remoto" : "", W.terminalsec && FEATURES.terminalsec ? "TerminalSec" : ""].filter(Boolean).join(" · ") || "nenhum"}</td></tr>

@@ -33,6 +33,7 @@ log() { printf '%s uab-provision: %s\n' "$(date '+%F %T')" "$*"; }
 . "$CONF"
 USER_NAME="$UAB_ADMIN_USER"
 SSH_AUTH="${UAB_SSH_AUTH:-key}"   # key | password
+SSH_ROOT="${UAB_SSH_ROOT:-no}"    # yes = root por SSH, SÓ por chave (prohibit-password); no = root bloqueado
 SSH_PORT="${UAB_SSH_PORT:-22}"
 SSHD_PORT_DROPIN=/etc/ssh/sshd_config.d/05-uab-port.conf
 F2B_PORT_CONF=/etc/fail2ban/jail.d/uab-sshd-port.conf
@@ -186,6 +187,20 @@ ssh_keys() {
   fi
   chown "$USER_NAME:$(id -gn "$USER_NAME")" "$ak"; chmod 600 "$ak"
   chmod go-w "$home"
+  # Opção da ISO: liberar o root por SSH, SÓ por chave (a mesma do usuário). Nunca por senha —
+  # o ssh_harden usa PermitRootLogin prohibit-password. O root NÃO recebe a chave do painel
+  # (from=): essa é exclusiva do usuário/terminal do painel.
+  if [ "$SSH_ROOT" = yes ]; then
+    local rak=/root/.ssh/authorized_keys
+    install -d -m 0700 -o root -g root /root/.ssh
+    touch "$rak"
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in ''|'#'*) continue ;; esac
+      grep -qxF -- "$line" "$rak" || printf '%s\n' "$line" >>"$rak"
+    done </etc/uab/authorized_keys
+    chown root:root "$rak"; chmod 600 "$rak"
+    log "root por SSH liberado (só chave); chaves do usuário copiadas para $rak"
+  fi
   tmp="$(mktemp)"
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*|from=*) continue ;; esac   # from= = chave do painel
@@ -208,12 +223,17 @@ coolify_ssh_block() {
 ssh_harden() {
   # Modo chave: só roda depois de ssh_keys confirmar ao menos uma chave válida.
   [ -f "$STATE/ssh_keys.done" ] || { log "chave SSH ainda não confirmada; senha continua habilitada"; return 1; }
+  # root por SSH: 'no' (bloqueado) por padrão; 'prohibit-password' (SÓ chave, NUNCA senha) se
+  # a opção foi marcada na ISO (UAB_SSH_ROOT=yes). prohibit-password recusa senha do root em
+  # qualquer rede — inclusive a local — então o root entra apenas com a chave conhecida.
+  local rootline=no
+  [ "$SSH_ROOT" = yes ] && rootline=prohibit-password
   if [ "$SSH_AUTH" = password ]; then
     {
       echo "# ubuntu-autoinstall-builder (modo usuário e senha)."
       echo "# Lido antes de 50-cloud-init.conf, por isso prevalece."
       echo "# Senha aceita SOMENTE da rede local e do Tailscale; de IPs públicos, só chave."
-      echo "PermitRootLogin no"
+      echo "PermitRootLogin $rootline"
       echo "PubkeyAuthentication yes"
       echo "KbdInteractiveAuthentication no"
       echo "PasswordAuthentication no"
@@ -227,7 +247,7 @@ ssh_harden() {
     {
       echo "# ubuntu-autoinstall-builder: aplicado após confirmar chave pública válida."
       echo "# Lido antes de 50-cloud-init.conf, por isso prevalece."
-      echo "PermitRootLogin no"
+      echo "PermitRootLogin $rootline"
       echo "PubkeyAuthentication yes"
       echo "PasswordAuthentication no"
       echo "KbdInteractiveAuthentication no"
@@ -244,7 +264,7 @@ ssh_harden() {
   fi
   local eff
   eff="$(sshd -T -C "user=$USER_NAME,host=localhost,addr=127.0.0.1" 2>/dev/null)"
-  printf '%s\n' "$eff" | grep -qi '^permitrootlogin no' || { log "PermitRootLogin não ficou 'no'"; return 1; }
+  printf '%s\n' "$eff" | grep -qi "^permitrootlogin $rootline" || { rm -f "$SSHD_DROPIN"; log "PermitRootLogin não ficou '$rootline'; revertendo"; return 1; }
   if [ "$SSH_AUTH" = password ]; then
     # rede local: senha aceita; IP público: senha recusada
     sshd -T -C "user=$USER_NAME,host=lan,addr=192.168.1.10" 2>/dev/null | grep -qi '^passwordauthentication yes' \
@@ -255,7 +275,14 @@ ssh_harden() {
     printf '%s\n' "$eff" | grep -qi '^passwordauthentication no' || { log "PasswordAuthentication não ficou 'no'"; return 1; }
   fi
   printf '%s\n' "$eff" | grep -qi '^pubkeyauthentication yes' || { rm -f "$SSHD_DROPIN"; log "pubkey desativado?! revertendo"; return 1; }
-  if [ "$UAB_COOLIFY" = yes ]; then
+  if [ "$SSH_ROOT" = yes ]; then
+    # opção da ISO: root liberado em qualquer rede, porém SÓ por chave (prohibit-password),
+    # NUNCA por senha. Confirma nas duas pontas (rede local e IP público).
+    for ctx in "host=lan,addr=192.168.1.10" "host=wan,addr=203.0.113.10"; do
+      sshd -T -C "user=root,$ctx" 2>/dev/null | grep -qiE '^permitrootlogin (without-password|prohibit-password)' \
+        || { rm -f "$SSHD_DROPIN"; log "root não ficou só-chave ($ctx); revertendo"; return 1; }
+    done
+  elif [ "$UAB_COOLIFY" = yes ]; then
     # root: só chave e só das redes do Docker; da rede local e da internet, bloqueado
     sshd -T -C "user=root,host=coolify,addr=172.30.0.10" 2>/dev/null | grep -qiE '^permitrootlogin (without-password|prohibit-password)' \
       || { log "regra de root para o Coolify não aplicada"; return 1; }

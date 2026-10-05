@@ -222,6 +222,8 @@ def render(args) -> None:
             "UAB_STORAGE_MIN_GB": cfg.get("STORAGE_MIN_GB", "8"),
             "UAB_STORAGE_ALLOW_USB": cfg.get("STORAGE_ALLOW_USB", "no"),
             "UAB_SSH_AUTH": "password" if cfg.get("SSH_AUTH") == "password" else "key",
+            # root por SSH só por chave (prohibit-password); desligado por padrão
+            "UAB_SSH_ROOT": "yes" if cfg.get("SSH_ROOT") == "yes" else "no",
             "UAB_SSH_PORT": str(int(cfg.get("SSH_PORT") or 22)),
             # extras (mesmos recursos do host-mirror, opcionais)
             "UAB_DDNS": "yes" if cfg.get("DDNS_ENABLED") == "yes" else "no",
