@@ -984,7 +984,7 @@ FORMAT_REPORT_WAIT_H = 2
 # a máquina ainda baixa a ISO e instala (o painel acompanha pelo download da ISO) — assim o
 # card mostra "instalando…" com progresso e não some/vira dispensável antes da máquina voltar.
 FORMAT_LIVE = ("enviado", "aguardando", "encontrado", "baixando", "preparando", "reiniciando", "instalando")
-FORMAT_FROM_PC = {"aguardando", "encontrado", "baixando", "preparando", "reiniciando", "erro", "bios",
+FORMAT_FROM_PC = {"aguardando", "encontrado", "baixando", "preparando", "reiniciando", "instalando", "erro", "bios",
                   "expirou", "cancelado"}
 _sha_cache: dict[str, tuple[float, str]] = {}
 

@@ -48,10 +48,17 @@ autoinstall:
   early-commands:
     # Verifica o disco de destino ANTES de qualquer escrita. Aborta se ambíguo.
     - sh /cdrom/uab/preflight.sh
+    # Sem pendrive: avisa o painel que a instalação começou e sobe o heartbeat de progresso
+    # (mostra "instalando" no card mesmo com a tela da máquina sem vídeo). Best-effort.
+    - sh /cdrom/uab/uab-progress.sh begin
   late-commands:
     # Instala o provisionador de primeiro boot, ferramentas e o marcador anti-reinstalação.
     - sh /cdrom/uab/late-install.sh
+    # Sem pendrive: encerra o heartbeat e avisa que vai reiniciar. Best-effort.
+    - sh /cdrom/uab/uab-progress.sh end
   error-commands:
     # Mostra o motivo da falha no console para quem estiver na frente da máquina.
     - sh /cdrom/uab/on-error.sh
+    # Sem pendrive: avisa o painel que a instalação falhou (card sai de "instalando"). Best-effort.
+    - sh /cdrom/uab/uab-progress.sh fail
   shutdown: reboot

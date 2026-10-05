@@ -16,7 +16,8 @@ mkdir -p "$STAGE/nocloud" "$STAGE/uab/payload" "$STAGE/uab/secrets"
 chmod 755 "$STAGE" "$STAGE/nocloud" "$STAGE/uab" "$STAGE/uab/payload"
 chmod 700 "$STAGE/uab/secrets"
 
-cp "$UAB_ROOT/payload/preflight.sh" "$UAB_ROOT/payload/late-install.sh" "$UAB_ROOT/payload/on-error.sh" "$STAGE/uab/"
+cp "$UAB_ROOT/payload/preflight.sh" "$UAB_ROOT/payload/late-install.sh" "$UAB_ROOT/payload/on-error.sh" \
+   "$UAB_ROOT/payload/uab-progress.sh" "$STAGE/uab/"
 cp -R "$UAB_ROOT/payload/systemd" "$STAGE/uab/payload/"
 cp "$UAB_ROOT/payload/uab-provision.sh" "$UAB_ROOT/payload/uab-report.sh" "$UAB_ROOT/payload/uab-wg-apply.py" \
    "$UAB_ROOT/payload/README-SERVER.txt" "$STAGE/uab/payload/"
