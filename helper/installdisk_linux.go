@@ -68,7 +68,10 @@ func kexecBin() string {
 // `console=tty0` garante que o kernel/instalador escreva no monitor. Afeta SÓ o instalador
 // kexec; o sistema instalado e o caminho com pendrive têm cmdline própria e não mudam.
 func kexecCmdline(isoURL string) string {
-	return "boot=casper nouveau.config=NvForcePost=1 console=tty0 url=" + isoURL +
+	// fbcon=map:0: com NvForcePost a GPU já emite sinal de vídeo (há modo setado), mas a tela
+	// fica preta — o console de texto não está desenhando no framebuffer ativo. map:0 força o
+	// fbcon a usar o framebuffer 0 (o do nouveau), que é o que está na tela.
+	return "boot=casper nouveau.config=NvForcePost=1 fbcon=map:0 console=tty0 url=" + isoURL +
 		" ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
