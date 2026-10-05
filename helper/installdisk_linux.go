@@ -65,13 +65,7 @@ func kexecBin() string {
 // (headless; acompanhe pelo progresso no card). Afeta só o instalador kexec; o sistema instalado
 // e o caminho com pendrive têm cmdline própria e não mudam.
 func kexecCmdline(isoURL string) string {
-	// console=tty0 + plymouth.enable=0: no teste em hardware (kexec do kernel instalado com
-	// esses parâmetros, 2026-10-05) a tela mostrou boot verbose + login. O cmdline de produção
-	// não tinha console=tty0 (saída não ia pra VGA) e o casper sobe o plymouth, que sequestra o
-	// framebuffer e apaga a tela em NVIDIA. console=tty0 força a saída pro monitor e
-	// plymouth.enable=0 tira o splash → console de texto visível durante a instalação.
-	return "boot=casper nomodeset modprobe.blacklist=nouveau nouveau.modeset=0 console=tty0 plymouth.enable=0 url=" + isoURL +
-		" ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
+	return "boot=casper url=" + isoURL + " ip=dhcp autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
 }
 
 // osStageKexec carrega o kernel/initrd do instalador (kexec -l). No modo de teste, só
