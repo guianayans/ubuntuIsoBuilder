@@ -2114,12 +2114,37 @@ function tsecBadge(m, inline) {
 const WIN_STEP = { openssh: "OpenSSH (terminal pelo painel)", wireguard: "WireGuard (túnel até o seu servidor)", tailscale_install: "Tailscale (instalação)",
   tailscale_login: "Tailscale (login na Tailnet)", remote_agent: "Agente do Remoto", apps: "Programas (winget)", activation: "Ativação do Windows", report: "Relatório ao painel" };
 
+// IP da rede local (LAN) da máquina: ignora túneis/bridges virtuais e prefere endereços privados.
+function lanIp(m) {
+  const ips = (m.local_ips || []).map(x => { const [ifn, cidr] = String(x).split(" "); return { ifn, ip: (cidr || "").split("/")[0] }; })
+    .filter(x => x.ip && !/^(wg|tailscale|docker|br-|veth|virbr|lxc|lxd|cni|flannel|zt|tun|tap|lo)/.test(x.ifn || ""));
+  const priv = ips.find(x => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(x.ip));
+  return (priv || ips[0] || {}).ip || "";
+}
+
+// Endereços para abrir os apps: VPN (WireGuard e/ou Tailscale) e rede local.
+function appTargets(m) {
+  const vpn = [];
+  if (m.wg && m.wg.server_ip) vpn.push({ ip: m.wg.server_ip, name: "WireGuard" });
+  if (m.tailscale_ip) vpn.push({ ip: m.tailscale_ip, name: "Tailscale" });
+  const t = vpn.map(v => ({ ...v, label: vpn.length > 1 ? `VPN ${v.name}` : "VPN",
+    tip: `pela VPN (${v.name}) — funciona de qualquer lugar, com seu computador conectado na VPN` }));
+  const lan = lanIp(m);
+  if (lan && !t.some(x => x.ip === lan)) t.push({ ip: lan, label: "Rede local", tip: "pelo IP local — só funciona se você estiver na mesma rede da máquina" });
+  return t;
+}
+
 function appLinks(m) {
-  const ip = m.tailscale_ip || sshTarget(m);
-  if (!ip || !(m.apps.coolify || m.apps.cockpit)) return "";
-  return `<div class="row">${m.apps.coolify ? `<a class="btn sm" href="http://${esc(ip)}:8000" target="_blank" rel="noopener">Abrir Coolify ↗</a>` : ""}
-    ${m.apps.cockpit ? `<a class="btn sm" href="https://${esc(ip)}:9090" target="_blank" rel="noopener">Abrir Cockpit ↗</a>` : ""}
-    <span class="muted small">abre direto no endereço da máquina (seu computador precisa estar na Tailnet)</span></div>`;
+  if (!(m.apps.coolify || m.apps.cockpit)) return "";
+  const t = appTargets(m);
+  if (!t.length) return "";
+  const group = (name, url) => `<span class="appgrp"><span class="appgrp-name">Abrir ${name}</span>${t.map(x => {
+    const href = url(x.ip);
+    return `<a class="btn sm" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(href)} — ${esc(x.tip)}">${esc(x.label)} ↗</a>`;
+  }).join("")}</span>`;
+  return `<div class="row">${m.apps.coolify ? group("Coolify", ip => `http://${ip}:8000`) : ""}
+    ${m.apps.cockpit ? group("Cockpit", ip => `https://${ip}:9090`) : ""}</div>
+    <p class="muted small">${t.map(x => `<b>${esc(x.label)}</b> <span class="mono">${esc(x.ip)}</span>`).join(" · ")} — VPN funciona de qualquer lugar (seu computador precisa estar na VPN); Rede local só na mesma rede da máquina.</p>`;
 }
 
 /* ---------- terminal no navegador (xterm.js via WebSocket) */

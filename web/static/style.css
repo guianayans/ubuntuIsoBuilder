@@ -389,3 +389,7 @@ body.tsec-ov-open { overflow: hidden; }
   .tsec-ov-bar .btn span, .tsec-ov-bar #tsecOvNew { font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .tsec-ov { animation: none; } }
+
+/* Abrir Coolify/Cockpit: um grupo por app com os botões VPN / Rede local */
+.appgrp{display:inline-flex;align-items:center;gap:6px;padding:4px 4px 4px 12px;border:1px solid var(--line);border-radius:12px;flex-wrap:wrap}
+.appgrp-name{font-weight:600;font-size:14px;margin-right:2px}
