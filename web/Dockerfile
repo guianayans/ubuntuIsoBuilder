@@ -13,6 +13,10 @@ FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xorriso gnupg curl openssl openssh-client ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
+# --- CVE-2026-111497 (Brotli OOB write / Node2Shell): sobe libbrotli1 para a versão corrigida do Debian.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade libbrotli1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir "fastapi>=0.115,<1" "starlette>=0.40" "uvicorn[standard]>=0.29,<1" \
       "pyyaml>=6,<7" "jsonschema>=4,<5" "asyncssh>=2.14,<3" "segno>=1.5,<2"
 
